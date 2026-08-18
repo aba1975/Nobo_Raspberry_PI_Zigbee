@@ -3,7 +3,7 @@ services:
     build: .
     container_name: nobo-web-control
     network_mode: host
-    restart: unless-stopped
+    restart: always
     environment:
       - NOBO_SERIAL=${NOBO_SERIAL:-111111111111}
       - NOBO_IP=${NOBO_IP:-10.0.0.100}

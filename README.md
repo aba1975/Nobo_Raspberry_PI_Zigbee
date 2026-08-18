@@ -441,7 +441,8 @@ Nobo_Raspberry_PI/
 ├── Dockerfile                  # Container build instructions
 ├── compose.yml                 # Docker Compose configuration
 ├── .env.example                # Configuration template
-├── requirements.txt            # Python dependencies
+├── requirements.txt            # Python runtime dependencies
+├── requirements-dev.txt        # Development/testing dependencies
 └── README.md                   # This file
 ```
 
