@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2c3e50" id="metaThemeColor">
+    <title>Nobø Control</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Header with Navigation -->
+    <header class="header">
+        <div class="container">
+            <h1 class="logo">Nobø Control</h1>
+            
+            <!-- Navigation -->
+            <nav class="nav" aria-label="Main navigation">
+                <a href="#main" class="nav-link active" data-page="main">
+                    <span class="nav-icon" aria-hidden="true">🏠</span>
+                    <span class="nav-label">Main</span>
+                </a>
+                <a href="#devices" class="nav-link" data-page="devices">
+                    <span class="nav-icon" aria-hidden="true">⚙️</span>
+                    <span class="nav-label">Devices</span>
+                </a>
+                <a href="#log" class="nav-link" data-page="log">
+                    <span class="nav-icon" aria-hidden="true">📋</span>
+                    <span class="nav-label">Log</span>
+                </a>
+            </nav>
+            
+            <div class="header-right">
+                <div class="connection-status">
+                    <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+                    <span class="status-text" id="statusText">Connecting...</span>
+                </div>
+                <button id="userMenuBtn" class="theme-toggle" aria-label="User menu" onclick="toggleUserPanel()">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </button>
+                <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light theme">
+                    <svg class="theme-icon sun-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="theme-icon moon-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container">
+            <!-- Main Page (Global Modes + Zone List) -->
+            <div id="mainPage" class="page active">
+                <!-- Global Mode Buttons -->
+                <section class="global-controls">
+                    <h2>Global Mode</h2>
+                    <div class="global-buttons">
+                        <button class="btn btn-mode btn-home active" onclick="setGlobalMode('home')" id="btnHome">
+                            <span class="icon">🏠</span> Home
+                        </button>
+                        <button class="btn btn-mode btn-away" onclick="setGlobalMode('away')" id="btnAway">
+                            <span class="icon">🏖️</span> Away
+                        </button>
+                        <button class="btn btn-mode btn-eco" onclick="setGlobalMode('eco')" id="btnEco">
+                            <span class="icon">🌿</span> Eco
+                        </button>
+                        <button class="btn btn-mode btn-comfort" onclick="setGlobalMode('comfort')" id="btnComfort">
+                            <span class="icon">🔥</span> Comfort
+                        </button>
+                    </div>
+                    <p class="global-help-text">
+                        <strong>Home:</strong> All zones follow their schedules (default) • 
+                        <strong>Away:</strong> All zones to 7°C • 
+                        <strong>Eco:</strong> All zones to eco temp • 
+                        <strong>Comfort:</strong> All zones to comfort temp
+                    </p>
+
+                    <!-- Schedule Away -->
+                    <details class="schedule-away-panel" id="scheduleAwayPanel">
+                        <summary>📅 Schedule Away</summary>
+                        <div class="schedule-away-body">
+                            <div id="scheduleAwayStatus" class="schedule-away-status"></div>
+                            <div class="schedule-away-form">
+                                <label for="scheduleStartDate">Start</label>
+                                <div class="schedule-datetime-group">
+                                    <input type="text" id="scheduleStartDate" placeholder="DD.MM.YYYY" maxlength="10" class="schedule-date-input" inputmode="numeric">
+                                    <input type="text" id="scheduleStartTime" placeholder="HH:mm" maxlength="5" class="schedule-time-input" aria-label="Start time" inputmode="numeric">
+                                </div>
+                                <label for="scheduleEndDate">End</label>
+                                <div class="schedule-datetime-group">
+                                    <input type="text" id="scheduleEndDate" placeholder="DD.MM.YYYY" maxlength="10" class="schedule-date-input" inputmode="numeric">
+                                    <input type="text" id="scheduleEndTime" placeholder="HH:mm" maxlength="5" class="schedule-time-input" aria-label="End time" inputmode="numeric">
+                                </div>
+                                <p class="schedule-away-help">Format: DD.MM.YYYY HH:mm (24-hour)</p>
+                                <div class="schedule-away-actions">
+                                    <button class="btn btn-primary btn-sm" onclick="saveAwaySchedule()">💾 Save Schedule</button>
+                                    <button class="btn btn-secondary btn-sm" id="btnClearSchedule" onclick="clearAwaySchedule()" style="display:none">🗑 Clear Schedule</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </section>
+
+                <!-- Zone List -->
+                <section class="zones-section">
+                    <h2>Zones</h2>
+                    <div class="zone-list" id="zoneList">
+                        <!-- Zone list items will be dynamically inserted here -->
+                        <div class="loading-message">Loading zones...</div>
+                    </div>
+                    <div class="zone-list-footer">
+                        <button class="btn btn-secondary" onclick="openAddZoneModal()">
+                            <span class="icon">➕</span> Add Zone
+                        </button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Zone Detail Page -->
+            <div id="zoneDetailPage" class="page">
+                <div id="zoneDetailContent">
+                    <!-- Zone detail will be rendered here -->
+                </div>
+            </div>
+
+            <!-- Devices Page -->
+            <div id="devicesPage" class="page">
+                <section class="devices-section">
+                    <h2>Device Management</h2>
+                    
+                    <!-- Add Device Form -->
+                    <div class="device-add-form">
+                        <h3>Add Device</h3>
+                        <div class="form-group">
+                            <label for="deviceSerial">Serial Number:</label>
+                            <input type="text" id="deviceSerial" placeholder="210 000 016 247" 
+                                   maxlength="15" oninput="formatSerialInput(this); detectDeviceModel()">
+                            <span id="detectedModel" class="detected-model"></span>
+                        </div>
+                        <div class="form-group">
+                            <label for="deviceName">Device Name:</label>
+                            <input type="text" id="deviceName" placeholder="e.g. Living Room Heater" maxlength="64">
+                        </div>
+                        <div class="form-group">
+                            <label for="deviceZone">Assign to Zone:</label>
+                            <select id="deviceZone">
+                                <option value="">Select zone...</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="addDevice()">
+                            <span class="icon">➕</span> Add Device
+                        </button>
+                    </div>
+                    
+                    <!-- Registered Devices List -->
+                    <div class="devices-list">
+                        <h3>Registered Devices</h3>
+                        <div id="devicesList">
+                            <div class="loading-message">Loading devices...</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Log Page -->
+            <div id="logPage" class="page">
+                <section class="log-section">
+                    <h2>📋 API Command Log</h2>
+                    <div class="log-controls">
+                        <div class="log-filter-group">
+                            <button class="log-filter-btn active" data-filter="all" onclick="setLogFilter('all')">All</button>
+                            <button class="log-filter-btn" data-filter="sent" onclick="setLogFilter('sent')">Sent →</button>
+                            <button class="log-filter-btn" data-filter="received" onclick="setLogFilter('received')">← Received</button>
+                            <button class="log-filter-btn" data-filter="error" onclick="setLogFilter('error')">Errors</button>
+                        </div>
+                        <div class="log-action-group">
+                            <label class="log-autorefresh-label">
+                                <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()">
+                                Auto-refresh (3s)
+                            </label>
+                            <button class="btn btn-sm btn-danger" onclick="clearLog()">🗑️ Clear Log</button>
+                            <button class="btn btn-sm btn-secondary" onclick="loadLogPage()">🔄 Refresh</button>
+                        </div>
+                    </div>
+                    <div id="logEntries" class="log-entries">
+                        <div class="loading-message">Loading log...</div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="hub-info" id="hubInfo">
+                <span id="hubName">Nobø Hub</span> · 
+                <span id="hubVersion">Version Unknown</span>
+            </div>
+            <div class="last-updated">
+                Last updated: <span id="lastUpdated">Never</span>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+    <!-- Schedule Modal -->
+    <div id="scheduleModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📅 Schedule — <span id="scheduleModalZoneName"></span></h2>
+                <button class="modal-close" onclick="closeScheduleModal()" aria-label="Close schedule modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="scheduleDays" class="schedule-days">
+                    <!-- Days will be rendered here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeScheduleModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveSchedule()">
+                    <span class="icon">💾</span> Save Schedule
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Zone Modal -->
+    <div id="addZoneModal" class="modal">
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <h2>➕ Add Zone</h2>
+                <button class="modal-close" onclick="closeAddZoneModal()" aria-label="Close add zone modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="newZoneName">Zone Name:</label>
+                    <input type="text" id="newZoneName" placeholder="e.g. Office" maxlength="64">
+                </div>
+                <div class="form-group">
+                    <label for="newZoneIcon">Icon (emoji, optional):</label>
+                    <input type="text" id="newZoneIcon" placeholder="e.g. 🏠" maxlength="8">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAddZoneModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addZone()">
+                    <span class="icon">➕</span> Create Zone
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Move Device Modal -->
+    <div id="moveDeviceModal" class="modal">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2>Move Device</h2>
+                <button class="modal-close" onclick="closeMoveDeviceModal()" aria-label="Close move device modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p id="moveDeviceInfo"></p>
+                <div class="form-group">
+                    <label for="moveDeviceZone">Move to Zone:</label>
+                    <select id="moveDeviceZone">
+                        <option value="">Select zone...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeMoveDeviceModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmMoveDevice()">Move</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Settings Panel -->
+    <div id="userPanel" class="modal" role="dialog" aria-modal="true" aria-labelledby="userPanelTitle">
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <h2 id="userPanelTitle">👤 User Settings</h2>
+                <button class="modal-close" onclick="closeUserPanel()" aria-label="Close user settings">✕</button>
+            </div>
+            <div class="modal-body" id="userPanelBody">
+                <!-- Populated by auth.js -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=2"></script>
+    <script src="/static/auth.js"></script>
+</body>
+</html>

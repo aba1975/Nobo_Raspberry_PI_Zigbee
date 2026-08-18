@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
+  <!-- Floor thermostat device body -->
+  <rect x="30" y="10" width="60" height="55" rx="8" fill="#e8f4ea" stroke="#2e7d32" stroke-width="2"/>
+  <!-- Display area -->
+  <rect x="37" y="17" width="46" height="28" rx="4" fill="#1a3a2a" opacity="0.85"/>
+  <!-- Temperature reading on display -->
+  <text x="60" y="33" font-family="Arial,sans-serif" font-size="14" font-weight="bold" fill="#4caf50" text-anchor="middle">22°</text>
+  <text x="60" y="43" font-family="Arial,sans-serif" font-size="7" fill="#4caf50" text-anchor="middle" opacity="0.8">ECO</text>
+  <!-- Floor sensor connector -->
+  <rect x="50" y="55" width="20" height="5" rx="2" fill="#2e7d32" opacity="0.5"/>
+  <!-- Eco indicator -->
+  <circle cx="42" cy="57" r="4" fill="#27ae60" opacity="0.8"/>
+  <text x="42" y="60" font-family="Arial,sans-serif" font-size="5" fill="white" text-anchor="middle" font-weight="bold">E</text>
+  <!-- Label -->
+  <text x="60" y="75" font-family="Arial,sans-serif" font-size="9" fill="#2e7d32" text-anchor="middle" font-weight="bold">TR36</text>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
+  <!-- Panel heater body -->
+  <rect x="25" y="15" width="70" height="60" rx="4" fill="#f5f5f5" stroke="#7a7a7a" stroke-width="2"/>
+  <!-- Heater grille lines -->
+  <line x1="30" y1="20" x2="90" y2="20" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="26" x2="90" y2="26" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="32" x2="90" y2="32" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="38" x2="90" y2="38" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="44" x2="90" y2="44" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="50" x2="90" y2="50" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="56" x2="90" y2="56" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="62" x2="90" y2="62" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="68" x2="90" y2="68" stroke="#b0b0b0" stroke-width="1"/>
+  <!-- Heat waves -->
+  <path d="M 35 8 Q 38 5, 41 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <path d="M 55 8 Q 58 5, 61 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <path d="M 75 8 Q 78 5, 81 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <!-- Eco dial indicator (green) -->
+  <circle cx="60" cy="65" r="7" fill="none" stroke="#27ae60" stroke-width="2"/>
+  <circle cx="60" cy="65" r="3" fill="#27ae60" opacity="0.7"/>
+  <!-- RSC label -->
+  <text x="60" y="77" font-family="Arial,sans-serif" font-size="7" fill="#555" text-anchor="middle">R80 RSC 700</text>
+</svg>

@@ -1,0 +1,22 @@
+services:
+  nobo-web-control:
+    build: .
+    container_name: nobo-web-control
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - NOBO_SERIAL=${NOBO_SERIAL:-111111111111}
+      - NOBO_IP=${NOBO_IP:-10.0.0.100}
+      - NOBO_DEMO=${NOBO_DEMO:-false}
+    volumes:
+      - nobo-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  nobo-data:
+    driver: local

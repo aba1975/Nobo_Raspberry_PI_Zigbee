@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
+  <!-- Floor thermostat device body -->
+  <rect x="30" y="10" width="60" height="55" rx="8" fill="#f0f4f8" stroke="#5a8bbd" stroke-width="2"/>
+  <!-- Display area -->
+  <rect x="37" y="17" width="46" height="28" rx="4" fill="#1a2a3a" opacity="0.85"/>
+  <!-- Temperature reading on display -->
+  <text x="60" y="33" font-family="Arial,sans-serif" font-size="14" font-weight="bold" fill="#4a90d9" text-anchor="middle">22°</text>
+  <text x="60" y="43" font-family="Arial,sans-serif" font-size="7" fill="#4a90d9" text-anchor="middle" opacity="0.8">MANUAL</text>
+  <!-- Floor sensor connector -->
+  <rect x="50" y="55" width="20" height="5" rx="2" fill="#5a8bbd" opacity="0.5"/>
+  <!-- Manual-only indicator (grey) -->
+  <circle cx="42" cy="57" r="4" fill="#9e9e9e" opacity="0.8"/>
+  <!-- Label -->
+  <text x="60" y="75" font-family="Arial,sans-serif" font-size="7.5" fill="#5a8bbd" text-anchor="middle" font-weight="bold">TRB 36 700</text>
+</svg>

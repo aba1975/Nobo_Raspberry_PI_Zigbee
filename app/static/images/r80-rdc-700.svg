@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
+  <!-- Panel heater body -->
+  <rect x="25" y="15" width="70" height="60" rx="4" fill="#f5f5f5" stroke="#7a7a7a" stroke-width="2"/>
+  
+  <!-- Heater grille lines -->
+  <line x1="30" y1="20" x2="90" y2="20" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="25" x2="90" y2="25" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="30" x2="90" y2="30" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="35" x2="90" y2="35" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="40" x2="90" y2="40" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="45" x2="90" y2="45" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="50" x2="90" y2="50" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="55" x2="90" y2="55" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="60" x2="90" y2="60" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="65" x2="90" y2="65" stroke="#b0b0b0" stroke-width="1"/>
+  <line x1="30" y1="70" x2="90" y2="70" stroke="#b0b0b0" stroke-width="1"/>
+  
+  <!-- Heat waves coming from top -->
+  <path d="M 35 8 Q 38 5, 41 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <path d="M 50 8 Q 53 5, 56 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <path d="M 65 8 Q 68 5, 71 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  <path d="M 80 8 Q 83 5, 86 8" fill="none" stroke="#ff8c42" stroke-width="2" opacity="0.6"/>
+  
+  <!-- Temperature dial indicator (manual control) -->
+  <circle cx="60" cy="65" r="6" fill="#7a7a7a" opacity="0.4"/>
+  <circle cx="60" cy="65" r="3" fill="#555" opacity="0.6"/>
+</svg>

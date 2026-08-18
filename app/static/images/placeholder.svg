@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Simple radiator/heater icon placeholder -->
+  <rect x="15" y="25" width="70" height="50" rx="5" fill="#e0e0e0" stroke="#999" stroke-width="2"/>
+  <line x1="25" y1="35" x2="25" y2="65" stroke="#999" stroke-width="2"/>
+  <line x1="35" y1="35" x2="35" y2="65" stroke="#999" stroke-width="2"/>
+  <line x1="45" y1="35" x2="45" y2="65" stroke="#999" stroke-width="2"/>
+  <line x1="55" y1="35" x2="55" y2="65" stroke="#999" stroke-width="2"/>
+  <line x1="65" y1="35" x2="65" y2="65" stroke="#999" stroke-width="2"/>
+  <line x1="75" y1="35" x2="75" y2="65" stroke="#999" stroke-width="2"/>
+  <!-- Heat indicator -->
+  <circle cx="50" cy="15" r="5" fill="#ff6b35" opacity="0.7"/>
+  <path d="M 48 15 Q 50 10, 52 15" fill="none" stroke="#ff6b35" stroke-width="1.5"/>
+</svg>
