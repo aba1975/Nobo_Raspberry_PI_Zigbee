@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Storage paths (can be overridden in tests via monkeypatching)
 # ---------------------------------------------------------------------------
-DATA_DIR = Path("data")
+# Resolved from this file's location, not the working directory (QA defect D-03).
+DATA_DIR = Path(__file__).resolve().parent / "data"
 SCHEDULE_FILE = DATA_DIR / "away_schedule.json"
 
 # Default/empty schedule

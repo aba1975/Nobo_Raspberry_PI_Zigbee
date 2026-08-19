@@ -13,6 +13,7 @@ from collections import deque
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -2755,15 +2756,19 @@ async def admin_delete_user(request: Request, username: str):
 
 
 # ===== Static Files =====
-# Serve static files (HTML, CSS, JS, images)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Resolved from this file's location, not the working directory, so the app and
+# the test suite behave the same no matter where they are started from
+# (QA defect D-03).
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 async def read_root():
     """Serve the main HTML page"""
     try:
-        with open("static/index.html", "r", encoding="utf-8") as f:
+        with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
             content = f.read()
         return HTMLResponse(content=content)
     except FileNotFoundError:
