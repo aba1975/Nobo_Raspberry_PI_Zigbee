@@ -103,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initRouter();
     initWebSocket();
+    initCapabilities();
     fetchHubInfo();
     fetchZones();
     fetchAwaySchedule();
@@ -112,6 +113,130 @@ document.addEventListener('DOMContentLoaded', () => {
     // came back), and the reconnect loop runs server-side, so poll for it.
     setInterval(fetchHubInfo, 15000);
 });
+
+// ===== Feature Capabilities =====
+// Several editing features are implemented for demo mode only and answer 501
+// against a real hub. The buttons used to be shown anyway, so pressing them
+// looked broken (QA defect D-04). The server publishes what it can actually do
+// at /api/capabilities, and every control that maps to an unsupported feature is
+// disabled with the reason shown as its tooltip.
+
+let capabilities = {};
+
+// Which capability each onclick handler needs. Anything not listed here works
+// in both demo and real-hub mode and is never gated.
+const CAPABILITY_BY_ACTION = {
+    openAddZoneModal: 'add_zone',
+    addZone: 'add_zone',
+    deleteZone: 'delete_zone',
+    selectZoneIcon: 'zone_icon',
+    saveSchedule: 'edit_schedule',
+    addTimeBlock: 'edit_schedule',
+    submitAddTimeBlock: 'edit_schedule',
+    openEditTimeBlock: 'edit_schedule',
+    submitEditTimeBlock: 'edit_schedule',
+    deleteTimeBlock: 'edit_schedule',
+    copyDay: 'edit_schedule',
+    selectCopyDayGroup: 'edit_schedule',
+    confirmCopyDay: 'edit_schedule',
+    addDevice: 'add_device',
+    addDeviceToZone: 'add_device',
+    openInlineAddDevice: 'add_device',
+    startEditDeviceName: 'rename_device',
+    saveDeviceName: 'rename_device',
+    replaceDevice: 'replace_device',
+    removeDevice: 'remove_device',
+    moveDevice: 'move_device',
+    confirmMoveDevice: 'move_device',
+};
+
+async function initCapabilities() {
+    await refreshCapabilities();
+
+    // Most controls are rendered from template strings scattered across this
+    // file, and new ones appear whenever a page or modal is re-rendered.
+    // Watching the DOM means a control cannot escape gating by being added from
+    // a render path that forgot to call the gating function.
+    let queued = false;
+    const observer = new MutationObserver(() => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+            queued = false;
+            applyCapabilityGating();
+        });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+
+async function refreshCapabilities() {
+    try {
+        const r = await fetch('/api/capabilities');
+        if (!r.ok) return;
+        const data = await r.json();
+        capabilities = data.features || {};
+        applyCapabilityGating();
+        renderCapabilityNotices(data.demo_mode);
+    } catch (e) {
+        console.error('Could not read capabilities:', e);
+    }
+}
+
+/** The capability a control needs, or null if it is always available. */
+function capabilityForElement(el) {
+    const handler = el.getAttribute('data-capability');
+    if (handler) return handler;
+
+    const onclick = el.getAttribute('onclick');
+    if (!onclick) return null;
+
+    const match = onclick.match(/([A-Za-z_$][\w$]*)\s*\(/);
+    return match ? (CAPABILITY_BY_ACTION[match[1]] || null) : null;
+}
+
+function applyCapabilityGating() {
+    if (!Object.keys(capabilities).length) return;
+
+    document.querySelectorAll('[onclick], [data-capability]').forEach(el => {
+        const name = capabilityForElement(el);
+        if (!name) return;
+
+        const cap = capabilities[name];
+        const blocked = cap && cap.supported === false;
+
+        if (blocked) {
+            el.classList.add('capability-disabled');
+            el.setAttribute('aria-disabled', 'true');
+            el.title = cap.reason;
+            if ('disabled' in el) el.disabled = true;
+        } else if (el.classList.contains('capability-disabled')) {
+            el.classList.remove('capability-disabled');
+            el.removeAttribute('aria-disabled');
+            el.removeAttribute('title');
+            if ('disabled' in el) el.disabled = false;
+        }
+    });
+}
+
+/** Explain once per section why the greyed-out controls are greyed out. */
+function renderCapabilityNotices(demoMode) {
+    document.querySelectorAll('.capability-notice').forEach(el => el.remove());
+    if (demoMode !== false) return;
+
+    const notice = document.createElement('p');
+    notice.className = 'capability-notice';
+    notice.textContent =
+        'Connected to a real Nobø Eco Hub. Adding, removing and renaming zones, ' +
+        'devices and week schedules is done in the official Nobø Energy Control ' +
+        'app — those controls are greyed out here. Temperatures, comfort/eco/away ' +
+        'modes and the away schedule all work normally.';
+
+    const zoneFooter = document.querySelector('.zone-list-footer');
+    if (zoneFooter) zoneFooter.insertAdjacentElement('beforebegin', notice);
+
+    const devices = document.querySelector('.devices-section h2');
+    if (devices) devices.insertAdjacentElement('afterend', notice.cloneNode(true));
+}
 
 // ===== Theme Toggle =====
 function initThemeToggle() {

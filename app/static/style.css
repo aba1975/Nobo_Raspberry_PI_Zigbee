@@ -3441,3 +3441,26 @@ select:focus-visible {
 .hub-config-message.success { color: var(--success, #2e9e5b); }
 .hub-config-message.warning { color: var(--warning, #b8860b); }
 .hub-config-message.error   { color: var(--danger, #d14343); }
+
+/* ===== Capability gating (QA defect D-04) =====
+   Features that only work in demo mode are greyed out rather than removed, so
+   the layout stays familiar and the tooltip can explain why. pointer-events is
+   what actually stops non-button elements such as the icon picker from firing
+   their inline onclick handler. */
+.capability-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+    filter: grayscale(60%);
+}
+
+.capability-notice {
+    margin: 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border-left: 3px solid var(--warning, #b8860b);
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    font-size: 0.9em;
+    line-height: 1.45;
+    color: var(--color-text-secondary);
+}

@@ -1047,6 +1047,57 @@ def get_zones_data() -> List[Dict[str, Any]]:
     return zones
 
 
+# ---------------------------------------------------------------------------
+# Feature capabilities
+# ---------------------------------------------------------------------------
+# Several editing features are implemented for demo mode only and answer 501
+# against a real hub. The web UI used to offer them anyway, so the buttons were
+# there, did nothing, and returned a raw error (QA defect D-04).
+#
+# This map is the single source of truth: the endpoints raise from it and the UI
+# reads the same values from /api/capabilities, so the two cannot drift apart.
+DEMO_ONLY_FEATURES = {
+    "add_zone": "Creating zones is only available in demo mode. On a real hub, "
+                "add zones in the official Nobø Energy Control app.",
+    "delete_zone": "Deleting zones is only available in demo mode. On a real hub, "
+                   "delete zones in the official Nobø Energy Control app.",
+    "zone_icon": "Zone icons are stored by this app in demo mode only. On a real "
+                 "hub the icon cannot be saved.",
+    "edit_schedule": "Editing week schedules is only available in demo mode. On a "
+                     "real hub, edit the week profile in the official Nobø app.",
+    "add_device": "Adding devices is only available in demo mode. On a real hub, "
+                  "pair devices in the official Nobø Energy Control app.",
+    "rename_device": "Renaming devices is only available in demo mode. On a real "
+                     "hub, rename the device in the official Nobø app.",
+    "replace_device": "Replacing a device is only available in demo mode.",
+    "remove_device": "Removing devices is only available in demo mode. On a real "
+                     "hub, unpair the device in the official Nobø app.",
+    "move_device": "Moving a device between zones is only available in demo mode. "
+                   "On a real hub, move it in the official Nobø app.",
+}
+
+
+def get_capabilities() -> Dict[str, Dict[str, Any]]:
+    """What this installation can actually do right now.
+
+    Everything not listed in DEMO_ONLY_FEATURES (zone and global overrides,
+    temperatures, the away schedule, renaming a zone) works in both modes.
+    """
+    return {
+        name: {
+            "supported": DEMO_MODE,
+            "reason": None if DEMO_MODE else reason,
+        }
+        for name, reason in DEMO_ONLY_FEATURES.items()
+    }
+
+
+def require_capability(name: str) -> None:
+    """Raise 501 with the documented explanation if a feature is demo-only."""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=501, detail=DEMO_ONLY_FEATURES[name])
+
+
 def determine_zone_mode(zone_id: str, zone: Dict) -> str:
     """Determine the current mode of a zone.
 
@@ -1065,6 +1116,17 @@ def determine_zone_mode(zone_id: str, zone: Dict) -> str:
 
 
 # ===== API Endpoints =====
+@app.get("/api/capabilities")
+async def get_capabilities_endpoint():
+    """Which editing features work in the current mode.
+
+    The web UI reads this on load and greys out the controls that would only
+    return 501, showing the reason instead of letting the user press a button
+    that cannot work (QA defect D-04).
+    """
+    return {"demo_mode": DEMO_MODE, "features": get_capabilities()}
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint for monitoring and load balancers"""
@@ -1230,6 +1292,8 @@ async def get_zones():
 @app.post("/api/zones")
 async def add_zone(zone: ZoneAdd):
     """Create a new zone"""
+    require_capability("add_zone")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1257,9 +1321,6 @@ async def add_zone(zone: ZoneAdd):
             logger.info(f"Demo mode: Zone '{zone.name}' created with id {new_id}")
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": new_id, "name": zone.name}
-
-        # Real hub mode - not yet implemented
-        raise HTTPException(status_code=501, detail="Add zone not yet implemented for real hub")
 
     except HTTPException:
         raise
@@ -1331,6 +1392,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
 @app.delete("/api/zones/{zone_id}")
 async def delete_zone(zone_id: str):
     """Delete a zone"""
+    require_capability("delete_zone")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1354,9 +1417,6 @@ async def delete_zone(zone_id: str):
             logger.info(f"Demo mode: Zone '{zone_name}' deleted")
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": zone_id}
-
-        # Real hub mode — not yet implemented
-        raise HTTPException(status_code=501, detail="Delete zone not yet implemented for real hub")
 
     except HTTPException:
         raise
@@ -1979,6 +2039,8 @@ async def get_zone_schedule(zone_id: str):
 @app.post("/api/zones/{zone_id}/schedule")
 async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
     """Update the weekly schedule for a specific zone"""
+    require_capability("edit_schedule")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2014,10 +2076,6 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
         
         if zone_id not in current_hub.zones:
             raise HTTPException(status_code=404, detail="Zone not found")
-        
-        # This would need to be implemented based on pynobo's week profile format
-        # For now, return not implemented
-        raise HTTPException(status_code=501, detail="Schedule update not yet implemented for real hub")
         
     except HTTPException:
         raise
@@ -2071,6 +2129,8 @@ class DeviceAdd(BaseModel):
 @app.post("/api/devices")
 async def add_device(device: DeviceAdd):
     """Add a new device to a zone"""
+    require_capability("add_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2126,8 +2186,6 @@ async def add_device(device: DeviceAdd):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Add device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -2146,6 +2204,8 @@ class DeviceRename(BaseModel):
 @app.patch("/api/devices/{serial}/name")
 async def rename_device(serial: str, body: DeviceRename):
     """Update the friendly name of a device"""
+    require_capability("rename_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2179,8 +2239,6 @@ async def rename_device(serial: str, body: DeviceRename):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
 
-        raise HTTPException(status_code=501, detail="Device renaming is not yet supported for connected hubs")
-
     except HTTPException:
         raise
     except Exception as e:
@@ -2191,6 +2249,8 @@ async def rename_device(serial: str, body: DeviceRename):
 @app.put("/api/devices/{serial}")
 async def replace_device(serial: str, replacement: DeviceReplace):
     """Replace a device with a new one"""
+    require_capability("replace_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2258,8 +2318,6 @@ async def replace_device(serial: str, replacement: DeviceReplace):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Replace device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -2270,6 +2328,8 @@ async def replace_device(serial: str, replacement: DeviceReplace):
 @app.delete("/api/devices/{serial}")
 async def remove_device(serial: str):
     """Remove a device from its zone"""
+    require_capability("remove_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2309,8 +2369,6 @@ async def remove_device(serial: str):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Remove device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -2325,6 +2383,8 @@ class DeviceMove(BaseModel):
 @app.post("/api/devices/{serial}/move")
 async def move_device(serial: str, move: DeviceMove):
     """Move a device from its current zone to a different zone"""
+    require_capability("move_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2384,9 +2444,6 @@ async def move_device(serial: str, move: DeviceMove):
                 "new_zone_id": dst_zone['zone_id'],
                 "new_zone_name": dst_zone['name'],
             }
-
-        # Real hub mode
-        raise HTTPException(status_code=501, detail="Move device not yet implemented for real hub")
 
     except HTTPException:
         raise

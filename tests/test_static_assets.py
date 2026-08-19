@@ -90,6 +90,14 @@ class TestCacheBusting:
         unversioned = [s for s in scripts if "?v=" not in s]
         assert not unversioned, f"script tags missing a ?v= cache buster: {unversioned}"
 
+    def test_local_stylesheets_are_versioned(self, index_html):
+        """The stylesheet had no cache buster, so CSS-only fixes never arrived."""
+        sheets = re.findall(r'<link[^>]+href="(/static/[^"]+\.css[^"]*)"', index_html)
+        assert sheets, "no local stylesheet links found in index.html"
+
+        unversioned = [s for s in sheets if "?v=" not in s]
+        assert not unversioned, f"stylesheet links missing a ?v= cache buster: {unversioned}"
+
 
 class TestUserPanelMarkup:
     def test_panel_and_hooks_exist(self, index_html):
