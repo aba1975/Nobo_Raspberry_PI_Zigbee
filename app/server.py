@@ -224,10 +224,29 @@ _server_state = config_persistence.load_server_state()
 global_mode_source: str = _server_state.get("global_mode_source", "manual")  # "manual" | "schedule"
 
 
+def local_now() -> datetime:
+    """Current time in the machine's local timezone, as an aware datetime.
+
+    Everything the user sees or schedules is wall-clock time: "comfort from
+    07:00 on weekdays" means 07:00 on the kitchen clock. The container, however,
+    runs in UTC unless it is told otherwise, so a plain datetime.now() silently
+    ran the week schedule in the wrong timezone (QA defect D-06). compose.yml now
+    shares the host's timezone with the container, and this helper returns an
+    aware datetime so timestamps sent to the browser carry their offset instead
+    of being guessed at.
+    """
+    return datetime.now().astimezone()
+
+
+def local_timezone_name() -> str:
+    """Human-readable name of the timezone the app is running in, e.g. 'CEST'."""
+    return local_now().strftime("%Z") or "UTC"
+
+
 def add_log_entry(direction: str, description: str, command: str = "", source: str = "api"):
     """Add an entry to the command log buffer (thread-safe)."""
     entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
+        "timestamp": local_now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
         "direction": direction,       # "sent" | "received" | "error"
         "command": command,
         "description": description,
@@ -371,6 +390,15 @@ async def lifespan(app: FastAPI):
         config_persistence.DATA_DIR,
         "loaded from disk" if config_persistence.DEMO_ZONES_FILE.exists() else "defaults",
         global_mode_source,
+    )
+    # Week schedules run on wall-clock time, so log the timezone the app believes
+    # it is in. If this says UTC on a machine that is not, schedules will fire at
+    # the wrong hour (QA defect D-06) and the /etc/localtime mount in compose.yml
+    # is missing.
+    logger.info(
+        "Local time: %s (%s)",
+        local_now().strftime("%Y-%m-%d %H:%M:%S %z"),
+        local_timezone_name(),
     )
     main_event_loop = asyncio.get_running_loop()
     try:
@@ -796,7 +824,7 @@ async def broadcast_zone_update():
         message = {
             "type": "zones_update",
             "data": zones_data,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": local_now().isoformat()
         }
         
         # Send to all connected clients (thread-safe)
@@ -833,7 +861,7 @@ def get_current_schedule_mode(zone_id: str) -> str:
         except (ValueError, AttributeError):
             return 0
 
-    now = datetime.now()
+    now = local_now()
     day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     current_day = day_names[now.weekday()]
     current_minutes = now.hour * 60 + now.minute
@@ -1046,7 +1074,7 @@ async def health_check():
         "status": "ok",
         "connected": connected,
         "demo_mode": DEMO_MODE,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": local_now().isoformat(),
     }
 
 
@@ -1064,7 +1092,11 @@ async def get_status():
         "connected": connected,
         "demo_mode": DEMO_MODE,
         "hub_serial": NOBO_SERIAL if connected else None,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": local_now().isoformat(),
+        # Week schedules run on wall-clock time, so the timezone the app thinks
+        # it is in decides when they fire. Reporting it makes a misconfigured
+        # container obvious instead of silently shifting every schedule.
+        "timezone": local_timezone_name(),
         "away_schedule": {
             "enabled": schedule["enabled"],
             "start_at": schedule["start_at"],
@@ -2421,7 +2453,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({
                 "type": "zones_update",
                 "data": zones_data,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": local_now().isoformat()
             })
         
         # Keep connection alive and handle incoming messages
