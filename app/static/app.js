@@ -2275,6 +2275,7 @@ function validateAndParseLocalDDMMYYYYHHmmToIso(dateStr, timeStr) {
 }
 
 
+function renderAwayScheduleStatus(data) {
     const statusEl = document.getElementById('scheduleAwayStatus');
     const clearBtn = document.getElementById('btnClearSchedule');
     const startDateInput = document.getElementById('scheduleStartDate');

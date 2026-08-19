@@ -226,11 +226,61 @@ NOBO_IP=192.168.1.100
 NOBO_DEMO=true
 ```
 
-In demo mode the serial number and IP are ignored, so the placeholder values above are fine. When you are ready to use your real hub, put in your real serial and IP, set `NOBO_DEMO=false`, and restart:
+In demo mode the serial number and IP are ignored, so the placeholder values above are fine.
+
+### Switching between demo mode and your real hub
+
+You can switch at any time after installation. The `.env` file is the only thing you need to change.
+
+**1. Open the configuration file:**
+
+```bash
+sudo nano /opt/nobo-control/.env
+```
+
+**2. Change the values.**
+
+To use **demo mode** (simulated zones, no hub needed):
+
+```
+NOBO_SERIAL=123456789012
+NOBO_IP=192.168.1.100
+NOBO_DEMO=true
+```
+
+To use your **real hub**:
+
+```
+NOBO_SERIAL=<your 12-digit serial>
+NOBO_IP=<your hub's IP address>
+NOBO_DEMO=false
+```
+
+**3. Save and exit** (`Ctrl+O`, `Enter`, `Ctrl+X`).
+
+**4. Apply the change** — the setting is only read when the container starts, so you must restart:
 
 ```bash
 sudo systemctl restart nobo-control
 ```
+
+**5. Confirm which mode you are in:**
+
+```bash
+curl http://localhost:8000/api/status
+```
+
+Look at the `demo_mode` value in the response:
+
+```json
+{"connected":true,"demo_mode":true,"hub_serial":"123456789012",...}
+```
+
+- `"demo_mode":true` — running on simulated data
+- `"demo_mode":false` and `"connected":true` — talking to your real hub
+- `"connected":false` — check the serial number and IP, and make sure the official Nobo app is not connected to the hub
+
+> **Note:** After switching modes, do a hard refresh in your browser (`Ctrl+Shift+R`, or `Cmd+Shift+R` on macOS) so it does not show cached data from the previous mode.
 
 ## Step 6: Start the System
 
@@ -385,6 +435,23 @@ sudo systemctl restart nobo-control
 ```
 
 ## Troubleshooting
+
+### Web page loads but no zones appear ("connecting" forever)
+
+If the interface loads and you can log in, but the zone tiles never appear, first check whether the backend is actually fine:
+
+```bash
+curl http://localhost:8000/api/status
+curl http://localhost:8000/api/zones
+```
+
+If those return data (in demo mode you should see 8 example zones), the backend is healthy and the problem is in the browser:
+
+1. **Hard refresh the page** — `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS). An old cached copy of `app.js` is the most common cause.
+2. **Open the browser console** — press `F12` and look at the Console tab. A red `SyntaxError` or similar means the page script failed to load, which stops the zone list and the live updates from ever starting.
+3. **Check for a newer version** — `sudo bash /opt/nobo-control/scripts/update.sh`.
+
+If `/api/zones` returns an empty list while `NOBO_DEMO=false`, the app is connected to a real hub that has no zones configured — set up your zones in the official Nobo app first.
 
 ### "permission denied while trying to connect to the Docker daemon socket"
 
