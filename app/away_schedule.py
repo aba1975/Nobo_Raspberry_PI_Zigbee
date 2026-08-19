@@ -83,7 +83,12 @@ def parse_iso_dt(value: str) -> Optional[datetime]:
         return None
 
 
-def validate_schedule(enabled: bool, start_at: Optional[str], end_at: Optional[str]) -> tuple:
+def validate_schedule(
+    enabled: bool,
+    start_at: Optional[str],
+    end_at: Optional[str],
+    now: Optional[datetime] = None,
+) -> tuple:
     """
     Validate schedule fields.
     Returns (is_valid: bool, error_message: str | None).
@@ -105,6 +110,17 @@ def validate_schedule(enabled: bool, start_at: Optional[str], end_at: Optional[s
 
     if end_dt <= start_dt:
         return False, "end_at must be strictly after start_at"
+
+    # A schedule that has already ended is saved as "enabled", shows up in the
+    # UI as an upcoming holiday and then never does anything, which reads as a
+    # broken feature. Usually it means the year was typed wrong.
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if end_dt <= now:
+        return False, (
+            "The end of the away period is already in the past, so the schedule "
+            "would never run. Check the date and try again."
+        )
 
     return True, None
 

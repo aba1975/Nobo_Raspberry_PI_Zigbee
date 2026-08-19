@@ -1267,6 +1267,8 @@ async def get_hub_info():
             "connected": connected
         }
         return hub_info
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting hub info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1285,6 +1287,8 @@ async def get_zones():
     try:
         zones_data = get_zones_data()
         return {"zones": zones_data}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting zones: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1506,6 +1510,8 @@ async def set_zone_override(zone_id: str, mode: str):
         await asyncio.sleep(0.5)
         
         return {"status": "success", "zone_id": zone_id, "mode": mode}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting zone override: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1757,6 +1763,8 @@ async def set_global_override(mode: str):
         global_mode_source = "manual"
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
         return {"status": "success", "mode": mode, "source": "manual"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting global override: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1981,13 +1989,14 @@ async def away_schedule_loop():
                 logger.error(f"Error applying Away on schedule activation: {e}")
 
         elif currently_active and last_active:
-            # Still inside window — re-assert Away in case of manual override
-            try:
-                await _apply_global_mode_internal("away", source="schedule")
-                global_mode_source = "schedule"
-                config_persistence.save_server_state({"global_mode_source": global_mode_source})
-            except Exception as e:
-                logger.error(f"Error re-asserting Away during active schedule: {e}")
+            # Deliberately does nothing. This used to re-send Away every 30
+            # seconds "in case of manual override", which meant a user who
+            # came home early and pressed Comfort was silently forced back to
+            # Away within half a minute, with no explanation and a command log
+            # full of repeated Away entries. The schedule now only acts on the
+            # transitions into and out of the away period, so a manual change
+            # made during the holiday holds until the period ends.
+            pass
 
         last_active = currently_active
 
@@ -2026,6 +2035,8 @@ async def get_week_profiles():
                 'profile': profile
             })
         return {"week_profiles": profiles}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting week profiles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2149,11 +2160,18 @@ async def get_devices():
         devices = []
         
         for zone in zones_data:
+            names = zone.get('components_names') or []
             for i, serial in enumerate(zone['components']):
                 device_name, supports_comfort, supports_eco = detect_device_type(serial)
+                custom_name = names[i].strip() if i < len(names) and names[i] else ''
                 devices.append({
                     'serial': serial,
                     'serial_display': zone['components_display'][i] if i < len(zone['components_display']) else format_serial_display(serial),
+                    # The friendly name the user gave the device. Renaming used to
+                    # appear to work and then vanish on reload, because the list
+                    # this endpoint returns never carried the name back.
+                    'name': custom_name,
+                    'display_name': custom_name or device_name,
                     'device_type': device_name,
                     'zone_id': zone['zone_id'],
                     'zone_name': zone['name'],
@@ -2164,6 +2182,8 @@ async def get_devices():
                 })
         
         return {"devices": devices}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting devices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
