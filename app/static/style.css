@@ -3192,6 +3192,14 @@ select:focus-visible {
     color: var(--color-away);
 }
 
+/* "Off" is a week-profile state only: the heating is switched off for that
+   period. It is not offered as a manual override. */
+.mode-btn-off.active {
+    border-color: var(--color-off);
+    background: rgba(149,165,166,0.16);
+    color: var(--color-off);
+}
+
 .block-edit-actions {
     display: flex;
     gap: 8px;
@@ -3463,4 +3471,59 @@ select:focus-visible {
     font-size: 0.9em;
     line-height: 1.45;
     color: var(--color-text-secondary);
+}
+/* ===== Device discovery (receiver search) ===== */
+.device-search {
+    margin-bottom: 16px;
+    padding: 12px;
+    border: 1px dashed var(--border-color, #ccc);
+    border-radius: 8px;
+}
+
+.device-search-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.device-search-status {
+    margin-top: 8px;
+    font-size: 0.9em;
+    color: var(--text-secondary, #666);
+}
+
+.device-search-results {
+    margin-top: 8px;
+}
+
+.device-search-result {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border-color, #eee);
+}
+
+.device-search-result-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.device-search-result-serial {
+    font-family: monospace;
+}
+
+.device-search-result-type,
+.device-search-result-known {
+    font-size: 0.85em;
+    color: var(--text-secondary, #666);
+}
+.shared-schedule-notice {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(52,152,219,0.10);
+    border: 1px solid var(--color-away, #3498db);
+    font-size: 0.9em;
+    line-height: 1.4;
 }

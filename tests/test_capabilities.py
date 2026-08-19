@@ -1,14 +1,15 @@
 """
-Feature capability gating (QA defect D-04).
+Feature capability gating (QA defect D-04, extended).
 
-Adding a zone, deleting a zone, editing a week schedule and everything in the
-device manager are implemented for demo mode only. Against a real hub they
-answer 501, but the web UI offered the buttons anyway, so pressing them looked
-like the app was broken.
+The server publishes what it can do at ``/api/capabilities`` and the frontend
+greys out the rest. These tests pin both halves and, importantly, the drift
+between them — a control the UI does not gate is a button that looks live and
+answers 501.
 
-The server now publishes what it can do at /api/capabilities and the frontend
-greys out the rest. These tests pin both halves, including the drift between
-them, which is the failure mode that would quietly come back.
+The set of gated features has shrunk to almost nothing: zone creation and
+deletion, schedule editing, zone icons and all five device operations are now
+implemented against a real hub too. What remains is the opposite case —
+searching for devices needs a radio, so it is the *demo* mode that cannot do it.
 """
 
 import os
@@ -54,91 +55,97 @@ class TestCapabilitiesEndpoint:
             anon.cookies.clear()
             assert anon.get("/api/capabilities").status_code == 401
 
-    def test_everything_is_supported_in_demo_mode(self, client):
-        body = client.get("/api/capabilities").json()
-        assert body["demo_mode"] is True
-        assert all(f["supported"] for f in body["features"].values())
-        assert all(f["reason"] is None for f in body["features"].values())
-
-    def test_demo_only_features_are_unsupported_on_a_real_hub(self, client, real_hub_mode):
+    def test_editing_features_work_in_both_modes(self, client, real_hub_mode):
+        """The whole point of the implementation work: nothing is demo-only."""
         body = client.get("/api/capabilities").json()
         assert body["demo_mode"] is False
-        assert body["features"]
-        for name, feature in body["features"].items():
-            assert feature["supported"] is False, f"{name} should be gated"
-            assert feature["reason"], f"{name} must explain why it is unavailable"
+        for name in (
+            "add_zone", "delete_zone", "zone_icon", "edit_schedule",
+            "add_device", "rename_device", "replace_device",
+            "remove_device", "move_device",
+        ):
+            assert name not in body["features"], (
+                f"{name} is implemented for a real hub and should no longer be gated"
+            )
 
-    def test_reasons_point_at_the_official_app(self, client, real_hub_mode):
-        """Users need to be told where they *can* do it, not just that they can't."""
+    def test_demo_mode_cannot_search_for_devices(self, client):
+        body = client.get("/api/capabilities").json()
+        assert body["demo_mode"] is True
+        search = body["features"]["discover_devices"]
+        assert search["supported"] is False
+        assert search["reason"]
+
+    def test_real_hub_can_search_for_devices(self, client, real_hub_mode):
+        search = client.get("/api/capabilities").json()["features"]["discover_devices"]
+        assert search["supported"] is True
+        assert search["reason"] is None
+
+    def test_every_unsupported_feature_explains_itself(self, client):
         features = client.get("/api/capabilities").json()["features"]
-        mentions = [f for f in features.values() if "Nobø" in f["reason"]]
-        assert len(mentions) >= 5
+        for name, feature in features.items():
+            if not feature["supported"]:
+                assert feature["reason"], f"{name} must say why it is unavailable"
 
 
 class TestEndpointsAgreeWithCapabilities:
     """Every gated feature must really answer 501, and nothing else should."""
 
-    CALLS = {
-        "add_zone": ("post", "/api/zones", {"json": {"name": "x", "icon": "X"}}),
-        "delete_zone": ("delete", "/api/zones/1", {}),
-        "edit_schedule": ("post", "/api/zones/1/schedule", {"json": {"schedule": {}}}),
-        "add_device": (
-            "post",
-            "/api/devices",
-            {"json": {"serial": "210000016299", "zone_id": "1"}},
-        ),
-        "rename_device": (
-            "patch",
-            "/api/devices/210000016247/name",
-            {"json": {"name": "n"}},
-        ),
-        "replace_device": (
-            "put",
-            "/api/devices/210000016247",
-            {"json": {"new_serial": "210000016299"}},
-        ),
-        "remove_device": ("delete", "/api/devices/210000016247", {}),
-        "move_device": (
-            "post",
-            "/api/devices/210000016247/move",
-            {"json": {"new_zone_id": "2"}},
-        ),
-    }
-
-    @pytest.mark.parametrize("feature", sorted(CALLS))
-    def test_gated_feature_returns_501_with_the_published_reason(
-        self, client, real_hub_mode, feature
-    ):
+    def test_search_is_refused_in_demo_mode_with_the_published_reason(self, client):
         """
         The capability check must come first: an unsupported feature is
-        unsupported whether or not the hub happens to be reachable, and a
+        unsupported whether or not a hub happens to be reachable, and a
         misleading 503 would send users hunting for a network fault.
         """
-        method, path, kwargs = self.CALLS[feature]
-        r = getattr(client, method)(path, **kwargs)
+        published = client.get("/api/capabilities").json()["features"]
+        for method, path in (
+            ("post", "/api/devices/search"),
+            ("get", "/api/devices/search"),
+            ("delete", "/api/devices/search"),
+        ):
+            r = getattr(client, method)(path)
+            assert r.status_code == 501, f"{method} {path} should be unimplemented here"
+            assert r.json()["detail"] == published["discover_devices"]["reason"], (
+                "the endpoint's message has drifted from the one published to the UI"
+            )
 
-        assert r.status_code == 501, f"{feature} did not report itself unimplemented"
-        assert r.json()["detail"] == server.DEMO_ONLY_FEATURES[feature], (
-            "the endpoint's message has drifted from the one published to the UI"
-        )
+    def test_previously_gated_endpoints_no_longer_return_501(self, client, real_hub_mode):
+        """These used to be dead ends against a real hub. They must not be now.
+
+        No hub is connected in this test, so 503 is the honest answer. What
+        matters is that the request gets as far as the hub check at all.
+        """
+        calls = [
+            ("post", "/api/zones", {"json": {"name": "x", "icon": "X"}}),
+            ("delete", "/api/zones/1", {}),
+            ("post", "/api/zones/1/schedule", {"json": {"schedule": {}}}),
+            ("post", "/api/devices", {"json": {"serial": "210000016299", "zone_id": "1"}}),
+            ("patch", "/api/devices/210000016247/name", {"json": {"name": "n"}}),
+            ("put", "/api/devices/210000016247", {"json": {"new_serial": "210000016299"}}),
+            ("delete", "/api/devices/210000016247", {}),
+            ("post", "/api/devices/210000016247/move", {"json": {"new_zone_id": "2"}}),
+        ]
+        for method, path, kwargs in calls:
+            r = getattr(client, method)(path, **kwargs)
+            assert r.status_code != 501, f"{method} {path} still reports itself unimplemented"
 
     def test_no_stray_hardcoded_501s(self):
-        """A 501 raised outside the map would never be gated in the UI."""
+        """A 501 raised outside the capability map would never be gated in the UI."""
         source = Path(server.__file__).read_text(encoding="utf-8")
         offenders = [
             line.strip()
             for line in source.splitlines()
-            if "status_code=501" in line and "DEMO_ONLY_FEATURES" not in line
+            if "status_code=501" in line and "capability" not in line
         ]
         assert not offenders, (
             f"these raise 501 without going through require_capability(), so the "
             f"UI cannot know to disable them: {offenders}"
         )
 
-    def test_always_available_features_still_work_on_a_real_hub(self):
+    def test_always_available_features_are_never_gated(self):
         """Overrides and temperatures must not get caught in the gating."""
+        gated = set(server.DEMO_ONLY_FEATURES) | set(server.HUB_ONLY_FEATURES)
         for name in ("set_override", "set_temperature", "away_schedule", "rename_zone"):
-            assert name not in server.DEMO_ONLY_FEATURES
+            assert name not in gated
 
 
 class TestFrontendGating:
@@ -148,7 +155,8 @@ class TestFrontendGating:
     def test_every_capability_has_at_least_one_control(self, app_js):
         """A capability nobody maps to is a control that stays clickable."""
         mapped = set(re.findall(r":\s*'([a-z_]+)',", app_js))
-        missing = set(server.DEMO_ONLY_FEATURES) - mapped
+        known = set(server.DEMO_ONLY_FEATURES) | set(server.HUB_ONLY_FEATURES)
+        missing = known - mapped
         assert not missing, (
             f"no UI control is mapped to these capabilities, so they would stay "
             f"enabled and fail with a 501: {sorted(missing)}"
@@ -160,7 +168,8 @@ class TestFrontendGating:
         assert block, "CAPABILITY_BY_ACTION not found in app.js"
 
         used = set(re.findall(r":\s*'([a-z_]+)'", block.group(1)))
-        unknown = used - set(server.DEMO_ONLY_FEATURES)
+        known = set(server.DEMO_ONLY_FEATURES) | set(server.HUB_ONLY_FEATURES)
+        unknown = used - known
         assert not unknown, f"app.js gates on unknown capabilities: {sorted(unknown)}"
 
     def test_handlers_in_the_map_exist_in_app_js(self, app_js):

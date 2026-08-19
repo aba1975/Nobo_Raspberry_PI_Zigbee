@@ -97,7 +97,12 @@ class TestStaleConnectionCannotClobberState:
         stopped = threading.Event()
 
         class LateHub:
-            def stop(self):
+            response_handler = staticmethod(lambda response: None)
+
+            async def start(self):
+                return None
+
+            async def stop(self):
                 stopped.set()
 
             def register_callback(self, cb):

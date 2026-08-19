@@ -141,9 +141,16 @@ class TestScheduleBlock:
         b.validate_fields()  # Should not raise
 
     def test_invalid_mode(self):
-        b = self._make_block("07:00", "22:00", "off")
+        b = self._make_block("07:00", "22:00", "sauna")
         with pytest.raises(ValueError, match="Invalid mode"):
             b.validate_fields()
+
+    def test_off_is_a_valid_schedule_mode(self):
+        # The hub's week profiles have a genuine "off" state (status digit 4),
+        # so a schedule may switch heating off entirely. This is distinct from
+        # an override, where "off" is not a legal mode.
+        b = self._make_block("07:00", "22:00", "off")
+        b.validate_fields()
 
     def test_invalid_start_time(self):
         b = self._make_block("25:00", "22:00", "eco")

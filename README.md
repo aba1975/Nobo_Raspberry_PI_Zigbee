@@ -30,6 +30,8 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. The eco temperature must be lower than the comfort temperature, and values are rounded to whole degrees because that is all the hub stores. |
 | **Weekly schedule** | A per-zone plan of which mode applies at which time on each day of the week (see [Weekly schedule rules](#weekly-schedule-rules)). |
 | **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
+| **Zones** | Add, rename, re-icon and delete zones. |
+| **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
@@ -65,39 +67,87 @@ interface says so rather than pretending the change worked.
 | Rename a zone | ✅ | ✅ |
 | Scheduled away | ✅ | ✅ |
 | View weekly schedules | ✅ | ✅ |
-| **Edit weekly schedules** | ✅ | ❌ |
-| **Add or delete a zone** | ✅ | ❌ |
-| **Add, remove, move, rename or replace a device** | ✅ | ❌ |
-| **Discover or pair a new device** | ❌ | ❌ |
+| Edit weekly schedules | ✅ | ✅ |
+| Add or delete a zone | ✅ | ✅ |
+| Add, remove, move, rename or replace a device | ✅ | ✅ |
+| **Discover and pair a new device** | ❌ | ✅ |
 
-**Why these are missing.** Not because the hub refuses them. The Nobø Eco Hub's
-own protocol has commands for all of it — adding and removing zones (`A00`,
-`R00`), adding, updating and removing components (`A01`, `U01`, `R01`), and
-adding, updating and removing week profiles (`A02`, `U02`, `R02`). It even
-supports pairing (`X00`, `X01`, `X03`).
+Everything on that list is now implemented in both modes. The one asymmetry is
+device discovery: it asks the hub to listen on its radio for devices in pairing
+mode, and demo mode has no radio. In demo mode you type a serial number in by
+hand instead.
 
-The gap is in this application. It grew up around the built-in demo data, and
-the real-hub half of those particular endpoints was never finished — the code
-checked that the zone existed and then stopped. Rather than let the buttons
-fail confusingly, the application now declares them unsupported while a real
-hub is connected, and the UI greys them out.
+You do not have to remember this table. The application asks the server what it
+can do (`GET /api/capabilities`) and greys out anything the current mode cannot
+honour, with the reason as the tooltip. Nothing you can click will fail with a
+"not implemented" error.
 
-So these are on the "could be built" list, not the "impossible" list.
-[pynobo](https://github.com/echoromeo/pynobo) already has ready-made helpers
-for week profiles (`async_add_week_profile`, `async_update_week_profile`,
-`async_remove_week_profile`) and for zone updates, so editing weekly schedules
-against a real hub is the closest to reach. The rest would need raw commands
-via `send_command`. None of it has been written or tested against real
-hardware, so nothing here promises it works.
+#### These used to be marked "does not work with a real hub"
 
-Meanwhile, use the official Nobø Energy Control app for anything in the
-"real hub ❌" rows. Pairing is the one genuine exception: it is driven by the
-hub in pairing mode, there is no discovery in this project, and none is
-planned.
+That was true, but the stated reason was wrong, so it is worth correcting.
 
-You do not have to remember this table. When the application is connected to a
-real hub, the controls it cannot honour are greyed out with an explanation, so
-nothing you can click will fail with a "not implemented" error.
+The hub was never the obstacle. The Nobø Eco Hub protocol has commands for all
+of it: zones (`A00`, `U00`, `R00`), components (`A01`, `U01`, `R01`), week
+profiles (`A02`, `U02`, `R02`) and pairing (`X00`, `X01`, `X03`). The gap was in
+this application. It grew up around the built-in demo data, and the real-hub
+half of those endpoints was never written — the code checked that the zone
+existed and then stopped.
+
+Two genuine bugs were found and fixed while filling the gap in, and both
+affected the features that *did* claim to work with a real hub:
+
+- **Hub commands were sent on the wrong event loop.** pynobo's older
+  synchronous helpers create their task on whichever loop happens to be
+  running. Called from inside a web request that is the *web server's* loop, not
+  the loop that owns the hub's socket, and an asyncio stream may only be used
+  from its own loop. Writes therefore failed silently or corrupted the
+  connection. The hub client now owns a dedicated loop and every command is
+  routed to it.
+- **The hub connection was never closed on a mode switch.** `stop()` is a
+  coroutine, and it was being called without being awaited, so it did nothing.
+  Each switch between demo mode and a real hub leaked a connection.
+
+If real-hub control has been unreliable for you in the past, those two are the
+likely reason.
+
+#### Verified against a fake hub, not against real hardware
+
+This must be stated plainly. **None of the real-hub code has ever run against a
+real Nobø Eco Hub.** It is tested against `tests/fake_hub.py`, a purpose-built
+server that speaks the documented wire protocol and that the genuine `pynobo`
+client connects to and drives (`tests/test_real_hub_endpoints.py`, 39 tests).
+
+That catches this application's own mistakes — name encoding, week profile
+sharing, component fields, error handling — but it cannot catch a hub that
+behaves differently from the specification, because the fake encodes the same
+reading of the specification that the app does. The reply shapes for adding and
+removing things, and the pairing exchange in particular, are inferred from the
+protocol document and from pynobo's own handling.
+
+If you own a hub, you are the first to exercise these paths for real. The
+command log (see below) shows exactly what was sent and what came back, which
+is the right place to look if something does not behave.
+
+#### Things worth knowing about a real hub
+
+- **Weekly schedules are shared objects.** A hub week profile can be used by
+  several zones, and every zone starts out on the same factory profile. Editing
+  it in place would silently reschedule the whole house, so the first time you
+  save a schedule for a zone, that zone is given its own copy and the other
+  zones keep what they had. The schedule editor tells you when this is about to
+  happen. The factory profile is never overwritten or deleted.
+- **A device's serial number cannot be changed.** "Replace" therefore pairs the
+  new device first and only removes the old one once that has succeeded, so a
+  failed replacement leaves the zone as it was.
+- **A zone must be empty before it can be deleted.** The hub would otherwise
+  leave its devices unassigned, which is harder to recover from than an error
+  message, so the request is refused with a clear explanation instead.
+- **Zone icons are stored on the Pi, not on the hub.** The hub has no icon
+  field. They live in `data/zone_icons.json` and are included in a backup.
+- **Names are stored with non-breaking spaces.** That is how the protocol
+  encodes a space. The application converts in both directions, so what you
+  type is what you see; if you read the hub with another tool you will see
+  `\xa0` where you expected a space.
 
 ### Weekly schedule rules
 
@@ -107,7 +157,12 @@ every minute of every day:
 - All seven days must be present.
 - Each day's blocks must run from `00:00` to `24:00` with no gaps and no overlaps.
 - Blocks must be in order, and each must be at least one minute long.
+- Each block's mode is `comfort`, `eco`, `away` or `off`.
 - Times are in the Raspberry Pi's own timezone, not UTC (see [Timezone](#timezone)).
+
+`off` means the heating is switched off for that period. It is a schedule state
+only — there is no "off" override, so `POST /api/zones/{id}/override/off` is
+rejected.
 
 A partial update is rejected rather than merged, so that a saved schedule is
 never half old and half new. The editor in the web interface builds a valid
@@ -741,20 +796,46 @@ sudo bash /opt/nobo-control/scripts/update.sh
 As an immediate workaround on an old build, `sudo systemctl restart
 nobo-control` clears it.
 
-### Some buttons are greyed out, or I get "not available when connected to a real hub"
+### The "Search for device" button is greyed out
 
-That is deliberate. A few things are only implemented against the built-in demo
-data — adding and deleting zones, editing weekly schedules, and moving,
-renaming or removing devices. This is a gap in *this application*, not a
-restriction imposed by the hub: the hub's protocol supports all of it, but the
-real-hub code paths were never finished. Rather than let the buttons fail in
-confusing ways, they are disabled when a real hub is connected and the API
-answers `501`.
+Device discovery asks the hub to listen on its radio for devices in pairing
+mode, so it needs a real hub. In demo mode there is nothing to listen with, and
+the button says so. Type the 12-digit serial number in by hand instead.
 
-Use the official Nobø app for those. Everything to do with actual heating —
-temperatures, modes, overrides, holiday periods — works in both modes. The full
-list, and what it would take to close the gap, is in
-[What works with a real hub](#what-works-with-a-real-hub-and-what-does-not).
+This is the only feature that is restricted by mode. Everything else — adding
+and deleting zones, editing weekly schedules, and adding, moving, renaming,
+replacing or removing devices — now works in both modes. If you are on an older
+build where more of the interface is greyed out, update (see
+[Updating the Software](#updating-the-software)).
+
+### A device change was refused with "the hub did not confirm..."
+
+The command reached the hub but the hub did not answer, or answered with an
+error. Nothing was changed, so it is safe to try again.
+
+Common causes, in order of likelihood:
+
+- The device is not in pairing mode, or stopped being in pairing mode while the
+  request was running. Pairing waits up to 30 seconds.
+- The device is out of range of the hub.
+- The device is already registered on the hub. Adding it again is refused; use
+  **Replace** instead, or remove it first.
+
+`GET /api/log`, or the command log in the interface, shows exactly what was
+sent and what came back.
+
+### Deleting a zone says it still contains devices
+
+That is deliberate. The hub would let you delete the zone and leave its devices
+unassigned, which is harder to unpick than an error message. Move or remove the
+devices first, then delete the zone.
+
+### I changed one zone's schedule and expected other zones to change too
+
+Weekly schedules on a hub are shared objects, and every zone starts on the same
+factory schedule. The first time you save a schedule for a zone, that zone gets
+its own copy so no other room is changed by accident. The schedule editor shows
+a note when a schedule is still shared. To change several zones, edit each one.
 
 ### "permission denied while trying to connect to the Docker daemon socket"
 
@@ -844,7 +925,12 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 ### What is backed up
 
 - `.env` — your hub configuration (serial, IP)
-- `data/` volume — user accounts, away schedules, demo zone state, server state
+- `data/` volume — user accounts, away schedules, demo zone state, zone icons
+  (`zone_icons.json`) and server state
+
+Zone icons are worth calling out: the hub has no icon field, so they exist only
+on the Pi. Everything else about a real hub's zones and devices lives on the
+hub itself and is not part of this backup.
 
 ### Restore from backup
 
@@ -945,6 +1031,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/zones/{zone_id}/schedule` | One zone's weekly schedule |
 | `GET /api/week_profiles` | Week profiles as the hub stores them |
 | `GET /api/devices` | All devices, with their friendly names and zone assignment |
+| `GET /api/devices/search` | What a running device search has heard so far (real hub only) |
 | `GET /api/hub/config` | Current hub connection settings |
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
@@ -962,6 +1049,26 @@ Note that `/auth/login` takes form fields, not JSON.
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
 
+### Zones and devices
+
+These work in both demo mode and against a real hub, except where noted.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/zones` | Create a zone. The hub assigns the id, so use the one in the reply. |
+| `DELETE /api/zones/{zone_id}` | Delete a zone. Refused with `409` while it still contains devices. |
+| `POST /api/devices` | Add a device to a zone by serial number. Against a real hub this pairs it, so the device must be in pairing mode. |
+| `PATCH /api/devices/{serial}/name` | Rename a device |
+| `POST /api/devices/{serial}/move` | Move a device to another zone (`{"new_zone_id": "2"}`) |
+| `PUT /api/devices/{serial}` | Replace a device with a new one (`{"new_serial": "..."}`). Pairs the new one first, then removes the old. |
+| `DELETE /api/devices/{serial}` | Remove a device |
+| `POST /api/devices/search` | Ask the hub to listen for devices in pairing mode (real hub only) |
+| `DELETE /api/devices/search` | Stop the search (real hub only) |
+
+Pairing a device takes up to 30 seconds, because it waits for the hub to
+confirm. `502` means the hub answered but refused or said nothing useful;
+`504` means it never answered at all. In both cases nothing was changed.
+
 ### Administration
 
 | Endpoint | Purpose |
@@ -971,7 +1078,6 @@ Note that `/auth/login` takes form fields, not JSON.
 | `POST /auth/change-password`, `POST /auth/rename` | Your own account |
 | `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
 | `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
-| `POST/PUT/PATCH/DELETE /api/zones`, `/api/devices/...` | Zone and device management — **demo mode only**, see the capability table above |
 
 ### If a request fails
 
@@ -984,8 +1090,11 @@ kind of problem it is:
 | `401` | Not logged in, or the session expired |
 | `403` | Logged in, but this needs an admin |
 | `404` | No such zone or device |
-| `501` | The feature is not available against a real hub — use the official Nobø app |
+| `409` | The request conflicts with the current state — for example deleting a zone that still contains devices |
+| `501` | The feature is not available in the current mode. In practice this is only device discovery in demo mode. |
+| `502` | The hub answered, but not in a way the request could be completed with |
 | `503` | The hub is not reachable right now |
+| `504` | The hub did not answer in time. Nothing was changed. |
 
 ### Letting other systems in without a login
 
@@ -997,7 +1106,7 @@ in still works as normal, and the admin-only endpoints stay admin-only.
 
 ## Testing
 
-The tests run in demo mode and need no hub, no network and no Raspberry Pi.
+The tests run without a hub, without a network and without a Raspberry Pi.
 
 ```bash
 cd /opt/nobo-control          # or wherever you cloned it
@@ -1015,6 +1124,27 @@ python -m pytest tests/test_temperature_validation.py -k rounding
 Run them from the repository root. `pytest.ini` there tells pytest where the
 application code and the tests live, so the command above works regardless of
 which subdirectory you cloned into.
+
+### How the real-hub code is tested without a hub
+
+Most tests run in demo mode. That leaves the real-hub half of every endpoint
+untested, which is how this project ended up shipping features that quietly did
+not work against a hub.
+
+`tests/fake_hub.py` closes that gap. It is a real TCP server that speaks the
+Nobø Eco Hub protocol — handshake, the initial data dump, zone, component and
+week profile commands, receiver search and pairing, and error responses. The
+genuine `pynobo` client connects to it, so what is being tested is this
+application's own behaviour.
+
+| File | What it covers |
+| --- | --- |
+| `tests/test_fake_hub.py` | That the fake is faithful enough for the real client. If these fail, nothing below means anything. |
+| `tests/test_real_hub_endpoints.py` | The full HTTP API driven against the fake hub: schedules, zones, devices, discovery and pairing. |
+
+This cannot catch a hub that behaves differently from its specification, because
+the fake encodes the same reading of the specification the application does. See
+[Verified against a fake hub, not against real hardware](#verified-against-a-fake-hub-not-against-real-hardware).
 
 One message in the output is expected and harmless: a
 `PynoboConnectionError: Failed to connect to Nobø Ecohub at 192.0.2.10`

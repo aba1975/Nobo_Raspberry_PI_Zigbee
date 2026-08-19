@@ -34,9 +34,8 @@ docker compose down                  # stop
 
 ## Running Tests
 
-Tests run in demo mode (no real hub needed), so they never touch a real Nobø
-Hub. `pytest.ini` puts `app/` on the import path, so the plain command works
-from the repository root with no environment variables:
+`pytest.ini` puts `app/` on the import path, so the plain command works from the
+repository root with no environment variables:
 
 ```bash
 # On the Pi or any machine with Python 3.12 + dev dependencies
@@ -59,6 +58,20 @@ docker run --rm -v "$PWD":/src -w /src \
 so `docker compose exec ... pytest` will not work — the tests are not in the
 running container. Mount the repository as above instead.
 
+Most tests run in demo mode, so they never touch a real Nobø Hub. The real-hub
+code paths are covered separately, against `tests/fake_hub.py`:
+
+- `tests/fake_hub.py` — a TCP server speaking the real hub protocol (handshake,
+  initial dump, zone/component/week-profile commands, search and pairing,
+  errors). The genuine `pynobo` client connects to it.
+- `tests/test_fake_hub.py` — proves the fake is faithful. If it fails, every
+  other real-hub test is meaningless.
+- `tests/test_real_hub_endpoints.py` — drives the whole FastAPI app against the
+  fake hub over HTTP.
+
+**Any change to a protocol assumption belongs in `fake_hub.py` first.** And
+note the standing caveat: no real-hub code has ever run against real hardware.
+
 ## Important Design Notes
 
 - The Nobo Hub allows only ONE TCP connection at a time — the app includes reconnect logic with exponential backoff
@@ -77,3 +90,34 @@ running container. Mount the repository as above instead.
   `broadcast_zone_update()` themselves
 - Paths are resolved from the module location, never the working directory, so
   the app and the tests behave the same wherever they are started from
+
+## Talking to a Real Hub
+
+Three rules, each learned from a bug:
+
+1. **Never call pynobo's synchronous wrappers from a request handler.** They
+   create their task on whichever event loop is running, which inside FastAPI is
+   the web server's loop, not the loop that owns the hub socket. Use the
+   `async_*` variants wrapped in `hub_command(...)`, which runs them on
+   `hub_loop`, the dedicated loop that owns the connection.
+2. **`nobo.stop()` is a coroutine.** There is no synchronous version. Use
+   `stop_hub_client()`; calling `stop()` bare leaks the connection.
+3. **Never build a component update from `hub.components`.** pynobo overwrites
+   `zone_id` with `tempsensor_for_zone_id` when a component is only a
+   temperature sensor, so echoing its dict back would move the device into that
+   zone. Use `HubProtocolTap.component_row()`, which keeps the raw wire rows.
+
+Also worth knowing:
+
+- pynobo has no handling for `Y00`/`Y01`/`Y03`/`Y04`, so device search and
+  pairing go entirely through `HubProtocolTap`.
+- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
+  not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.
+- Week profile states are `0=Comfort, 1=Eco, 2=Away, 4=Off`. `API_Nobo.pdf`
+  page 6 says "3: Off" and is wrong � pynobo's `validate_week_profile` accepts
+  only `0124`, and it is pynobo that talks to the hub.
+- Ids for new zones and week profiles are assigned by the hub, not the client.
+  Send a placeholder and find the real one by diffing state before and after.
+- Week profiles are shared between zones and every zone starts on profile `1`.
+  `apply_week_profile_to_zone()` only edits in place when the profile belongs to
+  that zone alone and is not `1`; otherwise it creates a per-zone copy.

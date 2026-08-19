@@ -10,6 +10,7 @@ import ipaddress
 import logging
 import math
 import threading
+import time
 from collections import deque
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
@@ -224,6 +225,10 @@ command_log: deque = deque(maxlen=500)
 # Populated from disk on startup; persisted to disk on every write.
 demo_schedules: Dict[str, dict] = config_persistence.load_demo_schedules()
 
+# Zone icons are this app's own idea — the hub does not store them — so they are
+# kept locally and apply in both demo and real-hub mode. Keyed by zone id.
+zone_icons: Dict[str, str] = config_persistence.load_zone_icons()
+
 # Tracks whether the current global mode was set manually or by the away schedule.
 # Loaded from disk on startup; persisted to disk on every change.
 _server_state = config_persistence.load_server_state()
@@ -293,6 +298,26 @@ def detect_device_type(serial: str) -> tuple[str, bool, bool]:
     
     # Default for unknown models
     return ("Unknown", False, False)
+
+
+# The hub protocol is space-delimited, so a space inside a name would break the
+# field count. Names therefore travel with non-breaking spaces (U+00A0) instead.
+# pynobo encodes on the way out but does not decode on the way in, so names read
+# back from a real hub contain U+00A0 wherever the user typed a space. On screen
+# that is nearly invisible, but it makes comparison, search and sorting fail.
+HUB_NAME_SPACE = "\u00a0"
+
+
+def decode_hub_name(name: Any) -> Any:
+    """Turn a name from the hub back into ordinary text."""
+    if isinstance(name, str):
+        return name.replace(HUB_NAME_SPACE, " ")
+    return name
+
+
+def encode_hub_name(name: str) -> str:
+    """Prepare a name for the hub. Only needed where pynobo does not do it."""
+    return name.replace(" ", HUB_NAME_SPACE)
 
 
 def format_serial_display(serial: str) -> str:
@@ -437,9 +462,11 @@ async def lifespan(app: FastAPI):
         current_hub = hub
     if current_hub:
         try:
-            current_hub.stop()
+            stop_hub_client(current_hub)
         except:
             pass
+
+    hub_loop.shutdown()
 
 
 app = FastAPI(title="Nobø Web Control", version="1.0.0", lifespan=lifespan)
@@ -560,6 +587,15 @@ class ZoneInfo(BaseModel):
     supports_temp_adjust: bool
 
 
+# The hub allows 100 bytes for a zone name (API_Nobo.pdf).
+ZONE_NAME_MAX_BYTES = 100
+
+# Starting temperatures for a zone created from this app. The hub requires
+# comfort >= eco, and these match the defaults elsewhere in the application.
+DEFAULT_NEW_ZONE_COMFORT = 21
+DEFAULT_NEW_ZONE_ECO = 18
+
+
 class ZoneAdd(BaseModel):
     name: str
     icon: str = ""
@@ -576,7 +612,7 @@ class HubConfigUpdate(BaseModel):
     ip: Optional[str] = None
 
 
-VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away'}
+VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away', 'off'}
 SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 _TIME_RE = re.compile(r'^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$')
 
@@ -636,23 +672,324 @@ class ScheduleUpdate(BaseModel):
                     )
 
 
+# ===== Week profile conversion =====
+#
+# The app models a schedule as seven days of contiguous blocks with a start, an
+# end and a mode. A Nobø hub models it as one flat, comma-separated list of
+# "HHMMS" stamps covering the whole week, where a stamp only says "from this
+# moment, be in state S" and every day begins with a 0000 stamp. Converting
+# between the two is what makes schedule editing work against real hardware.
+#
+# The state digit is documented inconsistently: page 6 of API_Nobo.pdf lists
+# "3: Off" while page 13 lists "4 = Off". pynobo — the library that actually
+# talks to hubs in the field — only accepts 0, 1, 2 and 4, so 4 is used here.
+WEEK_PROFILE_STATE_BY_MODE = {
+    'eco': '0',
+    'comfort': '1',
+    'away': '2',
+    'off': '4',
+}
+MODE_BY_WEEK_PROFILE_STATE = {v: k for k, v in WEEK_PROFILE_STATE_BY_MODE.items()}
+
+# The hub stores at most 672 stamps per profile (API_Nobo.pdf) and only accepts
+# quarter-hour boundaries.
+MAX_WEEK_PROFILE_ENTRIES = 672
+
+
+def schedule_to_week_profile(schedule: Dict[str, List["ScheduleBlock"]]) -> List[str]:
+    """Convert the app's weekly block schedule into hub "HHMMS" stamps.
+
+    Assumes the schedule has already passed ``ScheduleUpdate.validate_schedule``,
+    so each day is contiguous from 00:00 to 24:00. Only block *starts* become
+    stamps — an end time is implied by the next stamp.
+    """
+    entries: List[str] = []
+
+    for day in SCHEDULE_DAYS:
+        blocks = sorted(schedule[day], key=lambda b: b._parse_minutes(b.start))
+        for block in blocks:
+            hours, minutes = block.start.split(':')
+            if int(minutes) % 15 != 0:
+                raise ValueError(
+                    f"Day {day!r}: the hub only accepts times on a quarter hour, "
+                    f"but a block starts at {block.start}"
+                )
+            state = WEEK_PROFILE_STATE_BY_MODE.get(block.mode)
+            if state is None:
+                raise ValueError(f"Day {day!r}: mode {block.mode!r} cannot be sent to a hub")
+            entries.append(f"{hours}{minutes}{state}")
+
+    midnights = sum(1 for e in entries if e[:4] == '0000')
+    if midnights != 7:
+        # Should be unreachable after validate_schedule, but a wrong profile is
+        # worse than a rejected one — a hub will happily accept a corrupt week.
+        raise ValueError(
+            f"Converted schedule has {midnights} midnight entries; the hub requires exactly 7"
+        )
+    if len(entries) > MAX_WEEK_PROFILE_ENTRIES:
+        raise ValueError(
+            f"Schedule has {len(entries)} switch points; the hub allows at most "
+            f"{MAX_WEEK_PROFILE_ENTRIES}"
+        )
+    return entries
+
+
+def week_profile_to_schedule(entries: List[str]) -> Dict[str, List[Dict[str, str]]]:
+    """Convert hub "HHMMS" stamps back into the app's weekly block schedule."""
+    days: List[List[Dict[str, str]]] = []
+
+    for entry in entries:
+        entry = entry.strip()
+        if len(entry) != 5 or not entry[:4].isdigit():
+            raise ValueError(f"Malformed week profile entry: {entry!r}")
+        start = f"{entry[0:2]}:{entry[2:4]}"
+        mode = MODE_BY_WEEK_PROFILE_STATE.get(entry[4])
+        if mode is None:
+            raise ValueError(f"Unknown state {entry[4]!r} in week profile entry {entry!r}")
+        if entry[:4] == '0000':
+            days.append([])
+        if not days:
+            raise ValueError("Week profile does not start at midnight")
+        days[-1].append({'start': start, 'end': '24:00', 'mode': mode})
+
+    if len(days) != 7:
+        raise ValueError(f"Week profile covers {len(days)} days; expected 7")
+
+    # A stamp runs until the next one, or to the end of the day.
+    for blocks in days:
+        for i in range(len(blocks) - 1):
+            blocks[i]['end'] = blocks[i + 1]['start']
+
+    return {day: days[i] for i, day in enumerate(SCHEDULE_DAYS)}
+
+
 # ===== Hub Connection & Callbacks =====
+
+# How long to wait for the hub to accept a command before giving up. The hub is
+# on the local network and answers in milliseconds, so anything slower means the
+# link is in trouble and the user is better served by an error than by a hang.
+HUB_COMMAND_TIMEOUT = 10
+
+
+class HubLoop:
+    """A dedicated asyncio event loop, on its own thread, that owns the hub client.
+
+    pynobo's socket belongs to whichever event loop created it, and asyncio
+    streams may only be used from that loop. pynobo's deprecated synchronous
+    wrappers guess at a loop instead: called from inside a request handler they
+    pick up the *web server's* loop, so the command is written to a socket that
+    belongs to a different loop. That either does nothing or corrupts the
+    connection, and it fails silently — which is why real-hub writes could not
+    be relied on before.
+
+    Everything that talks to the hub therefore goes through here.
+    """
+
+    def __init__(self) -> None:
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._ready = threading.Event()
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        """Start the loop thread if it is not already running."""
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._ready.clear()
+
+            def run() -> None:
+                loop = asyncio.new_event_loop()
+                self._loop = loop
+                asyncio.set_event_loop(loop)
+                self._ready.set()
+                try:
+                    loop.run_forever()
+                finally:
+                    loop.close()
+
+            self._thread = threading.Thread(target=run, name="nobo-hub-loop", daemon=True)
+            self._thread.start()
+
+        if not self._ready.wait(timeout=10):
+            raise RuntimeError("Hub event loop failed to start")
+
+    @property
+    def running(self) -> bool:
+        loop = self._loop
+        return loop is not None and loop.is_running()
+
+    def run(self, coro, timeout: float = HUB_COMMAND_TIMEOUT):
+        """Run a coroutine on the hub loop and wait for its result."""
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            coro.close()
+            raise RuntimeError("Hub event loop is not running")
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=timeout)
+
+    def shutdown(self) -> None:
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=5)
+        self._loop = None
+        self._thread = None
+
+
+hub_loop = HubLoop()
+
+
+async def hub_command(coro, timeout: float = HUB_COMMAND_TIMEOUT):
+    """Await a pynobo coroutine from a request handler, on the hub's own loop.
+
+    The blocking wait is pushed to a worker thread so the web server keeps
+    serving other requests while the hub thinks about it.
+    """
+    return await asyncio.to_thread(hub_loop.run, coro, timeout)
+
+
+def stop_hub_client(client: "pynobo.nobo") -> None:
+    """Shut a pynobo client down properly.
+
+    ``nobo.stop()`` is a coroutine. Calling it without awaiting — as this code
+    used to — creates a coroutine that is immediately discarded, so the socket
+    and its keep-alive task are never cleaned up and every mode switch leaks a
+    connection to the hub.
+    """
+    try:
+        if hub_loop.running:
+            hub_loop.run(client.stop(), timeout=5)
+        else:
+            asyncio.run(client.stop())
+    except Exception as exc:
+        logger.warning("Error while stopping hub client: %s", exc)
+
+
+# Responses pynobo has no handling for. Left to it, these reach a "behavior
+# undefined for this response" warning and are then discarded.
+SEARCH_RESPONSES = {"Y00", "Y01", "Y03", "Y04"}
+
+# Components are reported by these commands: initial info, added, updated.
+COMPONENT_RESPONSES = {"H02", "B01", "V01"}
+
+
+class HubProtocolTap:
+    """Observes the raw hub protocol alongside pynobo.
+
+    Two things need raw access that pynobo does not offer:
+
+    * When a component is only a temperature sensor for a zone, pynobo copies
+      ``tempsensor_for_zone_id`` over ``zone_id`` in its own dictionary. That is
+      convenient for display but destructive for editing: an update built from
+      pynobo's copy would tell the hub the device really belongs to that zone.
+      The raw rows kept here are what the hub actually said.
+
+    * Receiver search and pairing (``Y00``/``Y01``/``Y03``/``Y04``) are not
+      implemented in pynobo at all, so discovered devices would simply be lost.
+
+    Installed by replacing ``response_handler`` on the client, which is a plain
+    attribute lookup, so the original still runs for everything else.
+    """
+
+    # Discovered devices are forgotten after this long, so a stale list is never
+    # presented as if the search were still running.
+    DISCOVERY_TTL = 300
+
+    def __init__(self) -> None:
+        self.raw_components: Dict[str, List[str]] = {}
+        self.search_active = False
+        self.discovered: Dict[str, float] = {}
+        self.pair_results: Dict[str, bool] = {}
+        self.last_error: Optional[List[str]] = None
+        self._lock = threading.Lock()
+
+    def attach(self, client) -> None:
+        original = client.response_handler
+
+        def handler(response: List[str]) -> None:
+            try:
+                self.observe(response)
+            except Exception as exc:  # never let the tap break the connection
+                logger.warning("Hub protocol tap error on %s: %s", response, exc)
+            if response and response[0] in SEARCH_RESPONSES:
+                return
+            original(response)
+
+        client.response_handler = handler
+
+    def observe(self, response: List[str]) -> None:
+        if not response:
+            return
+        code = response[0]
+
+        with self._lock:
+            if code == "H00":
+                # A fresh dump of everything; drop what we thought we knew.
+                self.raw_components.clear()
+            elif code in COMPONENT_RESPONSES and len(response) >= 8:
+                self.raw_components[response[1]] = list(response[1:8])
+            elif code == "S01" and len(response) >= 2:
+                self.raw_components.pop(response[1], None)
+            elif code == "Y00":
+                self.search_active = True
+                self.discovered.clear()
+            elif code == "Y01":
+                self.search_active = False
+            elif code == "Y04" and len(response) >= 2:
+                self.discovered[response[1]] = time.monotonic()
+            elif code == "Y03" and len(response) >= 3:
+                self.pair_results[response[1]] = response[2] == "1"
+            elif code.startswith("E") and len(code) == 3 and code[1:].isdigit():
+                self.last_error = list(response)
+                logger.warning("Hub reported an error: %s", " ".join(response))
+
+    def component_row(self, serial: str) -> Optional[List[str]]:
+        with self._lock:
+            row = self.raw_components.get(serial)
+            return list(row) if row else None
+
+    def discovered_serials(self) -> List[str]:
+        cutoff = time.monotonic() - self.DISCOVERY_TTL
+        with self._lock:
+            return sorted(s for s, seen in self.discovered.items() if seen >= cutoff)
+
+    def take_pair_result(self, serial: str) -> Optional[bool]:
+        with self._lock:
+            return self.pair_results.pop(serial, None)
+
+    def take_error(self) -> Optional[List[str]]:
+        with self._lock:
+            error, self.last_error = self.last_error, None
+            return error
+
+
+hub_tap: Optional[HubProtocolTap] = None
+
+
 def connect_to_hub_sync():
     """Connect to the Nobø Hub (synchronous, runs in thread)"""
-    global hub, hub_connected
+    global hub, hub_connected, hub_tap
 
     with connection_lock:
         generation = hub_config_generation
 
     try:
         logger.info(f"Connecting to Nobø Hub at {NOBO_IP} with serial {NOBO_SERIAL}...")
-        new_hub = pynobo.nobo(NOBO_SERIAL, NOBO_IP, discover=False)
+        hub_loop.start()
+        new_hub = pynobo.nobo(NOBO_SERIAL, NOBO_IP, discover=False, synchronous=False)
+        # Attach before connecting, so the initial data dump is captured too.
+        tap = HubProtocolTap()
+        tap.attach(new_hub)
+        hub_loop.run(new_hub.start(), timeout=30)
         with connection_lock:
             if generation != hub_config_generation:
                 stale = True
             else:
                 stale = False
                 hub = new_hub
+                hub_tap = tap
                 hub_connected = True
 
         if stale:
@@ -660,7 +997,7 @@ def connect_to_hub_sync():
             # hub is not the one they asked for, so drop it silently.
             logger.info("Discarding hub connection from a superseded configuration")
             try:
-                new_hub.stop()
+                stop_hub_client(new_hub)
             except Exception as exc:
                 logger.warning("Error while stopping superseded hub connection: %s", exc)
             return
@@ -680,6 +1017,7 @@ def connect_to_hub_sync():
             if generation == hub_config_generation:
                 hub_connected = False
                 hub = None
+                hub_tap = None
         raise
 
 
@@ -704,20 +1042,21 @@ async def connect_to_hub():
 
 def disconnect_from_hub() -> None:
     """Stop and clear any live hub connection. Safe to call when not connected."""
-    global hub, hub_connected
+    global hub, hub_connected, hub_tap
 
     with connection_lock:
         current_hub = hub
 
     if current_hub:
         try:
-            current_hub.stop()
+            stop_hub_client(current_hub)
             logger.info("Disconnected from Nobø Hub")
         except Exception as exc:
             logger.warning("Error while disconnecting from hub: %s", exc)
 
     with connection_lock:
         hub = None
+        hub_tap = None
         hub_connected = False
 
 
@@ -1016,7 +1355,7 @@ def get_zones_data() -> List[Dict[str, Any]]:
     zones = []
     try:
         for zone_id, zone in current_hub.zones.items():
-            zone_name = zone.get('name', f'Zone {zone_id}')
+            zone_name = decode_hub_name(zone.get('name', f'Zone {zone_id}'))
             
             # Get components for this zone
             zone_components = []
@@ -1065,12 +1404,15 @@ def get_zones_data() -> List[Dict[str, Any]]:
             zones.append({
                 'zone_id': str(zone_id),
                 'name': zone_name,
-                'icon': '',  # Could be configured per zone
+                'icon': zone_icons.get(str(zone_id), ''),
                 'rooms': [zone_name],  # Default to zone name
                 'components': zone_components,
                 'components_display': components_display,
                 'components_types': components_types,
-                'components_names': [''] * len(zone_components),
+                'components_names': [
+                    decode_hub_name(current_hub.components.get(c, {}).get('name', ''))
+                    for c in zone_components
+                ],
                 'current_temperature': current_temp,
                 'comfort_temperature': comfort_temp,
                 'eco_temperature': eco_temp,
@@ -1099,65 +1441,61 @@ def get_zones_data() -> List[Dict[str, Any]]:
 #
 # This map is the single source of truth: the endpoints raise from it and the UI
 # reads the same values from /api/capabilities, so the two cannot drift apart.
-DEMO_ONLY_FEATURES = {
-    "add_zone": "Creating zones is not implemented for a real hub in this app. "
-                "The hub itself supports it — the code was never written. Add "
-                "zones in the official Nobø Energy Control app.",
-    "delete_zone": "Deleting zones is not implemented for a real hub in this app. "
-                   "The hub itself supports it — the code was never written. "
-                   "Delete zones in the official Nobø Energy Control app.",
-    "zone_icon": "Zone icons are stored by this app, and it only keeps them for "
-                 "demo zones. The icon cannot be saved while a real hub is "
-                 "connected.",
-    "edit_schedule": "Editing week schedules is not implemented for a real hub in "
-                     "this app. The hub itself supports it — the code was never "
-                     "written. Edit the week profile in the official Nobø app.",
-    "add_device": "Adding devices is not implemented for a real hub in this app, "
-                  "and this app cannot pair new hardware at all. Pair devices in "
-                  "the official Nobø Energy Control app.",
-    "rename_device": "Renaming devices is not implemented for a real hub in this "
-                     "app. The hub itself supports it — the code was never "
-                     "written. Rename the device in the official Nobø app.",
-    "replace_device": "Replacing a device is not implemented for a real hub in "
-                      "this app. Use the official Nobø app.",
-    "remove_device": "Removing devices is not implemented for a real hub in this "
-                     "app. The hub itself supports it — the code was never "
-                     "written. Unpair the device in the official Nobø app.",
-    "move_device": "Moving a device between zones is not implemented for a real "
-                   "hub in this app. The hub itself supports it — the code was "
-                   "never written. Move it in the official Nobø app.",
-}
+DEMO_ONLY_FEATURES: Dict[str, str] = {}
 """Features this application only implements against the built-in demo data.
 
-These are *this app's* limitations, not the hub's. The Nobø Eco Hub protocol has
+This is now empty: every editing feature works against a real hub as well.
+
+It used to list zone creation and deletion, schedule editing, zone icons and all
+five device operations. Those were never hub limitations — the protocol has
 commands for all of them (A00/R00 for zones, A01/U01/R01 for components,
-A02/U02/R02 for week profiles), and pynobo already wraps the week-profile and
-zone-update ones. The real-hub branches of these endpoints were left unfinished,
-so rather than fail confusingly they are declared unsupported and the UI greys
-them out. Implementing any of them is a matter of writing the code and testing
-it against real hardware.
+A02/U02/R02 for week profiles, X00/X01/X03 for pairing) — the real-hub branches
+of the endpoints had simply never been written. They have been now.
+
+The map is kept rather than deleted because it is the mechanism that keeps the
+UI honest: anything added here is refused by the endpoint *and* greyed out in
+the browser, from the same source of truth.
 """
+
+HUB_ONLY_FEATURES = {
+    "discover_devices": "Searching for nearby devices needs the hub's radio, so "
+                        "it only works when a real hub is connected. In demo mode "
+                        "there is no hardware to listen for.",
+}
+"""Features that need real hardware and cannot be simulated."""
 
 
 def get_capabilities() -> Dict[str, Dict[str, Any]]:
     """What this installation can actually do right now.
 
-    Everything not listed in DEMO_ONLY_FEATURES (zone and global overrides,
-    temperatures, the away schedule, renaming a zone) works in both modes.
+    Everything not listed here works in both modes.
     """
-    return {
+    capabilities = {
         name: {
             "supported": DEMO_MODE,
             "reason": None if DEMO_MODE else reason,
         }
         for name, reason in DEMO_ONLY_FEATURES.items()
     }
+    capabilities.update({
+        name: {
+            "supported": not DEMO_MODE,
+            "reason": reason if DEMO_MODE else None,
+        }
+        for name, reason in HUB_ONLY_FEATURES.items()
+    })
+    return capabilities
 
 
 def require_capability(name: str) -> None:
-    """Raise 501 with the documented explanation if a feature is demo-only."""
-    if not DEMO_MODE:
-        raise HTTPException(status_code=501, detail=DEMO_ONLY_FEATURES[name])
+    """Refuse a feature that is not available in the current mode.
+
+    Answers 501 (not implemented here) with the same explanation the UI shows,
+    so the message the user reads is the message the API gives.
+    """
+    capability = get_capabilities().get(name)
+    if capability is not None and not capability["supported"]:
+        raise HTTPException(status_code=501, detail=capability["reason"])
 
 
 def determine_zone_mode(zone_id: str, zone: Dict) -> str:
@@ -1388,6 +1726,54 @@ async def add_zone(zone: ZoneAdd):
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": new_id, "name": zone.name}
 
+        # Real hub mode
+        if not current_hub:
+            raise HTTPException(status_code=503, detail="Hub not connected")
+
+        name = zone.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Zone name cannot be empty")
+        encoded = encode_hub_name(name)
+        if len(encoded.encode('utf-8')) > ZONE_NAME_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Zone name is too long for the hub (maximum "
+                       f"{ZONE_NAME_MAX_BYTES} bytes)",
+            )
+        if any(decode_hub_name(z.get('name', '')) == name for z in current_hub.zones.values()):
+            raise HTTPException(status_code=400, detail=f"A zone named '{name}' already exists")
+
+        before = set(current_hub.zones)
+        # The hub assigns the real id and ignores the one sent, but a placeholder
+        # still has to occupy the field.
+        await hub_command(current_hub.async_send_command([
+            "A00",
+            "0",
+            encoded,
+            DEFAULT_WEEK_PROFILE_ID,
+            str(DEFAULT_NEW_ZONE_COMFORT),
+            str(DEFAULT_NEW_ZONE_ECO),
+            pynobo.nobo.API.OVERRIDE_ALLOWED,
+            pynobo.nobo.API.OVERRIDE_ID_NONE,
+        ]))
+
+        new_ids = await wait_for_hub_state(lambda: set(current_hub.zones) - before)
+        if not new_ids:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub did not confirm the new zone. Please try again.",
+            )
+        new_id = sorted(new_ids)[0]
+
+        add_log_entry(
+            "sent",
+            f"Zone '{name}' created with id {new_id}",
+            command=f"A00 {encoded}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {"status": "success", "zone_id": new_id, "name": name}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1426,7 +1812,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": zone_id, "name": demo_zone['name'], "icon": demo_zone['icon']}
 
-        # Real hub mode — icon is stored locally only (pynobo doesn't support icons)
+        # Real hub mode. The name lives on the hub; the icon is this app's own
+        # setting and is stored locally, exactly as it is in demo mode.
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
 
@@ -1434,10 +1821,10 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             raise HTTPException(status_code=404, detail="Zone not found")
 
         zone = current_hub.zones[zone_id]
-        old_name = zone.get('name', zone_id)
+        old_name = decode_hub_name(zone.get('name', zone_id))
 
         if update.name is not None:
-            current_hub.update_zone(zone_id, update.name.strip())
+            await hub_command(current_hub.async_update_zone(zone_id, update.name.strip()))
             add_log_entry(
                 "sent",
                 f"update_zone({zone_id}, '{update.name.strip()}')",
@@ -1445,8 +1832,17 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
                 source="api",
             )
 
+        if update.icon is not None:
+            zone_icons[str(zone_id)] = update.icon.strip()
+            config_persistence.save_zone_icons(zone_icons)
+
         await asyncio.sleep(0.3)
-        return {"status": "success", "zone_id": zone_id}
+        return {
+            "status": "success",
+            "zone_id": zone_id,
+            "name": update.name.strip() if update.name is not None else old_name,
+            "icon": zone_icons.get(str(zone_id), ''),
+        }
 
     except HTTPException:
         raise
@@ -1483,6 +1879,48 @@ async def delete_zone(zone_id: str):
             logger.info(f"Demo mode: Zone '{zone_name}' deleted")
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": zone_id}
+
+        # Real hub mode
+        if not current_hub:
+            raise HTTPException(status_code=503, detail="Hub not connected")
+
+        if zone_id not in current_hub.zones:
+            raise HTTPException(status_code=404, detail="Zone not found")
+
+        # Deleting a zone that still contains heaters would leave them
+        # unassigned and unheatable, which is not something to do by accident.
+        occupants = [
+            serial for serial, comp in current_hub.components.items()
+            if comp.get('zone_id') == zone_id
+        ]
+        if occupants:
+            names = ", ".join(format_serial_display(s) for s in occupants)
+            raise HTTPException(
+                status_code=409,
+                detail=f"This zone still contains {len(occupants)} device(s): {names}. "
+                       f"Move or remove them first.",
+            )
+
+        zone = current_hub.zones[zone_id]
+        zone_name = decode_hub_name(zone.get('name', zone_id))
+        await hub_command(current_hub.async_send_command(
+            ["R00"] + list(zone.values())
+        ))
+        gone = await wait_for_hub_state(lambda: zone_id not in current_hub.zones)
+        if not gone:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub did not confirm the deletion. Please try again.",
+            )
+
+        add_log_entry(
+            "sent",
+            f"Zone '{zone_name}' (id={zone_id}) deleted",
+            command=f"R00 {zone_id}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {"status": "success", "zone_id": zone_id}
 
     except HTTPException:
         raise
@@ -1540,12 +1978,12 @@ async def set_zone_override(zone_id: str, mode: str):
         
         if mode == 'normal':
             # Remove override - return to schedule
-            current_hub.create_override(
+            await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
                 pynobo.nobo.API.OVERRIDE_TYPE_NOW,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
-            )
+            ))
             add_log_entry(
                 "sent",
                 f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) — cancel override",
@@ -1554,12 +1992,12 @@ async def set_zone_override(zone_id: str, mode: str):
             )
         else:
             # Set override mode
-            current_hub.create_override(
+            await hub_command(current_hub.async_create_override(
                 mode_map[mode],
                 pynobo.nobo.API.OVERRIDE_TYPE_NOW,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
-            )
+            ))
             add_log_entry(
                 "sent",
                 f"create_override({mode.upper()}, NOW, ZONE, zone_{zone_id})",
@@ -1730,7 +2168,7 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
             zone.get('temp_eco_c', 17),
         )
         
-        current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=comfort, temp_eco_c=eco)
+        await hub_command(current_hub.async_update_zone(zone_id, name=zone['name'], temp_comfort_c=comfort, temp_eco_c=eco))
         
         # Wait for update
         await asyncio.sleep(0.5)
@@ -1794,11 +2232,11 @@ async def set_global_override(mode: str):
             raise HTTPException(status_code=503, detail="Hub not connected")
         
         if mode == 'normal' or mode == 'home':
-            current_hub.create_override(
+            await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
                 pynobo.nobo.API.OVERRIDE_TYPE_NOW,
                 pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
-            )
+            ))
             add_log_entry(
                 "sent",
                 "create_override(NORMAL, NOW, GLOBAL) — cancel all overrides",
@@ -1806,11 +2244,11 @@ async def set_global_override(mode: str):
                 source="api",
             )
         else:
-            current_hub.create_override(
+            await hub_command(current_hub.async_create_override(
                 mode_map[mode],
                 pynobo.nobo.API.OVERRIDE_TYPE_NOW,
                 pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
-            )
+            ))
             add_log_entry(
                 "sent",
                 f"create_override({mode.upper()}, NOW, GLOBAL)",
@@ -1961,17 +2399,17 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         'home': -1,
     }
     if mode == 'normal' or mode == 'home':
-        current_hub.create_override(
+        await hub_command(current_hub.async_create_override(
             pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
             pynobo.nobo.API.OVERRIDE_TYPE_NOW,
             pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
-        )
+        ))
     else:
-        current_hub.create_override(
+        await hub_command(current_hub.async_create_override(
             mode_map[mode],
             pynobo.nobo.API.OVERRIDE_TYPE_NOW,
             pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
-        )
+        ))
     global_mode_source = source
     config_persistence.save_server_state({"global_mode_source": global_mode_source})
     await asyncio.sleep(0.5)
@@ -2104,6 +2542,95 @@ async def get_week_profiles():
 
 
 # ===== Schedule API Endpoints =====
+
+# The hub's factory default week profile. It is shared by every zone out of the
+# box and users expect it to keep meaning "the default", so it is never edited
+# in place.
+DEFAULT_WEEK_PROFILE_ID = "1"
+
+
+async def wait_for_hub_state(predicate, timeout: float = 5.0, interval: float = 0.1):
+    """Wait for hub state to catch up after a command.
+
+    Hub commands are fire-and-forget: the reply arrives asynchronously on the
+    receive task and updates pynobo's dictionaries. Anything that needs to read
+    the result back — most importantly the id the hub assigns to a new object —
+    has to wait for it to land.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        result = predicate()
+        if result:
+            return result
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(interval)
+
+
+async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[str]) -> str:
+    """Write a week profile for one zone and return the profile id used.
+
+    Week profiles are shared objects: several zones can point at the same one,
+    and the factory default starts out shared by all of them. Editing in place
+    would silently reschedule other rooms, so a profile is only updated when it
+    belongs to this zone alone. Otherwise the zone gets its own profile.
+    """
+    zone = current_hub.zones[zone_id]
+    zone_name = decode_hub_name(zone.get('name', f'Zone {zone_id}'))
+    profile_id = zone.get('week_profile_id')
+
+    users = [
+        zid for zid, z in current_hub.zones.items()
+        if z.get('week_profile_id') == profile_id
+    ]
+    exclusive = profile_id in current_hub.week_profiles and users == [zone_id]
+
+    if exclusive and profile_id != DEFAULT_WEEK_PROFILE_ID:
+        name = decode_hub_name(current_hub.week_profiles[profile_id].get('name', zone_name))
+        await hub_command(current_hub.async_update_week_profile(profile_id, name, entries))
+        return profile_id
+
+    # Give the zone a profile of its own. The hub assigns the id, so the new
+    # profile has to be identified by comparing before and after.
+    before = set(current_hub.week_profiles)
+    new_name = _unique_week_profile_name(current_hub, f"{zone_name} schedule")
+    await hub_command(current_hub.async_add_week_profile(new_name, entries))
+
+    new_ids = await wait_for_hub_state(lambda: set(current_hub.week_profiles) - before)
+    if not new_ids:
+        raise HTTPException(
+            status_code=502,
+            detail="The hub did not confirm the new week profile. Please try again.",
+        )
+    new_id = sorted(new_ids)[0]
+
+    await hub_command(current_hub.async_update_zone(zone_id, week_profile_id=new_id))
+    return new_id
+
+
+def _unique_week_profile_name(current_hub, preferred: str) -> str:
+    """Pick a profile name that is not already taken, within the hub's limit."""
+    existing = {
+        decode_hub_name(p.get('name', '')) for p in current_hub.week_profiles.values()
+    }
+    # pynobo enforces 100 bytes for week profile names.
+    def clip(value: str) -> str:
+        encoded = value.encode('utf-8')
+        while len(encoded) > 100:
+            value = value[:-1]
+            encoded = value.encode('utf-8')
+        return value
+
+    candidate = clip(preferred)
+    if candidate not in existing:
+        return candidate
+    for suffix in range(2, 100):
+        candidate = clip(f"{preferred} {suffix}")
+        if candidate not in existing:
+            return candidate
+    raise HTTPException(status_code=409, detail="Could not find a free week profile name")
+
+
 @app.get("/api/zones/{zone_id}/schedule")
 async def get_zone_schedule(zone_id: str):
     """Get the weekly schedule for a specific zone"""
@@ -2142,12 +2669,33 @@ async def get_zone_schedule(zone_id: str):
             raise HTTPException(status_code=404, detail="Week profile not found for zone")
         
         week_profile = current_hub.week_profiles[week_profile_id]
-        
+
+        raw = week_profile.get('profile') or []
+        try:
+            parsed = week_profile_to_schedule(list(raw))
+        except ValueError as exc:
+            # Show the problem rather than an empty week: a profile the app
+            # cannot read is something the user needs to know about.
+            logger.warning("Could not read week profile %s: %s", week_profile_id, exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"The hub returned a week profile this app cannot read: {exc}",
+            )
+
         return {
             "zone_id": zone_id,
-            "zone_name": zone.get('name', f'Zone {zone_id}'),
+            "zone_name": decode_hub_name(zone.get('name', f'Zone {zone_id}')),
             "week_profile_id": week_profile_id,
-            "week_profile": week_profile
+            "week_profile_name": decode_hub_name(week_profile.get('name', '')),
+            "shared_with_zones": [
+                # Names, not ids: this is shown to the user as "editing this
+                # will also change ...", and an id means nothing to them.
+                decode_hub_name(z.get('name', f'Zone {zid}'))
+                for zid, z in current_hub.zones.items()
+                if z.get('week_profile_id') == week_profile_id and zid != zone_id
+            ],
+            "schedule": parsed,
+            "week_profile": week_profile,
         }
         
     except HTTPException:
@@ -2197,15 +2745,118 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
         
         if zone_id not in current_hub.zones:
             raise HTTPException(status_code=404, detail="Zone not found")
-        
+
+        try:
+            entries = schedule_to_week_profile(schedule.schedule)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        profile_id = await apply_week_profile_to_zone(current_hub, zone_id, entries)
+
+        add_log_entry(
+            "sent",
+            f"Schedule for zone {zone_id} written to week profile {profile_id}",
+            command=f"week_profile {profile_id} = {','.join(entries)}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "zone_id": zone_id,
+            "week_profile_id": profile_id,
+            "message": "Schedule updated",
+        }
+
     except HTTPException:
         raise
+    except pynobo.PynoboValidationError as e:
+        # The hub rejected the schedule; that is the user's input, not a crash.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating zone schedule: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===== Device Management API Endpoints =====
+
+# Component record layout on the wire (API_Nobo.pdf):
+#   <serial> <status> <name> <reverse on/off> <zone id> <active override id>
+#   <temperature sensor for zone id>
+COMPONENT_SERIAL = 0
+COMPONENT_STATUS = 1
+COMPONENT_NAME = 2
+COMPONENT_REVERSE = 3
+COMPONENT_ZONE_ID = 4
+COMPONENT_OVERRIDE_ID = 5
+COMPONENT_TEMP_SENSOR_ZONE = 6
+
+# The specification fixes these two: status is always 0 and a component never
+# carries its own override id.
+COMPONENT_STATUS_VALUE = "0"
+COMPONENT_OVERRIDE_NONE = "-1"
+
+COMPONENT_NAME_MAX_BYTES = 100
+
+UNASSIGNED_ZONE_ID = "-1"
+
+# How long to wait for the hub's Y03 answer to a pairing request. Pairing is a
+# radio operation between the hub and the device, so it is much slower than an
+# ordinary command.
+PAIRING_TIMEOUT = 30
+
+# A receiver search stops by itself after 30 seconds (API_Nobo.pdf, X00).
+SEARCH_DURATION = 30
+
+
+def require_hub_tap() -> HubProtocolTap:
+    """The protocol tap for the live connection, or a clear error."""
+    with connection_lock:
+        tap = hub_tap
+    if tap is None:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    return tap
+
+
+def component_row_for(serial: str) -> List[str]:
+    """The component exactly as the hub last reported it.
+
+    Deliberately not read from pynobo's dictionary — see :class:`HubProtocolTap`.
+    """
+    row = require_hub_tap().component_row(serial)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return row
+
+
+def validate_component_name(name: str) -> str:
+    """Check a device name against the hub's limit and encode it for the wire."""
+    encoded = encode_hub_name(name)
+    size = len(encoded.encode('utf-8'))
+    if size > COMPONENT_NAME_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Name is too long for the hub ({size} bytes, maximum "
+                   f"{COMPONENT_NAME_MAX_BYTES})",
+        )
+    return encoded
+
+
+async def send_component_update(current_hub, row: List[str]) -> None:
+    """Send U01 for a component row, normalising the fixed fields."""
+    row = list(row)
+    row[COMPONENT_STATUS] = COMPONENT_STATUS_VALUE
+    row[COMPONENT_OVERRIDE_ID] = COMPONENT_OVERRIDE_NONE
+    await hub_command(current_hub.async_send_command(["U01"] + row))
+
+
+async def wait_for_component(serial: str, matches, timeout: float = 5.0):
+    """Wait until the hub confirms a component change, or time out."""
+    tap = require_hub_tap()
+    return await wait_for_hub_state(
+        lambda: matches(tap.component_row(serial)), timeout=timeout
+    )
+
+
 @app.get("/api/devices")
 async def get_devices():
     """Get all registered devices with their zone assignments"""
@@ -2248,6 +2899,87 @@ async def get_devices():
     except Exception as e:
         logger.error(f"Error getting devices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Device discovery (receiver search) =====
+#
+# Adding a device needs its 12-digit serial number, which is printed on the
+# device and is easy to get wrong. A receiver search asks the hub to listen for
+# devices in pairing mode nearby and report what it hears, so the user can pick
+# from a list instead of typing.
+
+
+@app.post("/api/devices/search")
+async def start_device_search():
+    """Ask the hub to listen for nearby devices in pairing mode."""
+    require_capability("discover_devices")
+
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+
+    if not connected or not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    tap = require_hub_tap()
+    await hub_command(current_hub.async_send_command(["X00"]))
+    started = await wait_for_hub_state(lambda: tap.search_active)
+    if not started:
+        raise HTTPException(
+            status_code=502, detail="The hub did not start a device search."
+        )
+
+    add_log_entry("sent", "Started searching for devices", command="X00", source="api")
+    return {
+        "status": "searching",
+        "seconds": SEARCH_DURATION,
+        "message": "Put each device into pairing mode now.",
+    }
+
+
+@app.get("/api/devices/search")
+async def get_device_search():
+    """What the hub has heard so far."""
+    require_capability("discover_devices")
+
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+
+    if not connected or not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    tap = require_hub_tap()
+    found = []
+    for serial in tap.discovered_serials():
+        device_type, _, _ = detect_device_type(serial)
+        found.append({
+            "serial": serial,
+            "serial_display": format_serial_display(serial),
+            "device_type": device_type,
+            # A device the hub already knows will fail to pair again; say so
+            # rather than let the user try and get a confusing error.
+            "already_registered": tap.component_row(serial) is not None,
+        })
+
+    return {"searching": tap.search_active, "devices": found}
+
+
+@app.delete("/api/devices/search")
+async def stop_device_search():
+    """Stop an in-progress search."""
+    require_capability("discover_devices")
+
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+
+    if not connected or not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    await hub_command(current_hub.async_send_command(["X01"]))
+    add_log_entry("sent", "Stopped searching for devices", command="X01", source="api")
+    return {"status": "stopped"}
 
 
 class DeviceAdd(BaseModel):
@@ -2315,7 +3047,75 @@ async def add_device(device: DeviceAdd):
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
-        
+
+        if device.zone_id not in current_hub.zones:
+            raise HTTPException(status_code=404, detail="Zone not found")
+
+        tap = require_hub_tap()
+        existing = tap.component_row(serial)
+        if existing is not None:
+            zone_name = decode_hub_name(
+                current_hub.zones.get(existing[COMPONENT_ZONE_ID], {}).get('name', '')
+            )
+            where = f" in zone '{zone_name}'" if zone_name else ""
+            raise HTTPException(
+                status_code=400,
+                detail=f"Device with serial {format_serial_display(serial)} "
+                       f"is already registered{where}",
+            )
+
+        # A device has to be paired with the hub over radio before it can be
+        # configured. Pairing only succeeds while the device is in pairing mode,
+        # so a failure here is usually the device, not the app.
+        await hub_command(current_hub.async_send_command(["X03", serial]))
+        paired = await wait_for_hub_state(
+            lambda: tap.take_pair_result(serial), timeout=PAIRING_TIMEOUT
+        )
+        if paired is None:
+            raise HTTPException(
+                status_code=504,
+                detail="The hub did not answer the pairing request. Put the device "
+                       "into pairing mode and try again.",
+            )
+        if paired is False:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub could not pair with this device. Check the serial "
+                       "number and that the device is in pairing mode and in range.",
+            )
+
+        row = await wait_for_hub_state(lambda: tap.component_row(serial))
+        if row is None:
+            raise HTTPException(
+                status_code=502,
+                detail="The device paired but the hub has not reported it yet. "
+                       "Reload the page in a moment.",
+            )
+
+        row[COMPONENT_ZONE_ID] = device.zone_id
+        if device.name:
+            row[COMPONENT_NAME] = validate_component_name(device.name.strip())
+        await send_component_update(current_hub, row)
+        await wait_for_component(
+            serial, lambda r: r is not None and r[COMPONENT_ZONE_ID] == device.zone_id
+        )
+
+        add_log_entry(
+            "sent",
+            f"Device {format_serial_display(serial)} paired and added to zone {device.zone_id}",
+            command=f"X03 {serial}; U01 {serial} zone_id={device.zone_id}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "serial": serial,
+            "serial_display": format_serial_display(serial),
+            "device_type": device_name,
+            "zone_id": device.zone_id,
+            "name": device.name or '',
+        }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2368,6 +3168,31 @@ async def rename_device(serial: str, body: DeviceRename):
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
+
+        row = component_row_for(clean_serial)
+        encoded = validate_component_name(new_name)
+        old_name = decode_hub_name(row[COMPONENT_NAME])
+        row[COMPONENT_NAME] = encoded
+
+        await send_component_update(current_hub, row)
+        confirmed = await wait_for_component(
+            clean_serial, lambda r: r is not None and r[COMPONENT_NAME] == encoded
+        )
+        if not confirmed:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub did not confirm the new name. Please try again.",
+            )
+
+        add_log_entry(
+            "sent",
+            f"Device {format_serial_display(clean_serial)} renamed "
+            f"from '{old_name}' to '{new_name}'",
+            command=f"U01 {clean_serial} name={new_name}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {"status": "success", "serial": clean_serial, "name": new_name}
 
     except HTTPException:
         raise
@@ -2447,7 +3272,71 @@ async def replace_device(serial: str, replacement: DeviceReplace):
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
-        
+
+        tap = require_hub_tap()
+        old_row = component_row_for(old_serial)
+        if tap.component_row(new_serial) is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Device with serial {format_serial_display(new_serial)} "
+                       f"is already registered",
+            )
+
+        # A component's serial number identifies it and cannot be changed, so a
+        # replacement is genuinely a removal followed by a new pairing. The old
+        # device is only unpaired once the new one has answered, so a failed
+        # pairing leaves the zone as it was rather than empty.
+        await hub_command(current_hub.async_send_command(["X03", new_serial]))
+        paired = await wait_for_hub_state(
+            lambda: tap.take_pair_result(new_serial), timeout=PAIRING_TIMEOUT
+        )
+        if paired is None:
+            raise HTTPException(
+                status_code=504,
+                detail="The hub did not answer the pairing request. The old device "
+                       "has been left in place. Put the new device into pairing "
+                       "mode and try again.",
+            )
+        if paired is False:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub could not pair with the new device. The old device "
+                       "has been left in place.",
+            )
+
+        new_row = await wait_for_hub_state(lambda: tap.component_row(new_serial))
+        if new_row is None:
+            raise HTTPException(
+                status_code=502,
+                detail="The new device paired but the hub has not reported it yet. "
+                       "The old device has been left in place.",
+            )
+
+        # Carry the old device's placement and name over to its replacement.
+        new_row[COMPONENT_ZONE_ID] = old_row[COMPONENT_ZONE_ID]
+        new_row[COMPONENT_NAME] = old_row[COMPONENT_NAME]
+        new_row[COMPONENT_TEMP_SENSOR_ZONE] = old_row[COMPONENT_TEMP_SENSOR_ZONE]
+        await send_component_update(current_hub, new_row)
+
+        await hub_command(current_hub.async_send_command(["R01"] + old_row))
+        await wait_for_hub_state(lambda: tap.component_row(old_serial) is None)
+
+        add_log_entry(
+            "sent",
+            f"Device {format_serial_display(old_serial)} replaced by "
+            f"{format_serial_display(new_serial)}",
+            command=f"X03 {new_serial}; R01 {old_serial}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "old_serial": old_serial,
+            "new_serial": new_serial,
+            "serial_display": format_serial_display(new_serial),
+            "device_type": device_name,
+        }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2498,7 +3387,27 @@ async def remove_device(serial: str):
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
-        
+
+        row = component_row_for(serial_clean)
+        await hub_command(current_hub.async_send_command(["R01"] + row))
+        gone = await wait_for_hub_state(
+            lambda: require_hub_tap().component_row(serial_clean) is None
+        )
+        if not gone:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub did not confirm the removal. Please try again.",
+            )
+
+        add_log_entry(
+            "sent",
+            f"Device {format_serial_display(serial_clean)} removed from the hub",
+            command=f"R01 {serial_clean}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {"status": "success", "serial": serial_clean}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -2574,6 +3483,59 @@ async def move_device(serial: str, move: DeviceMove):
                 "new_zone_id": dst_zone['zone_id'],
                 "new_zone_name": dst_zone['name'],
             }
+
+        # Real hub mode
+        if not current_hub:
+            raise HTTPException(status_code=503, detail="Hub not connected")
+
+        row = component_row_for(serial_clean)
+        if move.new_zone_id not in current_hub.zones:
+            raise HTTPException(status_code=404, detail="Target zone not found")
+
+        old_zone_id = row[COMPONENT_ZONE_ID]
+        if old_zone_id == move.new_zone_id:
+            raise HTTPException(status_code=400, detail="Device is already in the target zone")
+
+        row[COMPONENT_ZONE_ID] = move.new_zone_id
+        # A device that reports temperature does so for the zone it lives in, so
+        # the sensor assignment has to follow it. Left behind, the old zone would
+        # keep reading a thermometer that is now in another room.
+        if row[COMPONENT_TEMP_SENSOR_ZONE] == old_zone_id:
+            row[COMPONENT_TEMP_SENSOR_ZONE] = move.new_zone_id
+
+        await send_component_update(current_hub, row)
+        confirmed = await wait_for_component(
+            serial_clean,
+            lambda r: r is not None and r[COMPONENT_ZONE_ID] == move.new_zone_id,
+        )
+        if not confirmed:
+            raise HTTPException(
+                status_code=502,
+                detail="The hub did not confirm the move. Please try again.",
+            )
+
+        old_zone_name = decode_hub_name(
+            current_hub.zones.get(old_zone_id, {}).get('name', old_zone_id)
+        )
+        new_zone_name = decode_hub_name(
+            current_hub.zones[move.new_zone_id].get('name', move.new_zone_id)
+        )
+        add_log_entry(
+            "sent",
+            f"Device {format_serial_display(serial_clean)} moved from "
+            f"'{old_zone_name}' to '{new_zone_name}'",
+            command=f"U01 {serial_clean} zone_id={move.new_zone_id}",
+            source="api",
+        )
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "serial": serial_clean,
+            "old_zone_id": old_zone_id,
+            "old_zone_name": old_zone_name,
+            "new_zone_id": move.new_zone_id,
+            "new_zone_name": new_zone_name,
+        }
 
     except HTTPException:
         raise

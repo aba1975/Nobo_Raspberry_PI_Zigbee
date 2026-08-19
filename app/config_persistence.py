@@ -33,6 +33,7 @@ DEMO_ZONES_FILE = DATA_DIR / "demo_zones.json"
 DEMO_SCHEDULES_FILE = DATA_DIR / "demo_schedules.json"
 SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
+ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 
 # Default server state values
 _DEFAULT_SERVER_STATE: dict = {"global_mode_source": "manual"}
@@ -135,6 +136,46 @@ def load_demo_schedules() -> dict:
     except json.JSONDecodeError as exc:
         logger.warning("demo_schedules.json is corrupt: %s — backing up and using empty dict", exc)
         _backup_corrupt(DEMO_SCHEDULES_FILE)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Zone icons
+# ---------------------------------------------------------------------------
+# The hub has no concept of a zone icon, so it is this app's own setting and is
+# kept here for both demo mode and a real hub. Keyed by zone id.
+
+def save_zone_icons(icons: dict) -> None:
+    """Persist *icons* dict to ``data/zone_icons.json`` atomically."""
+    try:
+        _atomic_write(ZONE_ICONS_FILE, icons)
+    except Exception as exc:
+        logger.error("Failed to save zone icons: %s", exc)
+
+
+def load_zone_icons() -> dict:
+    """
+    Load zone icons from ``data/zone_icons.json``.
+
+    Returns:
+        ``dict`` mapping zone id to icon name.
+        Empty ``dict`` when the file does not exist or is corrupt (backed up as .backup).
+    """
+    try:
+        with ZONE_ICONS_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "zone_icons.json has unexpected format (expected dict, got %s) — using empty dict",
+                type(data).__name__,
+            )
+            return {}
+        return {str(k): str(v) for k, v in data.items()}
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        logger.warning("zone_icons.json is corrupt: %s — backing up and using empty dict", exc)
+        _backup_corrupt(ZONE_ICONS_FILE)
         return {}
 
 

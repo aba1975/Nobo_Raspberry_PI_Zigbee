@@ -277,9 +277,16 @@ class TestSchedule:
 
     def test_update_schedule_invalid_mode_returns_400(self, client):
         bad = copy.deepcopy(VALID_SCHEDULE_PAYLOAD)
-        bad["schedule"]["monday"][0]["mode"] = "off"
+        bad["schedule"]["monday"][0]["mode"] = "sauna"
         r = client.post("/api/zones/1/schedule", json=bad)
         assert r.status_code == 400
+
+    def test_update_schedule_accepts_off(self, client):
+        """A schedule may turn heating off; the hub has a state for it."""
+        payload = copy.deepcopy(VALID_SCHEDULE_PAYLOAD)
+        payload["schedule"]["monday"][0]["mode"] = "off"
+        r = client.post("/api/zones/1/schedule", json=payload)
+        assert r.status_code == 200
 
     def test_update_schedule_gap_returns_400(self, client):
         bad = copy.deepcopy(VALID_SCHEDULE_PAYLOAD)

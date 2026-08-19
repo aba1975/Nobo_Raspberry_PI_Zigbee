@@ -115,39 +115,24 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ===== Feature Capabilities =====
-// Several editing features are implemented for demo mode only and answer 501
-// against a real hub. The buttons used to be shown anyway, so pressing them
-// looked broken (QA defect D-04). The server publishes what it can actually do
-// at /api/capabilities, and every control that maps to an unsupported feature is
-// disabled with the reason shown as its tooltip.
+// A few features are not available in every mode. The server publishes what it
+// can actually do at /api/capabilities, and every control that maps to an
+// unsupported feature is disabled with the reason shown as its tooltip. Without
+// this the buttons look live and fail with a 501 (QA defect D-04).
+//
+// The list used to cover most of the editing features, because they were only
+// implemented for demo mode. They now work against a real hub too, so all that
+// is left is device discovery, which needs the hub's radio and is therefore the
+// one thing demo mode cannot do.
 
 let capabilities = {};
 
 // Which capability each onclick handler needs. Anything not listed here works
 // in both demo and real-hub mode and is never gated.
 const CAPABILITY_BY_ACTION = {
-    openAddZoneModal: 'add_zone',
-    addZone: 'add_zone',
-    deleteZone: 'delete_zone',
-    selectZoneIcon: 'zone_icon',
-    saveSchedule: 'edit_schedule',
-    addTimeBlock: 'edit_schedule',
-    submitAddTimeBlock: 'edit_schedule',
-    openEditTimeBlock: 'edit_schedule',
-    submitEditTimeBlock: 'edit_schedule',
-    deleteTimeBlock: 'edit_schedule',
-    copyDay: 'edit_schedule',
-    selectCopyDayGroup: 'edit_schedule',
-    confirmCopyDay: 'edit_schedule',
-    addDevice: 'add_device',
-    addDeviceToZone: 'add_device',
-    openInlineAddDevice: 'add_device',
-    startEditDeviceName: 'rename_device',
-    saveDeviceName: 'rename_device',
-    replaceDevice: 'replace_device',
-    removeDevice: 'remove_device',
-    moveDevice: 'move_device',
-    confirmMoveDevice: 'move_device',
+    startDeviceSearch: 'discover_devices',
+    stopDeviceSearch: 'discover_devices',
+    useDiscoveredDevice: 'discover_devices',
 };
 
 async function initCapabilities() {
@@ -1086,6 +1071,7 @@ async function loadScheduleFromAPI() {
         
         const data = await response.json();
         scheduleData = data.schedule || {};
+        renderSharedScheduleNotice(data);
         renderSchedule();
     } catch (error) {
         console.error('Error loading schedule:', error);
@@ -1093,6 +1079,36 @@ async function loadScheduleFromAPI() {
         // Render with default sample data
         renderSchedule();
     }
+}
+
+// A hub week profile is a shared object: several zones can point at the same
+// one, and every zone starts on the factory default. The app gives a zone its
+// own copy the first time its schedule is edited, so no other room is changed
+// by accident — but the user should know that is about to happen.
+function renderSharedScheduleNotice(data) {
+    const container = document.getElementById('scheduleDays');
+    if (!container || !container.parentElement) return;
+
+    let notice = document.getElementById('sharedScheduleNotice');
+    const shared = (data && data.shared_with_zones) || [];
+
+    if (!shared.length) {
+        if (notice) notice.remove();
+        return;
+    }
+
+    if (!notice) {
+        notice = document.createElement('div');
+        notice.id = 'sharedScheduleNotice';
+        notice.className = 'shared-schedule-notice';
+        container.parentElement.insertBefore(notice, container);
+    }
+
+    const others = shared.map(escapeHtml).join(', ');
+    notice.innerHTML = `<span class="icon">ℹ️</span> This schedule
+        (<strong>${escapeHtml(data.week_profile_name || 'shared')}</strong>) is also used by
+        ${others}. Saving changes here gives this zone its own copy, so the other
+        zones keep the schedule they have now.`;
 }
 
 // ===== Schedule Helpers =====
@@ -1166,9 +1182,19 @@ function generateTimeSelectHtml(id, selectedValue, excludeFirst, excludeLast) {
     }</select>`;
 }
 
+// The four states a hub week profile can hold. "Off" turns the heating off
+// entirely for that period — it is a schedule state only, and is not available
+// as a manual override.
+const SCHEDULE_MODES = ['comfort', 'eco', 'away', 'off'];
+const SCHEDULE_MODE_ICONS = { comfort: '🔥', eco: '🌿', away: '🏖️', off: '⏻' };
+
+function getScheduleModeIcon(mode) {
+    return SCHEDULE_MODE_ICONS[mode] || '🔥';
+}
+
 function getModeButtonsHtml(containerId, selectedMode) {
-    return ['comfort', 'eco', 'away'].map(mode => {
-        const icon = mode === 'comfort' ? '🔥' : mode === 'eco' ? '🌿' : '🏖️';
+    return SCHEDULE_MODES.map(mode => {
+        const icon = getScheduleModeIcon(mode);
         const label = mode.charAt(0).toUpperCase() + mode.slice(1);
         return `<button type="button" class="mode-btn mode-btn-${mode}${selectedMode === mode ? ' active' : ''}"
             data-mode="${mode}" onclick="selectMode('${containerId}','${mode}')">${icon} ${label}</button>`;
@@ -1265,7 +1291,7 @@ function renderSchedule() {
         const blockHtml = blocks.map((block, bi) => {
             const duration = timeToMinutes(block.end) - timeToMinutes(block.start);
             const widthPercent = (duration / (24 * 60)) * 100;
-            const modeIcon = block.mode === 'comfort' ? '🔥' : block.mode === 'eco' ? '🌿' : '🏖️';
+            const modeIcon = getScheduleModeIcon(block.mode);
             const modeClass = `timeline-block-${block.mode}`;
             const isEditing = activeFormState && activeFormState.type === 'edit' &&
                 activeFormState.day === day && activeFormState.blockIndex === bi;
@@ -1757,6 +1783,129 @@ function detectDeviceModel() {
     } else {
         detectedModel.textContent = '';
     }
+}
+
+// ===== Device Discovery (receiver search) =====
+// The hub can listen for devices that are in pairing mode and report their
+// serials, so the user picks from a list instead of reading twelve digits off
+// the back of a receiver. Demo mode has no radio, so these controls are gated
+// on the `discover_devices` capability.
+
+let deviceSearchPoll = null;
+
+function setDeviceSearchRunning(running) {
+    const startBtn = document.getElementById('deviceSearchStart');
+    const stopBtn = document.getElementById('deviceSearchStop');
+    if (startBtn) startBtn.style.display = running ? 'none' : '';
+    if (stopBtn) stopBtn.style.display = running ? '' : 'none';
+}
+
+function stopDeviceSearchPolling() {
+    if (deviceSearchPoll) {
+        clearInterval(deviceSearchPoll);
+        deviceSearchPoll = null;
+    }
+}
+
+async function startDeviceSearch() {
+    const status = document.getElementById('deviceSearchStatus');
+    const results = document.getElementById('deviceSearchResults');
+    if (results) results.innerHTML = '';
+    if (status) status.textContent = 'Starting search...';
+
+    try {
+        const response = await fetch('/api/devices/search', { method: 'POST' });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to start the search');
+        }
+        const data = await response.json();
+        setDeviceSearchRunning(true);
+        if (status) {
+            status.textContent = data.message ||
+                'Searching. Put each device into pairing mode now.';
+        }
+        await pollDeviceSearch();
+        stopDeviceSearchPolling();
+        deviceSearchPoll = setInterval(pollDeviceSearch, 2000);
+    } catch (error) {
+        console.error('Error starting device search:', error);
+        if (status) status.textContent = '';
+        setDeviceSearchRunning(false);
+        showToast(error.message, 'error');
+    }
+}
+
+async function pollDeviceSearch() {
+    const status = document.getElementById('deviceSearchStatus');
+    const results = document.getElementById('deviceSearchResults');
+
+    try {
+        const response = await fetch('/api/devices/search');
+        if (!response.ok) throw new Error('Failed to read the search results');
+        const data = await response.json();
+
+        if (results) {
+            results.innerHTML = (data.devices || []).map(device => {
+                const label = device.device_type || 'Unknown device';
+                const known = device.already_registered;
+                return `<div class="device-search-result">
+                    <div class="device-search-result-info">
+                        <span class="device-search-result-serial">${escapeHtml(device.serial_display)}</span>
+                        <span class="device-search-result-type">${escapeHtml(label)}</span>
+                    </div>
+                    ${known
+                        ? '<span class="device-search-result-known">Already added</span>'
+                        : `<button class="btn btn-secondary btn-sm"
+                             onclick="useDiscoveredDevice('${device.serial}')">Use this</button>`}
+                </div>`;
+            }).join('');
+        }
+
+        if (!data.searching) {
+            stopDeviceSearchPolling();
+            setDeviceSearchRunning(false);
+            if (status) {
+                status.textContent = (data.devices || []).length
+                    ? 'Search finished. Pick a device below.'
+                    : 'Search finished. No devices found — check they are in pairing mode and try again.';
+            }
+        } else if (status && (data.devices || []).length) {
+            status.textContent = `Searching... found ${data.devices.length}.`;
+        }
+    } catch (error) {
+        console.error('Error polling device search:', error);
+        stopDeviceSearchPolling();
+        setDeviceSearchRunning(false);
+        if (status) status.textContent = '';
+    }
+}
+
+async function stopDeviceSearch() {
+    stopDeviceSearchPolling();
+    setDeviceSearchRunning(false);
+    const status = document.getElementById('deviceSearchStatus');
+    try {
+        const response = await fetch('/api/devices/search', { method: 'DELETE' });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to stop the search');
+        }
+        if (status) status.textContent = 'Search stopped.';
+    } catch (error) {
+        console.error('Error stopping device search:', error);
+        showToast(error.message, 'error');
+    }
+}
+
+function useDiscoveredDevice(serial) {
+    const serialInput = document.getElementById('deviceSerial');
+    if (!serialInput) return;
+    serialInput.value = serial;
+    formatSerialInput(serialInput);
+    detectDeviceModel();
+    serialInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showToast('Serial filled in. Pick a zone and press Add Device.', 'info');
 }
 
 async function addDevice() {

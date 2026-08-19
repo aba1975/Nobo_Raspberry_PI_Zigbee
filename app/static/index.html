@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#2c3e50" id="metaThemeColor">
     <title>Nobø Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
     <!-- Header with Navigation -->
@@ -183,6 +183,24 @@
                     <!-- Add Device Form -->
                     <div class="device-add-form">
                         <h3>Add Device</h3>
+                        <!-- With a real hub you do not have to read the serial off
+                             the receiver: the hub can search for one in pairing
+                             mode and report it back. Demo mode has no radio, so
+                             this block is disabled there via /api/capabilities. -->
+                        <div class="device-search">
+                            <div class="device-search-actions">
+                                <button class="btn btn-secondary btn-sm" id="deviceSearchStart"
+                                        onclick="startDeviceSearch()">
+                                    <span class="icon">📡</span> Search for device
+                                </button>
+                                <button class="btn btn-secondary btn-sm" id="deviceSearchStop"
+                                        onclick="stopDeviceSearch()" style="display:none">
+                                    Stop search
+                                </button>
+                            </div>
+                            <div id="deviceSearchStatus" class="device-search-status"></div>
+                            <div id="deviceSearchResults" class="device-search-results"></div>
+                        </div>
                         <div class="form-group">
                             <label for="deviceSerial">Serial Number:</label>
                             <input type="text" id="deviceSerial" placeholder="210 000 016 247" 
@@ -358,7 +376,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=7"></script>
     <script src="/static/auth.js?v=2"></script>
 </body>
 </html>
