@@ -433,22 +433,40 @@ Once the system is running you no longer need SSH to switch between demo mode an
    - **Connect to a real Nobø Hub** — then fill in:
      - **Hub serial number** — the 12 digits from the sticker on the bottom of the hub. Spaces are allowed, so `210 000 016 247` and `210000016247` both work.
      - **Hub IP address** — the hub's address on your network, e.g. `192.168.1.42`.
-5. Click **Save settings**.
-6. A confirmation box appears summarising exactly what will change. Click **Confirm** to apply, or **Cancel** to go back.
+5. Click **Save Hub Settings**.
+6. A confirmation box appears summarising exactly what will change. Click **Apply Change** to go ahead, or **Cancel** to go back.
+7. **You are signed out and returned to the login page.** Log in again — the app reloads with the new settings.
 
-The change is applied **immediately** — the app disconnects from the old source, reconnects using the new settings, and the zone list refreshes by itself. **You do not need to restart the container or reboot the Pi.**
+The change is applied **immediately** on the server. **You do not need to restart the container or reboot the Pi.**
+
+### Why does it log me out?
+
+Switching between demo mode and a real hub replaces every zone, device and schedule in the system at once. Rather than leave half-updated pages open in your browser, the app deliberately ends your session so the next login starts from a clean, consistent state. This is expected behaviour, not an error.
 
 ### Good to know
 
 - **Admin only.** Regular (non-admin) users cannot change the hub settings, and the card is not shown to them.
 - **The setting is remembered.** It is written to `data/hub_config.json` inside the Docker data volume, so it survives container restarts, `docker compose down/up`, software updates, and a full Pi reboot. After a reboot the systemd service starts automatically in whichever mode you last selected.
 - **It overrides `.env`.** If you have set the hub from the web interface, that value wins over `NOBO_DEMO`, `NOBO_SERIAL` and `NOBO_IP` in `.env`. The `.env` values are only used until the first time you save settings from the web interface. The Hub Connection card tells you which one is currently in effect (`environment` or `web interface`).
-- **If the hub cannot be reached**, the settings are still saved and you get a warning message. The app keeps retrying in the background, so once the hub becomes reachable it will connect on its own. Check that:
+- **If the hub cannot be reached**, the settings are still saved and you get a warning message before being signed out. The app keeps retrying in the background, so once the hub becomes reachable it will connect on its own. Check that:
   - the serial number and IP address are correct,
   - the hub is powered on and on the same network,
   - the official Nobø app is **not** connected to the hub at the same time (the hub only accepts one connection).
 - **Switching back to demo mode** is always safe and always works, even if the real hub is unreachable. This is a good way to confirm the web interface itself is healthy.
-- The zone and device lists refresh by themselves after a change. If the browser still shows old data, do a hard refresh (`Ctrl+Shift+R`, or `Cmd+Shift+R` on macOS).
+
+### Reading the status indicator
+
+The coloured dot in the top-right corner tells you the real state of the system:
+
+| Indicator | Meaning |
+|-----------|---------|
+| `Connecting...` | The browser is still opening its connection to the Pi. |
+| `Disconnected` / `Connection Error` | The browser cannot reach the Pi at all. Check that the Pi is powered on and the service is running. |
+| `🟡 Demo Mode` | Working normally on simulated data. No hub is being contacted. |
+| `⚠️ Hub Unreachable` | The Pi is fine, but it cannot talk to your Nobø Hub. Zones will not load. Check the serial number and IP address under **Devices**. |
+| `Connected` | Connected to your real hub and receiving live data. |
+
+`⚠️ Hub Unreachable` clears by itself, without a page refresh, as soon as the hub becomes reachable again.
 
 ### Reverting to the `.env` file
 
@@ -498,6 +516,25 @@ If those return data (in demo mode you should see 8 example zones), the backend 
 3. **Check for a newer version** — `sudo bash /opt/nobo-control/scripts/update.sh`.
 
 If `/api/zones` returns an empty list while `NOBO_DEMO=false`, the app is connected to a real hub that has no zones configured — set up your zones in the official Nobo app first.
+
+### "⚠️ Hub Unreachable" and "Cannot reach the Nobø hub"
+
+The Pi and the web interface are working, but the app cannot talk to your Nobø Eco Hub, so there are no zones to show. Check, in order:
+
+1. **The IP address is correct.** Hubs often get a new address from the router after a power cut. Find the current one in your router's device list, then update it under **Devices → Hub Connection**. Consider giving the hub a static/reserved IP in your router so this cannot happen again.
+2. **The serial number is correct** — all 12 digits from the sticker on the hub.
+3. **Nothing else is connected to the hub.** The hub accepts **one** connection at a time. Close the official Nobo app on every phone and tablet.
+4. **The hub is on the same network** as the Pi and is powered on.
+
+You can confirm what the server thinks is going on with:
+
+```bash
+curl http://localhost:8000/api/hub/config
+```
+
+To rule out a network problem entirely, switch to demo mode from **Devices → Hub Connection**. If the 8 example zones appear, the Pi and the app are healthy and the issue is purely with reaching the hub.
+
+You do **not** need to restart anything after correcting the address — the app retries in the background and the indicator changes to `Connected` on its own.
 
 ### "permission denied while trying to connect to the Docker daemon socket"
 
@@ -662,7 +699,7 @@ The server provides a REST API for integration with other systems (e.g., Home As
 - `POST /api/zones/{zone_id}/schedule` — Update zone weekly schedule
 - `GET /api/devices` — List all devices
 - `GET /api/hub/config` — Current hub connection settings (demo mode, serial, IP, source)
-- `POST /api/hub/config` — Switch between demo mode and a real hub (**requires an admin session**)
+- `POST /api/hub/config` — Switch between demo mode and a real hub (**requires an admin session**; ends the session on success)
 - `WS /ws` — WebSocket for real-time updates
 
 API endpoints (`/api/*` and `/ws`) do not require authentication, so local integrations work without credentials. The one exception is `POST /api/hub/config`, which changes how the whole system behaves and therefore requires a logged-in admin session.

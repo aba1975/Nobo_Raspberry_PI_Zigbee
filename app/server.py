@@ -1061,7 +1061,17 @@ async def update_hub_config(request: Request, body: HubConfigUpdate):
             "connected to the hub."
         )
 
-    return result
+    # Switching data source changes zones, devices and schedules wholesale. Rather
+    # than trying to patch every open page back into a consistent state, end the
+    # session so the browser returns to the login page and starts clean.
+    result["signed_out"] = True
+
+    response = JSONResponse(result)
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        auth.delete_session(session_id)
+    response.delete_cookie(key="session_id", path="/")
+    return response
 
 
 @app.get("/api/hub")

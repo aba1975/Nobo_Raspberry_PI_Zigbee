@@ -3425,3 +3425,15 @@ select:focus-visible {
     font-size: 0.9em;
     color: var(--color-text-secondary);
 }
+.hub-config-signout-note {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary, rgba(127, 127, 127, 0.12));
+    font-size: 0.9em;
+    opacity: 0.9;
+}
+
+.hub-config-message.success { color: var(--success, #2e9e5b); }
+.hub-config-message.warning { color: var(--warning, #b8860b); }
+.hub-config-message.error   { color: var(--danger, #d14343); }

@@ -107,6 +107,10 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchZones();
     fetchAwaySchedule();
     initAwayScheduleInputFormatters();
+
+    // Hub reachability can change without any user action (hub rebooted, network
+    // came back), and the reconnect loop runs server-side, so poll for it.
+    setInterval(fetchHubInfo, 15000);
 });
 
 // ===== Theme Toggle =====
@@ -305,10 +309,26 @@ function handleZoneUpdate(data) {
 async function fetchHubInfo() {
     try {
         const response = await fetch('/api/hub');
-        if (!response.ok) throw new Error('Failed to fetch hub info');
-        
-        hubInfo = await response.json();
-        updateHubInfo();
+
+        if (response.ok) {
+            hubInfo = await response.json();
+            updateHubInfo();
+            return;
+        }
+
+        // /api/hub returns 503 while the hub is unreachable. Fall back to the
+        // health endpoint, which always answers, so the header can show the real
+        // state instead of silently keeping stale "connected" information.
+        const health = await fetch('/api/health');
+        if (health.ok) {
+            const data = await health.json();
+            hubInfo = {
+                ...hubInfo,
+                connected: data.connected === true,
+                demo_mode: data.demo_mode === true
+            };
+            updateHubInfo();
+        }
     } catch (error) {
         console.error('Error fetching hub info:', error);
     }
@@ -322,7 +342,19 @@ async function fetchZones() {
     
     try {
         const response = await fetch('/api/zones');
-        if (!response.ok) throw new Error('Failed to fetch zones');
+        if (!response.ok) {
+            // 503 means the server is up but the hub is not reachable. Say that,
+            // instead of a generic failure that looks like an app bug.
+            if (response.status === 503) {
+                const err = new Error(
+                    'Cannot reach the Nobø hub, so no zones could be loaded. ' +
+                    'Check the hub serial number and IP address under Devices.'
+                );
+                err.hubDown = true;
+                throw err;
+            }
+            throw new Error('Failed to fetch zones');
+        }
         
         const data = await response.json();
         zones = data.zones || data; // Handle both {zones: []} and [] formats
@@ -336,7 +368,12 @@ async function fetchZones() {
         updateLastUpdated();
     } catch (error) {
         console.error('Error fetching zones:', error);
-        showToast('Failed to fetch zones', 'error');
+        showToast(error.hubDown ? error.message : 'Failed to fetch zones', error.hubDown ? 'warning' : 'error');
+        if (error.hubDown) {
+            // Keep the header honest even if the hub poll has not run yet.
+            hubInfo = { ...hubInfo, connected: false };
+            renderConnectionStatus();
+        }
     }
 }
 
@@ -408,33 +445,51 @@ async function setZoneTemperature(zoneId, comfort, eco) {
 }
 
 // ===== UI Update Functions =====
+// Tracks the browser <-> server WebSocket only. Whether the *hub* is reachable is
+// a separate question, answered by hubInfo, and the two must not be conflated:
+// the WebSocket can be perfectly healthy while the hub is unreachable.
+let wsStatus = 'connecting';
+
 function updateConnectionStatus(status) {
+    if (status) {
+        wsStatus = status;
+    }
+    renderConnectionStatus();
+}
+
+function renderConnectionStatus() {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
-    
+    if (!statusDot || !statusText) return;
+
     statusDot.className = 'status-dot';
-    
-    switch (status) {
-        case 'connected':
-            if (hubInfo.demo_mode) {
-                statusDot.classList.add('demo');
-                statusText.textContent = '🟡 Demo Mode';
-            } else {
-                statusDot.classList.add('connected');
-                statusText.textContent = 'Connected';
-            }
-            break;
-        case 'disconnected':
-            statusDot.classList.add('disconnected');
-            statusText.textContent = 'Disconnected';
-            break;
-        case 'connecting':
-            statusText.textContent = 'Connecting...';
-            break;
-        case 'error':
-            statusDot.classList.add('disconnected');
-            statusText.textContent = 'Connection Error';
-            break;
+
+    // No link to the server at all — nothing else can be trusted.
+    if (wsStatus === 'connecting') {
+        statusText.textContent = 'Connecting...';
+        return;
+    }
+    if (wsStatus === 'disconnected') {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Disconnected';
+        return;
+    }
+    if (wsStatus === 'error') {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Connection Error';
+        return;
+    }
+
+    // Server is reachable — now report the hub.
+    if (hubInfo.demo_mode) {
+        statusDot.classList.add('demo');
+        statusText.textContent = '🟡 Demo Mode';
+    } else if (hubInfo.connected === false) {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = '⚠️ Hub Unreachable';
+    } else {
+        statusDot.classList.add('connected');
+        statusText.textContent = 'Connected';
     }
 }
 
@@ -448,11 +503,8 @@ function updateHubInfo() {
     if (hubInfo.software_version) {
         hubVersionEl.textContent = `Version ${hubInfo.software_version}`;
     }
-    
-    // Update connection status if demo mode
-    if (hubInfo.demo_mode) {
-        updateConnectionStatus('connected');
-    }
+
+    renderConnectionStatus();
 }
 
 function updateLastUpdated() {
@@ -2110,6 +2162,13 @@ function onHubModeChange() {
     if (realFields) realFields.style.display = realSelected ? '' : 'none';
 }
 
+function showHubConfigMessage(text, kind) {
+    const messageEl = document.getElementById('hubConfigMessage');
+    if (!messageEl) return;
+    messageEl.textContent = text;
+    messageEl.className = `hub-config-message ${kind || ''}`.trim();
+}
+
 function openHubConfigConfirm() {
     const realSelected = document.querySelector('input[name="hubMode"][value="real"]')?.checked;
     const demoMode = !realSelected;
@@ -2157,7 +2216,11 @@ function openHubConfigConfirm() {
     }
 
     const bodyEl = document.getElementById('hubConfigConfirmBody');
-    if (bodyEl) bodyEl.innerHTML = body;
+    if (bodyEl) {
+        bodyEl.innerHTML = body +
+            '<p class="hub-config-signout-note">You will be signed out so the app can ' +
+            'reload cleanly with the new settings. Log in again to continue.</p>';
+    }
     document.getElementById('hubConfigModal')?.classList.add('show');
 }
 
@@ -2205,18 +2268,34 @@ async function confirmHubConfig() {
 
         closeHubConfigModal();
 
+        // The server ends the session on a mode change, so this page is now
+        // unauthenticated and holding data from the old source. Tell the user
+        // what happened, then send them to a clean login.
+        let message;
         if (data.warning) {
-            showToast(data.warning, 'warning');
+            message = data.warning + ' Signing you out…';
         } else if (data.demo_mode) {
-            showToast('Demo mode enabled', 'success');
+            message = 'Demo mode enabled. Signing you out…';
         } else {
-            showToast('Connected to your Nobø hub', 'success');
+            message = 'Connected to your Nobø hub. Signing you out…';
+        }
+        showToast(message, data.warning ? 'warning' : 'success');
+
+        showHubConfigMessage(message + ' Please log in again.', data.warning ? 'warning' : 'success');
+
+        // Close the socket first so its reconnect timer cannot fire mid-redirect.
+        if (ws) {
+            try { ws.close(); } catch (e) { /* already closing */ }
+        }
+        if (reconnectInterval) {
+            clearInterval(reconnectInterval);
+            reconnectInterval = null;
         }
 
-        // Refresh everything so the UI reflects the new source of data
-        await fetchHubConfig();
-        await fetchZones();
-        fetchHubInfo();
+        setTimeout(() => {
+            window.location.href = '/login';
+        }, data.warning ? 3500 : 1800);
+        return;
     } catch (error) {
         console.error('Error saving hub config:', error);
         showToast('Could not save the hub settings', 'error');
