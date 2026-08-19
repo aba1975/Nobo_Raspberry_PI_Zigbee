@@ -57,10 +57,6 @@ interface says so rather than pretending the change worked.
 
 ### What works with a real hub, and what does not
 
-This project talks to the hub through
-[pynobo](https://github.com/echoromeo/pynobo), which exposes what the hub's own
-protocol offers. Some things the hub simply does not allow a third party to do.
-
 | Feature | Demo mode | Real hub |
 | --- | --- | --- |
 | View zones, temperatures and modes | ✅ | ✅ |
@@ -74,9 +70,30 @@ protocol offers. Some things the hub simply does not allow a third party to do.
 | **Add, remove, move, rename or replace a device** | ✅ | ❌ |
 | **Discover or pair a new device** | ❌ | ❌ |
 
-Use the official Nobø app for anything in the "real hub ❌" rows. Pairing in
-particular is done entirely by the hub during pairing mode; there is no
-discovery in this project, and none is planned.
+**Why these are missing.** Not because the hub refuses them. The Nobø Eco Hub's
+own protocol has commands for all of it — adding and removing zones (`A00`,
+`R00`), adding, updating and removing components (`A01`, `U01`, `R01`), and
+adding, updating and removing week profiles (`A02`, `U02`, `R02`). It even
+supports pairing (`X00`, `X01`, `X03`).
+
+The gap is in this application. It grew up around the built-in demo data, and
+the real-hub half of those particular endpoints was never finished — the code
+checked that the zone existed and then stopped. Rather than let the buttons
+fail confusingly, the application now declares them unsupported while a real
+hub is connected, and the UI greys them out.
+
+So these are on the "could be built" list, not the "impossible" list.
+[pynobo](https://github.com/echoromeo/pynobo) already has ready-made helpers
+for week profiles (`async_add_week_profile`, `async_update_week_profile`,
+`async_remove_week_profile`) and for zone updates, so editing weekly schedules
+against a real hub is the closest to reach. The rest would need raw commands
+via `send_command`. None of it has been written or tested against real
+hardware, so nothing here promises it works.
+
+Meanwhile, use the official Nobø Energy Control app for anything in the
+"real hub ❌" rows. Pairing is the one genuine exception: it is driven by the
+hub in pairing mode, there is no discovery in this project, and none is
+planned.
 
 You do not have to remember this table. When the application is connected to a
 real hub, the controls it cannot honour are greyed out with an explanation, so
@@ -726,13 +743,17 @@ nobo-control` clears it.
 
 ### Some buttons are greyed out, or I get "not available when connected to a real hub"
 
-That is deliberate. A few things only work on the demo data kept on the Pi —
-adding and deleting zones, moving devices between zones, and similar
-housekeeping. The Nobø hub does not accept those changes over the network, so
-when you are connected to a real hub the buttons are disabled and the API
-answers `501`. Use the official Nobø app for them. Everything to do with actual
-heating — temperatures, modes, schedules, holiday periods — works in both
-modes. The full list is in
+That is deliberate. A few things are only implemented against the built-in demo
+data — adding and deleting zones, editing weekly schedules, and moving,
+renaming or removing devices. This is a gap in *this application*, not a
+restriction imposed by the hub: the hub's protocol supports all of it, but the
+real-hub code paths were never finished. Rather than let the buttons fail in
+confusing ways, they are disabled when a real hub is connected and the API
+answers `501`.
+
+Use the official Nobø app for those. Everything to do with actual heating —
+temperatures, modes, overrides, holiday periods — works in both modes. The full
+list, and what it would take to close the gap, is in
 [What works with a real hub](#what-works-with-a-real-hub-and-what-does-not).
 
 ### "permission denied while trying to connect to the Docker daemon socket"
