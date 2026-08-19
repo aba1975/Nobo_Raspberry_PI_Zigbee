@@ -51,6 +51,24 @@ def authenticate(client):
 
 
 @pytest.fixture(autouse=True)
+def demo_hub_is_connected():
+    """
+    Keep every test starting from "demo hub connected".
+
+    test_hub_config.py deliberately points the app at an unreachable hub. That
+    connection attempt runs on a background thread and only gives up after a
+    five second timeout, long after the test that started it has finished. When
+    it does, it sets ``hub_connected = False`` on the module, and whichever
+    unrelated test happened to be running at that moment got a surprise 503.
+    That produced a single, randomly-placed failure roughly one run in three.
+    """
+    import server
+
+    server.hub_connected = True
+    yield
+
+
+@pytest.fixture(autouse=True)
 def redirect_persistence(tmp_path, monkeypatch):
     """Redirect all config_persistence file paths to a per-test temp directory.
 

@@ -47,7 +47,20 @@ def restore_hub_globals():
     """Any test that flips the mode must not leak it into the next test."""
     original = (server.DEMO_MODE, server.NOBO_SERIAL, server.NOBO_IP, server.HUB_CONFIG_SOURCE)
     yield
+
+    # Switching to a real hub starts a background connection thread that only
+    # gives up after a five second timeout. Left running, it sets
+    # hub_connected = False long after this test has finished, and whichever
+    # unrelated test was running at that moment failed with a surprise 503.
+    # Wait for it here so the fallout lands inside the test that caused it.
+    thread = server.hub_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=15)
+
     server.DEMO_MODE, server.NOBO_SERIAL, server.NOBO_IP, server.HUB_CONFIG_SOURCE = original
+    with server.connection_lock:
+        server.hub_connected = True
+        server.hub = None
 
 
 @pytest.fixture

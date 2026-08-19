@@ -151,8 +151,8 @@ class TestRangeStillEnforced:
     @pytest.mark.parametrize("payload", [{"comfort": 6.9}, {"comfort": 30.1}, {"eco": 6.9}, {"eco": 31}])
     def test_out_of_range_is_rejected(self, client, zone, payload):
         r = client.post(f"/api/zones/{zone['zone_id']}/temperature", json=payload)
-        assert r.status_code == 400
-        assert "between 7 and 30" in r.json()["detail"]
+        assert r.status_code == 400, f"{payload} on zone {zone['zone_id']} -> {r.status_code} {r.text}"
+        assert "between 7 and 30" in r.json()["detail"], f"{payload} -> {r.text}"
 
     def test_range_is_checked_before_ordering(self):
         """The range message is the more useful one, so it must win."""
