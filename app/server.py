@@ -207,6 +207,11 @@ hub: Optional[pynobo.nobo] = None
 connected_websockets: List[WebSocket] = []
 hub_connected = False
 hub_thread: Optional[threading.Thread] = None
+# Bumped every time the hub configuration changes. Connection attempts run on
+# background threads and can finish long after the user has switched modes
+# again; they carry the generation they started under so a stale result cannot
+# overwrite the current state.
+hub_config_generation = 0
 main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 websocket_lock = asyncio.Lock()  # Lock for thread-safe websocket list access
 connection_lock = threading.Lock()  # Lock for thread-safe hub_connected access
@@ -635,23 +640,46 @@ class ScheduleUpdate(BaseModel):
 def connect_to_hub_sync():
     """Connect to the Nobø Hub (synchronous, runs in thread)"""
     global hub, hub_connected
-    
+
+    with connection_lock:
+        generation = hub_config_generation
+
     try:
         logger.info(f"Connecting to Nobø Hub at {NOBO_IP} with serial {NOBO_SERIAL}...")
         new_hub = pynobo.nobo(NOBO_SERIAL, NOBO_IP, discover=False)
         with connection_lock:
-            hub = new_hub
-            hub_connected = True
+            if generation != hub_config_generation:
+                stale = True
+            else:
+                stale = False
+                hub = new_hub
+                hub_connected = True
+
+        if stale:
+            # The user changed the configuration while we were connecting. This
+            # hub is not the one they asked for, so drop it silently.
+            logger.info("Discarding hub connection from a superseded configuration")
+            try:
+                new_hub.stop()
+            except Exception as exc:
+                logger.warning("Error while stopping superseded hub connection: %s", exc)
+            return
+
         logger.info("Successfully connected to Nobø Hub")
-        
+
         # Register callback for hub updates
         new_hub.register_callback(hub_update_callback)
         
     except Exception as e:
         logger.error(f"Failed to connect to Nobø Hub: {e}")
         with connection_lock:
-            hub_connected = False
-            hub = None
+            # Only report the failure if it still refers to the current
+            # configuration. Without this, a doomed attempt against an old
+            # address could mark demo mode as disconnected seconds after the
+            # user switched to it, leaving the UI stuck on "Hub not connected".
+            if generation == hub_config_generation:
+                hub_connected = False
+                hub = None
         raise
 
 
@@ -700,7 +728,7 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
     rebinds the module-level globals and rebuilds the hub connection in place.
     Returns a dict describing the resulting state.
     """
-    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE
+    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE, hub_config_generation
 
     config = {"demo_mode": bool(demo_mode), "serial": serial, "ip": ip}
     config_persistence.save_hub_config(config)
@@ -709,6 +737,10 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
 
     # Always drop the existing connection before changing the target.
     disconnect_from_hub()
+
+    # Invalidate any connection attempt still running against the old settings.
+    with connection_lock:
+        hub_config_generation += 1
 
     NOBO_SERIAL = serial
     NOBO_IP = ip
@@ -754,6 +786,8 @@ async def reconnect_loop():
     so the loop keeps working when the user switches between demo mode and a real
     hub from the web interface without restarting the server.
     """
+    global hub_connected
+
     MIN_INTERVAL = 5      # Start at 5 seconds
     MAX_INTERVAL = 300     # Cap at 5 minutes
     interval = MIN_INTERVAL
@@ -764,6 +798,14 @@ async def reconnect_loop():
 
         if DEMO_MODE:
             # Nothing to reconnect to while simulating; reset backoff state.
+            # Demo data is always available, so repair the flag if a late-
+            # finishing connection attempt cleared it. Belt and braces: the
+            # generation check in connect_to_hub_sync should prevent this, but
+            # a stuck flag here means zones return 503 forever.
+            with connection_lock:
+                if not hub_connected:
+                    logger.info("Demo mode is active — marking the data source as available")
+                    hub_connected = True
             interval = MIN_INTERVAL
             attempt = 0
             continue
