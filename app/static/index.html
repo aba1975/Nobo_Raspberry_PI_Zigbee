@@ -141,7 +141,45 @@
             <div id="devicesPage" class="page">
                 <section class="devices-section">
                     <h2>Device Management</h2>
-                    
+
+                    <!-- Hub Connection Settings -->
+                    <div class="device-add-form" id="hubConfigCard">
+                        <h3>Hub Connection</h3>
+                        <p id="hubConfigSummary" class="hub-config-summary">Loading current settings…</p>
+
+                        <div class="form-group">
+                            <label>Mode:</label>
+                            <label class="hub-mode-option">
+                                <input type="radio" name="hubMode" value="demo" onchange="onHubModeChange()">
+                                <span>Demo mode — simulated zones, no hub needed</span>
+                            </label>
+                            <label class="hub-mode-option">
+                                <input type="radio" name="hubMode" value="real" onchange="onHubModeChange()">
+                                <span>Connect to my Nobø Eco Hub</span>
+                            </label>
+                        </div>
+
+                        <div id="hubRealFields">
+                            <div class="form-group">
+                                <label for="hubSerial">Hub Serial Number:</label>
+                                <input type="text" id="hubSerial" placeholder="123 456 789 012"
+                                       maxlength="15" oninput="formatSerialInput(this)">
+                                <span class="detected-model">12 digits, printed on the back of the hub</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="hubIp">Hub IP Address:</label>
+                                <input type="text" id="hubIp" placeholder="192.168.1.100" maxlength="15">
+                                <span class="detected-model">Find it in your router's device list</span>
+                            </div>
+                        </div>
+
+                        <div id="hubConfigMessage" class="hub-config-message"></div>
+
+                        <button class="btn btn-primary" onclick="openHubConfigConfirm()">
+                            <span class="icon">💾</span> Save Hub Settings
+                        </button>
+                    </div>
+
                     <!-- Add Device Form -->
                     <div class="device-add-form">
                         <h3>Add Device</h3>
@@ -290,6 +328,23 @@
         </div>
     </div>
 
+    <!-- Hub Configuration Confirmation Modal -->
+    <div id="hubConfigModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="hubConfigModalTitle">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2 id="hubConfigModalTitle">Confirm Hub Change</h2>
+                <button class="modal-close" onclick="closeHubConfigModal()" aria-label="Close confirmation">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="hubConfigConfirmBody"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeHubConfigModal()">Cancel</button>
+                <button class="btn btn-primary" id="hubConfigConfirmBtn" onclick="confirmHubConfig()">Apply Change</button>
+            </div>
+        </div>
+    </div>
+
     <!-- User Settings Panel -->
     <div id="userPanel" class="modal" role="dialog" aria-modal="true" aria-labelledby="userPanelTitle">
         <div class="modal-content" style="max-width:480px;">
@@ -303,7 +358,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=3"></script>
+    <script src="/static/app.js?v=4"></script>
     <script src="/static/auth.js"></script>
 </body>
 </html>

@@ -230,7 +230,12 @@ In demo mode the serial number and IP are ignored, so the placeholder values abo
 
 ### Switching between demo mode and your real hub
 
-You can switch at any time after installation. The `.env` file is the only thing you need to change.
+You can switch at any time after installation. There are two ways to do it:
+
+- **From the web interface (recommended)** — no SSH, no restart. See [Changing hub settings from the web interface](#changing-hub-settings-from-the-web-interface).
+- **By editing `.env`** — the original method, described below.
+
+#### Method 2: Editing the `.env` file
 
 **1. Open the configuration file:**
 
@@ -413,6 +418,47 @@ cd /opt/nobo-control && docker compose logs --tail 50 -f
 ```
 
 Press `Ctrl+C` to stop following logs.
+
+## Changing Hub Settings From the Web Interface
+
+Once the system is running you no longer need SSH to switch between demo mode and your real Nobø Hub. You can do it from the browser.
+
+### How to do it
+
+1. Log in to the web interface at `http://<your-pi-ip>:8000` as an **admin** user.
+2. Click the **cogwheel (⚙) / Devices** icon in the top bar.
+3. At the top of the page you will see the **Hub Connection** card, showing which mode you are currently in.
+4. Choose one of the two options:
+   - **Demo mode** — simulated zones and temperatures, no hub required. Useful for testing.
+   - **Connect to a real Nobø Hub** — then fill in:
+     - **Hub serial number** — the 12 digits from the sticker on the bottom of the hub. Spaces are allowed, so `210 000 016 247` and `210000016247` both work.
+     - **Hub IP address** — the hub's address on your network, e.g. `192.168.1.42`.
+5. Click **Save settings**.
+6. A confirmation box appears summarising exactly what will change. Click **Confirm** to apply, or **Cancel** to go back.
+
+The change is applied **immediately** — the app disconnects from the old source, reconnects using the new settings, and the zone list refreshes by itself. **You do not need to restart the container or reboot the Pi.**
+
+### Good to know
+
+- **Admin only.** Regular (non-admin) users cannot change the hub settings, and the card is not shown to them.
+- **The setting is remembered.** It is written to `data/hub_config.json` inside the Docker data volume, so it survives container restarts, `docker compose down/up`, software updates, and a full Pi reboot. After a reboot the systemd service starts automatically in whichever mode you last selected.
+- **It overrides `.env`.** If you have set the hub from the web interface, that value wins over `NOBO_DEMO`, `NOBO_SERIAL` and `NOBO_IP` in `.env`. The `.env` values are only used until the first time you save settings from the web interface. The Hub Connection card tells you which one is currently in effect (`environment` or `web interface`).
+- **If the hub cannot be reached**, the settings are still saved and you get a warning message. The app keeps retrying in the background, so once the hub becomes reachable it will connect on its own. Check that:
+  - the serial number and IP address are correct,
+  - the hub is powered on and on the same network,
+  - the official Nobø app is **not** connected to the hub at the same time (the hub only accepts one connection).
+- **Switching back to demo mode** is always safe and always works, even if the real hub is unreachable. This is a good way to confirm the web interface itself is healthy.
+- The zone and device lists refresh by themselves after a change. If the browser still shows old data, do a hard refresh (`Ctrl+Shift+R`, or `Cmd+Shift+R` on macOS).
+
+### Reverting to the `.env` file
+
+If you want the `.env` file to control the mode again, delete the saved override and restart:
+
+```bash
+cd /opt/nobo-control
+docker compose exec nobo-web-control rm -f /app/data/hub_config.json
+sudo systemctl restart nobo-control
+```
 
 ## Updating the Software
 
@@ -615,9 +661,11 @@ The server provides a REST API for integration with other systems (e.g., Home As
 - `GET /api/zones/{zone_id}/schedule` — Get zone weekly schedule
 - `POST /api/zones/{zone_id}/schedule` — Update zone weekly schedule
 - `GET /api/devices` — List all devices
+- `GET /api/hub/config` — Current hub connection settings (demo mode, serial, IP, source)
+- `POST /api/hub/config` — Switch between demo mode and a real hub (**requires an admin session**)
 - `WS /ws` — WebSocket for real-time updates
 
-API endpoints (`/api/*` and `/ws`) do not require authentication, so local integrations work without credentials.
+API endpoints (`/api/*` and `/ws`) do not require authentication, so local integrations work without credentials. The one exception is `POST /api/hub/config`, which changes how the whole system behaves and therefore requires a logged-in admin session.
 
 ## Security Notes
 

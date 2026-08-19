@@ -1342,6 +1342,9 @@ async function saveSchedule() {
 
 // ===== Devices Page =====
 function loadDevicesPage() {
+    // Load current hub connection settings
+    fetchHubConfig();
+
     // Populate zone selector
     const zoneSelect = document.getElementById('deviceZone');
     zoneSelect.innerHTML = '<option value="">Select zone...</option>';
@@ -2059,6 +2062,170 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
+}
+
+
+// ===== Hub Connection Settings =====
+let hubConfigCurrent = null;
+let hubConfigPending = null;
+
+async function fetchHubConfig() {
+    const summary = document.getElementById('hubConfigSummary');
+    try {
+        const response = await fetch('/api/hub/config');
+        if (!response.ok) throw new Error('Request failed');
+        const cfg = await response.json();
+        hubConfigCurrent = cfg;
+
+        const demoRadio = document.querySelector('input[name="hubMode"][value="demo"]');
+        const realRadio = document.querySelector('input[name="hubMode"][value="real"]');
+        if (demoRadio) demoRadio.checked = cfg.demo_mode;
+        if (realRadio) realRadio.checked = !cfg.demo_mode;
+
+        const serialInput = document.getElementById('hubSerial');
+        const ipInput = document.getElementById('hubIp');
+        if (serialInput) serialInput.value = cfg.serial_display || '';
+        if (ipInput) ipInput.value = cfg.ip || '';
+
+        if (summary) {
+            if (cfg.demo_mode) {
+                summary.innerHTML = '🧪 <strong>Demo mode</strong> — showing simulated zones. No hub is being contacted.';
+            } else if (cfg.connected) {
+                summary.innerHTML = `✅ <strong>Connected</strong> to hub ${escapeHtml(cfg.serial_display)} at ${escapeHtml(cfg.ip)}`;
+            } else {
+                summary.innerHTML = `⚠️ <strong>Not connected</strong> — trying hub ${escapeHtml(cfg.serial_display)} at ${escapeHtml(cfg.ip)}`;
+            }
+        }
+
+        onHubModeChange();
+    } catch (error) {
+        console.error('Error fetching hub config:', error);
+        if (summary) summary.textContent = 'Could not load the current hub settings.';
+    }
+}
+
+function onHubModeChange() {
+    const realSelected = document.querySelector('input[name="hubMode"][value="real"]')?.checked;
+    const realFields = document.getElementById('hubRealFields');
+    if (realFields) realFields.style.display = realSelected ? '' : 'none';
+}
+
+function openHubConfigConfirm() {
+    const realSelected = document.querySelector('input[name="hubMode"][value="real"]')?.checked;
+    const demoMode = !realSelected;
+    const serialRaw = (document.getElementById('hubSerial')?.value || '').replace(/\s/g, '');
+    const ip = (document.getElementById('hubIp')?.value || '').trim();
+    const messageEl = document.getElementById('hubConfigMessage');
+    if (messageEl) messageEl.textContent = '';
+
+    // Validate before asking for confirmation
+    if (!demoMode) {
+        if (!/^\d{12}$/.test(serialRaw)) {
+            showToast('Serial number must be exactly 12 digits', 'error');
+            return;
+        }
+        if (!isValidIpv4(ip)) {
+            showToast('Enter a valid IP address, for example 192.168.1.100', 'error');
+            return;
+        }
+    }
+
+    hubConfigPending = { demo_mode: demoMode, serial: serialRaw, ip: ip };
+
+    const wasDemo = hubConfigCurrent ? hubConfigCurrent.demo_mode : null;
+    let body;
+    if (demoMode) {
+        body = `
+            <p>Switch to <strong>demo mode</strong>?</p>
+            <p>The system will stop talking to your Nobø Eco Hub and show simulated
+            zones instead. Your real heating will keep running on its own settings,
+            but you will not be able to control it from here until you switch back.</p>
+        `;
+    } else {
+        const changing = wasDemo === true
+            ? '<p>This will leave <strong>demo mode</strong> and connect to your real heating system.</p>'
+            : '';
+        body = `
+            <p>Connect to your Nobø Eco Hub?</p>
+            ${changing}
+            <p><strong>Serial:</strong> ${escapeHtml(formatSerialForDisplay(serialRaw))}<br>
+               <strong>IP address:</strong> ${escapeHtml(ip)}</p>
+            <p>⚠️ The hub allows only one connection at a time. If the official Nobo
+            app is connected, this will not work until you close it.</p>
+            <p>Commands you send from here will change your actual heating.</p>
+        `;
+    }
+
+    const bodyEl = document.getElementById('hubConfigConfirmBody');
+    if (bodyEl) bodyEl.innerHTML = body;
+    document.getElementById('hubConfigModal')?.classList.add('show');
+}
+
+function closeHubConfigModal() {
+    document.getElementById('hubConfigModal')?.classList.remove('show');
+    hubConfigPending = null;
+}
+
+function isValidIpv4(value) {
+    const parts = String(value).split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(p => /^\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+}
+
+function formatSerialForDisplay(serial) {
+    const clean = String(serial).replace(/\s/g, '');
+    if (clean.length !== 12) return clean;
+    return `${clean.slice(0, 3)} ${clean.slice(3, 6)} ${clean.slice(6, 9)} ${clean.slice(9, 12)}`;
+}
+
+async function confirmHubConfig() {
+    if (!hubConfigPending) return;
+
+    const payload = hubConfigPending;
+    const btn = document.getElementById('hubConfigConfirmBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Applying…';
+    }
+
+    try {
+        const response = await fetch('/api/hub/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const detail = data.detail || 'Could not save the hub settings';
+            showToast(typeof detail === 'string' ? detail : 'Could not save the hub settings', 'error');
+            return;
+        }
+
+        closeHubConfigModal();
+
+        if (data.warning) {
+            showToast(data.warning, 'warning');
+        } else if (data.demo_mode) {
+            showToast('Demo mode enabled', 'success');
+        } else {
+            showToast('Connected to your Nobø hub', 'success');
+        }
+
+        // Refresh everything so the UI reflects the new source of data
+        await fetchHubConfig();
+        await fetchZones();
+        fetchHubInfo();
+    } catch (error) {
+        console.error('Error saving hub config:', error);
+        showToast('Could not save the hub settings', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Apply Change';
+        }
+    }
 }
 
 // Backwards compatibility alias

@@ -3395,3 +3395,33 @@ select:focus-visible {
 .modal-body details[open] summary {
     margin-bottom: .25rem;
 }
+
+/* ===== Hub Connection Settings (Devices page) ===== */
+.hub-config-summary {
+    margin: 0 0 16px 0;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--color-bg-secondary, rgba(127, 127, 127, 0.1));
+    font-size: 0.95em;
+}
+
+.hub-mode-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.hub-mode-option input[type="radio"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
+.hub-config-message {
+    margin: 8px 0;
+    font-size: 0.9em;
+    color: var(--color-text-secondary);
+}

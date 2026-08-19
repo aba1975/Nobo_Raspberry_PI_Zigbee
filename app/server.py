@@ -6,6 +6,7 @@ FastAPI backend for local control of Nobø heating system via pynobo library
 import os
 import re
 import asyncio
+import ipaddress
 import logging
 import threading
 from collections import deque
@@ -33,14 +34,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===== CONFIGURATION =====
-# Replace these with your actual Nobø Hub values
-# You can also set them via environment variables: NOBO_SERIAL and NOBO_IP
+# These are the *defaults*, taken from environment variables (set via .env).
+# They can be overridden at runtime from the web interface, in which case the
+# chosen values are stored in data/hub_config.json and reloaded on every start
+# (see _load_persisted_hub_config below). That file always wins over the
+# environment, so a setting made in the UI survives restarts and reboots.
 NOBO_SERIAL = os.environ.get('NOBO_SERIAL', '111111111111')  # Replace with your hub's 12-digit serial number
 NOBO_IP = os.environ.get('NOBO_IP', '10.0.0.100')  # Replace with your hub's IP address
 
 # Demo mode - set to True to use simulated data instead of connecting to real hub
 # Can be enabled via environment variable or using the test serial number
 DEMO_MODE = os.environ.get('NOBO_DEMO', '').lower() in ('true', '1', 'yes') or NOBO_SERIAL == '111111111111'
+
+# Where the currently active settings came from: "environment" or "web interface".
+HUB_CONFIG_SOURCE = "environment"
 DEMO_SOFTWARE_VERSION = "1.4.0 (Simulated)"  # Software version shown in demo mode
 
 # Demo mode zone data - 8 grouped zones with realistic Norwegian indoor temperatures
@@ -300,6 +307,56 @@ def validate_serial(serial: str) -> tuple[bool, str]:
     return True, clean
 
 
+def validate_ip(ip: str) -> tuple[bool, str]:
+    """Validate and clean an IPv4 address.
+    Returns (is_valid, cleaned_ip_or_error_message)."""
+    clean = str(ip).strip()
+    try:
+        return True, str(ipaddress.IPv4Address(clean))
+    except ValueError:
+        return False, "IP address must be a valid IPv4 address (e.g. 192.168.1.100)"
+
+
+def _load_persisted_hub_config() -> None:
+    """Apply data/hub_config.json over the environment defaults, if it exists.
+
+    Called once at import time so the settings chosen in the web interface are
+    restored automatically on every start, including after a reboot.
+    """
+    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE
+
+    stored = config_persistence.load_hub_config()
+    if not stored:
+        return
+
+    serial_ok, serial = validate_serial(stored.get("serial", ""))
+    ip_ok, ip = validate_ip(stored.get("ip", ""))
+    demo = bool(stored.get("demo_mode", False))
+
+    # Only trust a stored real-hub config if the values are actually usable;
+    # otherwise fall back to demo mode rather than looping on a bad address.
+    if not demo and not (serial_ok and ip_ok):
+        logger.warning(
+            "Stored hub config is invalid (serial_ok=%s, ip_ok=%s) — falling back to demo mode",
+            serial_ok, ip_ok,
+        )
+        demo = True
+
+    if serial_ok:
+        NOBO_SERIAL = serial
+    if ip_ok:
+        NOBO_IP = ip
+    DEMO_MODE = demo
+    HUB_CONFIG_SOURCE = "web interface"
+    logger.info(
+        "Loaded hub config from disk: demo_mode=%s serial=%s ip=%s",
+        DEMO_MODE, NOBO_SERIAL if not DEMO_MODE else "(demo)", NOBO_IP if not DEMO_MODE else "(demo)",
+    )
+
+
+_load_persisted_hub_config()
+
+
 # ===== Lifespan Context Manager =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -414,6 +471,12 @@ class ZoneUpdate(BaseModel):
     icon: Optional[str] = None
 
 
+class HubConfigUpdate(BaseModel):
+    demo_mode: bool
+    serial: Optional[str] = None
+    ip: Optional[str] = None
+
+
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away'}
 SCHEDULE_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 _TIME_RE = re.compile(r'^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$')
@@ -517,11 +580,86 @@ async def connect_to_hub():
     await asyncio.sleep(2)
 
 
-async def reconnect_loop():
-    """Background task that monitors hub connectivity and reconnects with exponential backoff."""
-    if DEMO_MODE:
-        return
+def disconnect_from_hub() -> None:
+    """Stop and clear any live hub connection. Safe to call when not connected."""
+    global hub, hub_connected
 
+    with connection_lock:
+        current_hub = hub
+
+    if current_hub:
+        try:
+            current_hub.stop()
+            logger.info("Disconnected from Nobø Hub")
+        except Exception as exc:
+            logger.warning("Error while disconnecting from hub: %s", exc)
+
+    with connection_lock:
+        hub = None
+        hub_connected = False
+
+
+async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
+    """Switch the running server to a new hub configuration.
+
+    Persists the settings first (so they survive a restart or reboot), then
+    rebinds the module-level globals and rebuilds the hub connection in place.
+    Returns a dict describing the resulting state.
+    """
+    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE
+
+    config = {"demo_mode": bool(demo_mode), "serial": serial, "ip": ip}
+    config_persistence.save_hub_config(config)
+
+    previous_mode = "demo" if DEMO_MODE else "production"
+
+    # Always drop the existing connection before changing the target.
+    disconnect_from_hub()
+
+    NOBO_SERIAL = serial
+    NOBO_IP = ip
+    DEMO_MODE = bool(demo_mode)
+    HUB_CONFIG_SOURCE = "web interface"
+
+    new_mode = "demo" if DEMO_MODE else "production"
+    logger.info("Hub configuration changed: %s -> %s", previous_mode, new_mode)
+    add_log_entry(
+        "sent",
+        f"Hub configuration changed to {new_mode} mode"
+        + ("" if DEMO_MODE else f" (serial {format_serial_display(serial)} at {ip})"),
+        source="api",
+    )
+
+    try:
+        await connect_to_hub()
+    except Exception as exc:
+        logger.error("Failed to connect using the new hub configuration: %s", exc)
+
+    with connection_lock:
+        connected = hub_connected
+
+    # Push the new zone list to every open browser tab.
+    try:
+        await broadcast_zone_update()
+    except Exception as exc:
+        logger.warning("Could not broadcast zone update after config change: %s", exc)
+
+    return {
+        "demo_mode": DEMO_MODE,
+        "serial": NOBO_SERIAL,
+        "ip": NOBO_IP,
+        "connected": connected,
+        "source": HUB_CONFIG_SOURCE,
+    }
+
+
+async def reconnect_loop():
+    """Background task that monitors hub connectivity and reconnects with exponential backoff.
+
+    The demo-mode check happens on every iteration rather than once at start-up,
+    so the loop keeps working when the user switches between demo mode and a real
+    hub from the web interface without restarting the server.
+    """
     MIN_INTERVAL = 5      # Start at 5 seconds
     MAX_INTERVAL = 300     # Cap at 5 minutes
     interval = MIN_INTERVAL
@@ -529,6 +667,12 @@ async def reconnect_loop():
 
     while True:
         await asyncio.sleep(interval)
+
+        if DEMO_MODE:
+            # Nothing to reconnect to while simulating; reset backoff state.
+            interval = MIN_INTERVAL
+            attempt = 0
+            continue
 
         with connection_lock:
             currently_connected = hub_connected
@@ -864,6 +1008,60 @@ async def get_status():
         },
         "global_mode_source": global_mode_source,
     }
+
+
+@app.get("/api/hub/config")
+async def get_hub_config():
+    """Return the current hub connection settings, for the settings form."""
+    with connection_lock:
+        connected = hub_connected
+
+    return {
+        "demo_mode": DEMO_MODE,
+        "serial": NOBO_SERIAL,
+        "serial_display": format_serial_display(NOBO_SERIAL),
+        "ip": NOBO_IP,
+        "connected": connected,
+        "source": HUB_CONFIG_SOURCE,
+    }
+
+
+@app.post("/api/hub/config")
+async def update_hub_config(request: Request, body: HubConfigUpdate):
+    """Switch between demo mode and a real hub from the web interface.
+
+    Requires an admin session — unlike the read-only endpoints this changes how
+    the whole system behaves, so it is not left open for local integrations.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    demo_mode = bool(body.demo_mode)
+
+    if demo_mode:
+        # Keep whatever serial/IP the user typed so the form is still populated
+        # when they switch back, but do not demand that they be valid.
+        serial = parse_serial_input(body.serial or NOBO_SERIAL)
+        ip = str(body.ip or NOBO_IP).strip()
+    else:
+        serial_ok, serial = validate_serial(body.serial or "")
+        if not serial_ok:
+            raise HTTPException(status_code=400, detail=serial)
+
+        ip_ok, ip = validate_ip(body.ip or "")
+        if not ip_ok:
+            raise HTTPException(status_code=400, detail=ip)
+
+    result = await apply_hub_config(demo_mode, serial, ip)
+
+    if not demo_mode and not result["connected"]:
+        result["warning"] = (
+            "Settings saved, but the hub could not be reached. Check the serial "
+            "number and IP address, and make sure the official Nobo app is not "
+            "connected to the hub."
+        )
+
+    return result
 
 
 @app.get("/api/hub")
