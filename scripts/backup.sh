@@ -5,7 +5,15 @@ set -euo pipefail
 # Creates a timestamped backup of configuration and data
 
 INSTALL_DIR="/opt/nobo-control"
-BACKUP_DIR="${1:-$HOME/nobo-backups}"
+
+# When run with sudo, $HOME is /root. Default backups to the real user's home
+# instead, so they end up where the README says they will.
+if [ -n "${SUDO_USER:-}" ]; then
+    DEFAULT_BACKUP_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    DEFAULT_BACKUP_HOME="$HOME"
+fi
+BACKUP_DIR="${1:-$DEFAULT_BACKUP_HOME/nobo-backups}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/nobo-backup-$TIMESTAMP.tar.gz"
 
@@ -48,6 +56,11 @@ fi
 # Create tarball
 tar -czf "$BACKUP_FILE" -C "$TMPDIR" backup
 rm -rf "$TMPDIR"
+
+# Make the backup owned by the real user, not root
+if [ -n "${SUDO_USER:-}" ]; then
+    chown -R "$SUDO_USER" "$BACKUP_DIR" 2>/dev/null || true
+fi
 
 echo ""
 echo "Backup saved to: $BACKUP_FILE"

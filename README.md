@@ -79,13 +79,27 @@ You should see `Active: active (running)`.
 
 ### Connect from Another Computer
 
-Find your Pi's IP address (on the Pi itself):
+First you need your Pi's IP address. Pick whichever method is easiest:
+
+**Method 1 — try the hostname (no monitor needed).** If you set the hostname to `nobo-pi` in Step 1, try this from your computer:
+
+```bash
+ssh nobo@nobo-pi.local
+```
+
+If that works, you can skip the rest of this section.
+
+**Method 2 — check your router.** Open your router's admin page in a browser and look at the list of connected devices. Find the one named after your hostname (e.g., `nobo-pi`) and note its IP address (e.g., `192.168.1.50`).
+
+**Method 3 — read it on the Pi.** If you have a keyboard and monitor connected, log in and run:
 
 ```bash
 hostname -I
 ```
 
-From your computer (replace `192.168.1.50` with your Pi's actual IP):
+The first number shown is your Pi's IP address.
+
+Once you have the IP, connect from your computer (replace `192.168.1.50` with your Pi's actual IP):
 
 **Linux / macOS Terminal:**
 ```bash
@@ -99,7 +113,9 @@ ssh nobo@192.168.1.50
 
 **Windows (PuTTY):** Enter the IP address, port 22, click Open, and log in.
 
-Accept the fingerprint prompt the first time (`yes`).
+Accept the fingerprint prompt the first time (`yes`), then enter the password you set in Step 1.
+
+> **Tip:** Give your Pi a fixed (static) IP address in your router settings. Otherwise the IP may change after a reboot and your bookmark to the web interface will stop working.
 
 ### Optional: Use SSH Keys Instead of Passwords
 
@@ -140,19 +156,21 @@ sudo systemctl restart ssh
 
 ## Step 3: Install Docker and Docker Compose
 
+> **Shortcut:** The install script in Step 6 (Option B) does all of Step 3 and Step 4 for you. If you plan to use it, you can skip straight to [Step 6](#step-6-start-the-system). The manual steps below are here so you know what the script does.
+
 SSH into your Raspberry Pi, then run:
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
-Add your user to the docker group (so you don't need `sudo` for docker commands):
+This takes a few minutes. Add your user to the docker group (so you don't need `sudo` for docker commands):
 
 ```bash
 sudo usermod -aG docker $USER
 ```
 
-Log out and back in for the group change to take effect:
+**You must log out and back in for the group change to take effect:**
 
 ```bash
 exit
@@ -165,7 +183,7 @@ docker --version
 docker compose version
 ```
 
-Both commands should print version information.
+Both commands should print version information. If you instead see `permission denied while trying to connect to the Docker daemon socket`, you did not log out and back in — run `exit` and reconnect.
 
 ## Step 4: Clone the Repository
 
@@ -198,28 +216,47 @@ Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
 
 > **Tip:** To find your hub's IP address, check your router's admin page for connected devices. Look for a device named "Nobo Hub" or similar.
 
+### Not ready to connect a real hub yet?
+
+You can run the whole system in **demo mode** with simulated zones and temperatures. This is a good way to check the installation worked before touching your real heating system. Use these settings:
+
+```
+NOBO_SERIAL=123456789012
+NOBO_IP=192.168.1.100
+NOBO_DEMO=true
+```
+
+In demo mode the serial number and IP are ignored, so the placeholder values above are fine. When you are ready to use your real hub, put in your real serial and IP, set `NOBO_DEMO=false`, and restart:
+
+```bash
+sudo systemctl restart nobo-control
+```
+
 ## Step 6: Start the System
 
+### Option B: Using the Install Script (recommended)
+
+The install script does everything for you: installs Docker, adds you to the docker group, clones or updates the code in `/opt/nobo-control`, creates `.env` if it is missing, installs the systemd service, and builds the Docker image.
+
+```bash
+sudo bash /opt/nobo-control/scripts/install.sh
+```
+
+The first run takes roughly 5-10 minutes, most of it building the Docker image. Then start the service:
+
+```bash
+sudo systemctl start nobo-control
+```
+
+> **Note:** If the script installed Docker for the first time, log out (`exit`) and SSH back in before running `docker` commands yourself. Otherwise you will get `permission denied` on the Docker socket.
+
 ### Option A: Quick Start (manual)
+
+Only use this if you skipped the install script. It starts the container but does **not** set it to start automatically on boot — you still need Step 7.
 
 ```bash
 cd /opt/nobo-control
 docker compose up --build -d
-```
-
-### Option B: Using the Install Script (recommended)
-
-The install script handles everything (Docker installation, image build, systemd setup):
-
-```bash
-cd /opt/nobo-control
-sudo bash scripts/install.sh
-```
-
-Then start the service:
-
-```bash
-sudo systemctl start nobo-control
 ```
 
 ## Step 7: Make It Start on Reboot
@@ -246,6 +283,23 @@ These commands explained:
 - `systemctl start` — starts it right now
 - `systemctl status` — shows whether it is running
 
+### Confirm it really survives a reboot
+
+It is worth testing this once, so you are not surprised after a power cut:
+
+```bash
+sudo reboot
+```
+
+Your SSH session will disconnect. Wait about 1-2 minutes, then SSH back in and check:
+
+```bash
+systemctl is-active nobo-control
+docker ps
+```
+
+You should see `active`, and a `nobo-web-control` container with status `Up ... (healthy)`. The container normally becomes healthy within about 30 seconds of boot.
+
 ## Step 8: Verify It Is Working
 
 ### Check the service status
@@ -260,7 +314,23 @@ sudo systemctl status nobo-control
 docker ps
 ```
 
-Look for the `nobo-web-control` container with status `healthy`.
+Look for the `nobo-web-control` container with status `healthy`. It can take up to 30 seconds after starting before it changes from `health: starting` to `healthy`.
+
+### Check the API responds
+
+Run this on the Pi itself:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+You should get a response like:
+
+```json
+{"status":"ok","connected":true,"demo_mode":true,"timestamp":"..."}
+```
+
+`connected: true` means the app is talking to your hub (or to the simulated hub if `demo_mode` is `true`).
 
 ### Open the web interface
 
@@ -315,6 +385,17 @@ sudo systemctl restart nobo-control
 ```
 
 ## Troubleshooting
+
+### "permission denied while trying to connect to the Docker daemon socket"
+
+Your user is not in the `docker` group yet, or you have not logged out since being added. Fix it:
+
+```bash
+sudo usermod -aG docker $USER
+exit
+```
+
+Then SSH back in and try again. Group membership only applies to new login sessions.
 
 ### Service won't start
 
@@ -384,7 +465,7 @@ sudo chown -R $USER:$USER /opt/nobo-control
 sudo bash /opt/nobo-control/scripts/backup.sh
 ```
 
-Backups are saved to `~/nobo-backups/` by default. You can specify a different directory:
+Backups are saved to the `nobo-backups` folder in your home directory (e.g., `/home/nobo/nobo-backups/`). You can specify a different directory:
 
 ```bash
 sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
