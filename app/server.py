@@ -415,29 +415,51 @@ app = FastAPI(title="Nobø Web Control", version="1.0.0", lifespan=lifespan)
 auth.init_user_store()
 
 
+# ---------------------------------------------------------------------------
+# Authentication policy
+# ---------------------------------------------------------------------------
+# Deny-by-default: every path needs a valid session except these. /api/health is
+# public so container healthchecks and monitoring keep working without a login.
+PUBLIC_PATHS = frozenset({"/login", "/auth/login", "/favicon.ico", "/api/health"})
+
+# Escape hatch for headless integrations. Off unless explicitly enabled.
+ALLOW_ANON_API = os.environ.get('NOBO_ALLOW_ANON_API', '').lower() in ('true', '1', 'yes')
+if ALLOW_ANON_API:
+    logger.warning(
+        "NOBO_ALLOW_ANON_API is enabled: /api/* and /ws are reachable without a login. "
+        "Only do this on a trusted network."
+    )
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Gate / and /static/* behind session auth; leave all other paths open."""
+    """Require a valid session for every request except a small public allow-list.
+
+    The policy is deny-by-default: anything not explicitly listed in
+    ``PUBLIC_PATHS`` needs a valid ``session_id`` cookie. Browsers asking for a
+    page are redirected to the login screen; API clients get a JSON 401 so they
+    can tell the difference between "not logged in" and "no such endpoint".
+
+    ``NOBO_ALLOW_ANON_API=true`` re-opens ``/api/*`` and ``/ws`` for headless
+    integrations (Home Assistant, scripts, dashboards). It is off by default and
+    should only be enabled on a network you trust.
+    """
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        # Exempt: API, WebSocket, login page, auth endpoints, favicon
-        if (
-            path.startswith("/api/")
-            or path == "/ws"
-            or path == "/login"
-            or path.startswith("/auth/")
-            or path == "/favicon.ico"
-        ):
+
+        if path in PUBLIC_PATHS:
             return await call_next(request)
 
-        # Protect: root UI and static assets
-        if path == "/" or path.startswith("/static/"):
-            session_id = request.cookies.get("session_id")
-            session = auth.get_session(session_id) if session_id else None
-            if not session:
-                return RedirectResponse(url="/login", status_code=302)
+        if ALLOW_ANON_API and (path.startswith("/api/") or path == "/ws"):
+            return await call_next(request)
 
-        return await call_next(request)
+        session_id = request.cookies.get("session_id")
+        if session_id and auth.get_session(session_id):
+            return await call_next(request)
+
+        if path.startswith("/api/") or path.startswith("/auth/"):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return RedirectResponse(url="/login", status_code=302)
 
 
 app.add_middleware(AuthMiddleware)
@@ -2326,7 +2348,17 @@ async def clear_log():
 # ===== WebSocket Endpoint =====
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
+    """WebSocket endpoint for real-time updates.
+
+    BaseHTTPMiddleware does not see WebSocket handshakes, so the session check
+    that AuthMiddleware performs for HTTP has to be repeated here. Closing
+    before accepting makes Starlette reject the handshake with HTTP 403.
+    """
+    if not ALLOW_ANON_API:
+        if not auth.get_session(websocket.cookies.get("session_id")):
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     
     async with websocket_lock:

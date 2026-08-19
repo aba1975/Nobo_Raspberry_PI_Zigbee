@@ -65,7 +65,13 @@ def _login(client, username="admin", password="nobohub"):
 
 
 class TestReadHubConfig:
-    def test_get_is_open_and_reports_demo_mode(self, client):
+    def test_get_requires_a_session(self, client):
+        """The serial and IP are enough to talk to the hub directly, so the
+        config must not be readable without logging in (QA defect D-01)."""
+        assert client.get("/api/hub/config").status_code == 401
+
+    def test_get_reports_demo_mode(self, client):
+        _login(client)
         r = client.get("/api/hub/config")
         assert r.status_code == 200
         body = r.json()
@@ -162,4 +168,7 @@ class TestModeSwitch:
     def test_source_becomes_web_interface(self, client):
         _login(client)
         client.post("/api/hub/config", json={"demo_mode": True})
+        # Changing the mode signs the user out on purpose, so log back in
+        # before reading the config.
+        _login(client)
         assert client.get("/api/hub/config").json()["source"] == "web interface"
