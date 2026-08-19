@@ -707,6 +707,23 @@ The User Settings panel should open when you click the person icon in the top-ri
 
 Note that the **🛠️ Manage Users** section only appears for accounts with the `admin` role. If you can open the panel and change your own password but see no user management, you are signed in as a regular user.
 
+### Switched back to demo mode, but no zones load
+
+Fixed in the current version. Older builds had a race: connecting to a real hub
+happens in the background with a timeout, and if you switched back to demo mode
+before that attempt gave up, the failed attempt marked the system disconnected
+*after* demo mode had started. Demo mode was then stuck reporting
+`Hub not connected` and no zones appeared until the service was restarted.
+
+If you see this, update and restart:
+
+```bash
+sudo bash /opt/nobo-control/scripts/update.sh
+```
+
+As an immediate workaround on an old build, `sudo systemctl restart
+nobo-control` clears it.
+
 ### Some buttons are greyed out, or I get "not available when connected to a real hub"
 
 That is deliberate. A few things only work on the demo data kept on the Pi —
