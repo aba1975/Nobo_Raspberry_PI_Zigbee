@@ -465,6 +465,48 @@ class AuthMiddleware(BaseHTTPMiddleware):
 app.add_middleware(AuthMiddleware)
 
 
+# ---------------------------------------------------------------------------
+# Live update policy
+# ---------------------------------------------------------------------------
+# Anything that changes heating state has to reach every other open browser and
+# phone, otherwise a second screen keeps showing stale zones until the page is
+# reloaded (QA defect D-02).
+#
+# This is done in one middleware rather than in each handler on purpose: there
+# are more than a dozen mutating endpoints and any new one would silently
+# inherit the bug if it forgot the call. Broadcasting from here means every
+# successful write is covered, including endpoints added later.
+MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Writes that cannot change zone state, so there is nothing to push.
+# /api/hub/config is excluded because switching hub or demo mode already
+# broadcasts from apply_hub_config once the new zones are actually loaded.
+NO_BROADCAST_PATHS = frozenset({"/api/log/clear", "/api/hub/config"})
+
+
+class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
+    """Push fresh zone data to all WebSocket clients after a successful write."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        path = request.url.path
+        if (
+            request.method in MUTATING_METHODS
+            and path.startswith("/api/")
+            and path not in NO_BROADCAST_PATHS
+            and response.status_code < 400
+        ):
+            # Fire and forget so the caller is not kept waiting for every other
+            # client to be written to.
+            asyncio.create_task(broadcast_zone_update())
+
+        return response
+
+
+app.add_middleware(ZoneBroadcastMiddleware)
+
+
 # ===== Pydantic Models =====
 class TemperatureUpdate(BaseModel):
     comfort: Optional[float] = None
