@@ -103,11 +103,140 @@ document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initRouter();
     initWebSocket();
+    initCapabilities();
     fetchHubInfo();
     fetchZones();
     fetchAwaySchedule();
     initAwayScheduleInputFormatters();
+
+    // Hub reachability can change without any user action (hub rebooted, network
+    // came back), and the reconnect loop runs server-side, so poll for it.
+    setInterval(fetchHubInfo, 15000);
 });
+
+// ===== Feature Capabilities =====
+// Several editing features are implemented for demo mode only and answer 501
+// against a real hub. The buttons used to be shown anyway, so pressing them
+// looked broken (QA defect D-04). The server publishes what it can actually do
+// at /api/capabilities, and every control that maps to an unsupported feature is
+// disabled with the reason shown as its tooltip.
+
+let capabilities = {};
+
+// Which capability each onclick handler needs. Anything not listed here works
+// in both demo and real-hub mode and is never gated.
+const CAPABILITY_BY_ACTION = {
+    openAddZoneModal: 'add_zone',
+    addZone: 'add_zone',
+    deleteZone: 'delete_zone',
+    selectZoneIcon: 'zone_icon',
+    saveSchedule: 'edit_schedule',
+    addTimeBlock: 'edit_schedule',
+    submitAddTimeBlock: 'edit_schedule',
+    openEditTimeBlock: 'edit_schedule',
+    submitEditTimeBlock: 'edit_schedule',
+    deleteTimeBlock: 'edit_schedule',
+    copyDay: 'edit_schedule',
+    selectCopyDayGroup: 'edit_schedule',
+    confirmCopyDay: 'edit_schedule',
+    addDevice: 'add_device',
+    addDeviceToZone: 'add_device',
+    openInlineAddDevice: 'add_device',
+    startEditDeviceName: 'rename_device',
+    saveDeviceName: 'rename_device',
+    replaceDevice: 'replace_device',
+    removeDevice: 'remove_device',
+    moveDevice: 'move_device',
+    confirmMoveDevice: 'move_device',
+};
+
+async function initCapabilities() {
+    await refreshCapabilities();
+
+    // Most controls are rendered from template strings scattered across this
+    // file, and new ones appear whenever a page or modal is re-rendered.
+    // Watching the DOM means a control cannot escape gating by being added from
+    // a render path that forgot to call the gating function.
+    let queued = false;
+    const observer = new MutationObserver(() => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+            queued = false;
+            applyCapabilityGating();
+        });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+
+async function refreshCapabilities() {
+    try {
+        const r = await fetch('/api/capabilities');
+        if (!r.ok) return;
+        const data = await r.json();
+        capabilities = data.features || {};
+        applyCapabilityGating();
+        renderCapabilityNotices(data.demo_mode);
+    } catch (e) {
+        console.error('Could not read capabilities:', e);
+    }
+}
+
+/** The capability a control needs, or null if it is always available. */
+function capabilityForElement(el) {
+    const handler = el.getAttribute('data-capability');
+    if (handler) return handler;
+
+    const onclick = el.getAttribute('onclick');
+    if (!onclick) return null;
+
+    const match = onclick.match(/([A-Za-z_$][\w$]*)\s*\(/);
+    return match ? (CAPABILITY_BY_ACTION[match[1]] || null) : null;
+}
+
+function applyCapabilityGating() {
+    if (!Object.keys(capabilities).length) return;
+
+    document.querySelectorAll('[onclick], [data-capability]').forEach(el => {
+        const name = capabilityForElement(el);
+        if (!name) return;
+
+        const cap = capabilities[name];
+        const blocked = cap && cap.supported === false;
+
+        if (blocked) {
+            el.classList.add('capability-disabled');
+            el.setAttribute('aria-disabled', 'true');
+            el.title = cap.reason;
+            if ('disabled' in el) el.disabled = true;
+        } else if (el.classList.contains('capability-disabled')) {
+            el.classList.remove('capability-disabled');
+            el.removeAttribute('aria-disabled');
+            el.removeAttribute('title');
+            if ('disabled' in el) el.disabled = false;
+        }
+    });
+}
+
+/** Explain once per section why the greyed-out controls are greyed out. */
+function renderCapabilityNotices(demoMode) {
+    document.querySelectorAll('.capability-notice').forEach(el => el.remove());
+    if (demoMode !== false) return;
+
+    const notice = document.createElement('p');
+    notice.className = 'capability-notice';
+    notice.textContent =
+        'Connected to a real Nobø Eco Hub. Adding, removing and renaming zones, ' +
+        'devices and week schedules is done in the official Nobø Energy Control ' +
+        'app — those controls are greyed out here. Temperatures, comfort/eco/away ' +
+        'modes and the away schedule all work normally.';
+
+    const zoneFooter = document.querySelector('.zone-list-footer');
+    if (zoneFooter) zoneFooter.insertAdjacentElement('beforebegin', notice);
+
+    const devices = document.querySelector('.devices-section h2');
+    if (devices) devices.insertAdjacentElement('afterend', notice.cloneNode(true));
+}
 
 // ===== Theme Toggle =====
 function initThemeToggle() {
@@ -305,10 +434,26 @@ function handleZoneUpdate(data) {
 async function fetchHubInfo() {
     try {
         const response = await fetch('/api/hub');
-        if (!response.ok) throw new Error('Failed to fetch hub info');
-        
-        hubInfo = await response.json();
-        updateHubInfo();
+
+        if (response.ok) {
+            hubInfo = await response.json();
+            updateHubInfo();
+            return;
+        }
+
+        // /api/hub returns 503 while the hub is unreachable. Fall back to the
+        // health endpoint, which always answers, so the header can show the real
+        // state instead of silently keeping stale "connected" information.
+        const health = await fetch('/api/health');
+        if (health.ok) {
+            const data = await health.json();
+            hubInfo = {
+                ...hubInfo,
+                connected: data.connected === true,
+                demo_mode: data.demo_mode === true
+            };
+            updateHubInfo();
+        }
     } catch (error) {
         console.error('Error fetching hub info:', error);
     }
@@ -322,7 +467,19 @@ async function fetchZones() {
     
     try {
         const response = await fetch('/api/zones');
-        if (!response.ok) throw new Error('Failed to fetch zones');
+        if (!response.ok) {
+            // 503 means the server is up but the hub is not reachable. Say that,
+            // instead of a generic failure that looks like an app bug.
+            if (response.status === 503) {
+                const err = new Error(
+                    'Cannot reach the Nobø hub, so no zones could be loaded. ' +
+                    'Check the hub serial number and IP address under Devices.'
+                );
+                err.hubDown = true;
+                throw err;
+            }
+            throw new Error('Failed to fetch zones');
+        }
         
         const data = await response.json();
         zones = data.zones || data; // Handle both {zones: []} and [] formats
@@ -336,7 +493,12 @@ async function fetchZones() {
         updateLastUpdated();
     } catch (error) {
         console.error('Error fetching zones:', error);
-        showToast('Failed to fetch zones', 'error');
+        showToast(error.hubDown ? error.message : 'Failed to fetch zones', error.hubDown ? 'warning' : 'error');
+        if (error.hubDown) {
+            // Keep the header honest even if the hub poll has not run yet.
+            hubInfo = { ...hubInfo, connected: false };
+            renderConnectionStatus();
+        }
     }
 }
 
@@ -408,33 +570,51 @@ async function setZoneTemperature(zoneId, comfort, eco) {
 }
 
 // ===== UI Update Functions =====
+// Tracks the browser <-> server WebSocket only. Whether the *hub* is reachable is
+// a separate question, answered by hubInfo, and the two must not be conflated:
+// the WebSocket can be perfectly healthy while the hub is unreachable.
+let wsStatus = 'connecting';
+
 function updateConnectionStatus(status) {
+    if (status) {
+        wsStatus = status;
+    }
+    renderConnectionStatus();
+}
+
+function renderConnectionStatus() {
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
-    
+    if (!statusDot || !statusText) return;
+
     statusDot.className = 'status-dot';
-    
-    switch (status) {
-        case 'connected':
-            if (hubInfo.demo_mode) {
-                statusDot.classList.add('demo');
-                statusText.textContent = '🟡 Demo Mode';
-            } else {
-                statusDot.classList.add('connected');
-                statusText.textContent = 'Connected';
-            }
-            break;
-        case 'disconnected':
-            statusDot.classList.add('disconnected');
-            statusText.textContent = 'Disconnected';
-            break;
-        case 'connecting':
-            statusText.textContent = 'Connecting...';
-            break;
-        case 'error':
-            statusDot.classList.add('disconnected');
-            statusText.textContent = 'Connection Error';
-            break;
+
+    // No link to the server at all — nothing else can be trusted.
+    if (wsStatus === 'connecting') {
+        statusText.textContent = 'Connecting...';
+        return;
+    }
+    if (wsStatus === 'disconnected') {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Disconnected';
+        return;
+    }
+    if (wsStatus === 'error') {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = 'Connection Error';
+        return;
+    }
+
+    // Server is reachable — now report the hub.
+    if (hubInfo.demo_mode) {
+        statusDot.classList.add('demo');
+        statusText.textContent = '🟡 Demo Mode';
+    } else if (hubInfo.connected === false) {
+        statusDot.classList.add('disconnected');
+        statusText.textContent = '⚠️ Hub Unreachable';
+    } else {
+        statusDot.classList.add('connected');
+        statusText.textContent = 'Connected';
     }
 }
 
@@ -448,11 +628,8 @@ function updateHubInfo() {
     if (hubInfo.software_version) {
         hubVersionEl.textContent = `Version ${hubInfo.software_version}`;
     }
-    
-    // Update connection status if demo mode
-    if (hubInfo.demo_mode) {
-        updateConnectionStatus('connected');
-    }
+
+    renderConnectionStatus();
 }
 
 function updateLastUpdated() {
@@ -1342,6 +1519,9 @@ async function saveSchedule() {
 
 // ===== Devices Page =====
 function loadDevicesPage() {
+    // Load current hub connection settings
+    fetchHubConfig();
+
     // Populate zone selector
     const zoneSelect = document.getElementById('deviceZone');
     zoneSelect.innerHTML = '<option value="">Select zone...</option>';
@@ -2061,6 +2241,197 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+
+// ===== Hub Connection Settings =====
+let hubConfigCurrent = null;
+let hubConfigPending = null;
+
+async function fetchHubConfig() {
+    const summary = document.getElementById('hubConfigSummary');
+    try {
+        const response = await fetch('/api/hub/config');
+        if (!response.ok) throw new Error('Request failed');
+        const cfg = await response.json();
+        hubConfigCurrent = cfg;
+
+        const demoRadio = document.querySelector('input[name="hubMode"][value="demo"]');
+        const realRadio = document.querySelector('input[name="hubMode"][value="real"]');
+        if (demoRadio) demoRadio.checked = cfg.demo_mode;
+        if (realRadio) realRadio.checked = !cfg.demo_mode;
+
+        const serialInput = document.getElementById('hubSerial');
+        const ipInput = document.getElementById('hubIp');
+        if (serialInput) serialInput.value = cfg.serial_display || '';
+        if (ipInput) ipInput.value = cfg.ip || '';
+
+        if (summary) {
+            if (cfg.demo_mode) {
+                summary.innerHTML = '🧪 <strong>Demo mode</strong> — showing simulated zones. No hub is being contacted.';
+            } else if (cfg.connected) {
+                summary.innerHTML = `✅ <strong>Connected</strong> to hub ${escapeHtml(cfg.serial_display)} at ${escapeHtml(cfg.ip)}`;
+            } else {
+                summary.innerHTML = `⚠️ <strong>Not connected</strong> — trying hub ${escapeHtml(cfg.serial_display)} at ${escapeHtml(cfg.ip)}`;
+            }
+        }
+
+        onHubModeChange();
+    } catch (error) {
+        console.error('Error fetching hub config:', error);
+        if (summary) summary.textContent = 'Could not load the current hub settings.';
+    }
+}
+
+function onHubModeChange() {
+    const realSelected = document.querySelector('input[name="hubMode"][value="real"]')?.checked;
+    const realFields = document.getElementById('hubRealFields');
+    if (realFields) realFields.style.display = realSelected ? '' : 'none';
+}
+
+function showHubConfigMessage(text, kind) {
+    const messageEl = document.getElementById('hubConfigMessage');
+    if (!messageEl) return;
+    messageEl.textContent = text;
+    messageEl.className = `hub-config-message ${kind || ''}`.trim();
+}
+
+function openHubConfigConfirm() {
+    const realSelected = document.querySelector('input[name="hubMode"][value="real"]')?.checked;
+    const demoMode = !realSelected;
+    const serialRaw = (document.getElementById('hubSerial')?.value || '').replace(/\s/g, '');
+    const ip = (document.getElementById('hubIp')?.value || '').trim();
+    const messageEl = document.getElementById('hubConfigMessage');
+    if (messageEl) messageEl.textContent = '';
+
+    // Validate before asking for confirmation
+    if (!demoMode) {
+        if (!/^\d{12}$/.test(serialRaw)) {
+            showToast('Serial number must be exactly 12 digits', 'error');
+            return;
+        }
+        if (!isValidIpv4(ip)) {
+            showToast('Enter a valid IP address, for example 192.168.1.100', 'error');
+            return;
+        }
+    }
+
+    hubConfigPending = { demo_mode: demoMode, serial: serialRaw, ip: ip };
+
+    const wasDemo = hubConfigCurrent ? hubConfigCurrent.demo_mode : null;
+    let body;
+    if (demoMode) {
+        body = `
+            <p>Switch to <strong>demo mode</strong>?</p>
+            <p>The system will stop talking to your Nobø Eco Hub and show simulated
+            zones instead. Your real heating will keep running on its own settings,
+            but you will not be able to control it from here until you switch back.</p>
+        `;
+    } else {
+        const changing = wasDemo === true
+            ? '<p>This will leave <strong>demo mode</strong> and connect to your real heating system.</p>'
+            : '';
+        body = `
+            <p>Connect to your Nobø Eco Hub?</p>
+            ${changing}
+            <p><strong>Serial:</strong> ${escapeHtml(formatSerialForDisplay(serialRaw))}<br>
+               <strong>IP address:</strong> ${escapeHtml(ip)}</p>
+            <p>⚠️ The hub allows only one connection at a time. If the official Nobo
+            app is connected, this will not work until you close it.</p>
+            <p>Commands you send from here will change your actual heating.</p>
+        `;
+    }
+
+    const bodyEl = document.getElementById('hubConfigConfirmBody');
+    if (bodyEl) {
+        bodyEl.innerHTML = body +
+            '<p class="hub-config-signout-note">You will be signed out so the app can ' +
+            'reload cleanly with the new settings. Log in again to continue.</p>';
+    }
+    document.getElementById('hubConfigModal')?.classList.add('show');
+}
+
+function closeHubConfigModal() {
+    document.getElementById('hubConfigModal')?.classList.remove('show');
+    hubConfigPending = null;
+}
+
+function isValidIpv4(value) {
+    const parts = String(value).split('.');
+    if (parts.length !== 4) return false;
+    return parts.every(p => /^\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+}
+
+function formatSerialForDisplay(serial) {
+    const clean = String(serial).replace(/\s/g, '');
+    if (clean.length !== 12) return clean;
+    return `${clean.slice(0, 3)} ${clean.slice(3, 6)} ${clean.slice(6, 9)} ${clean.slice(9, 12)}`;
+}
+
+async function confirmHubConfig() {
+    if (!hubConfigPending) return;
+
+    const payload = hubConfigPending;
+    const btn = document.getElementById('hubConfigConfirmBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Applying…';
+    }
+
+    try {
+        const response = await fetch('/api/hub/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const detail = data.detail || 'Could not save the hub settings';
+            showToast(typeof detail === 'string' ? detail : 'Could not save the hub settings', 'error');
+            return;
+        }
+
+        closeHubConfigModal();
+
+        // The server ends the session on a mode change, so this page is now
+        // unauthenticated and holding data from the old source. Tell the user
+        // what happened, then send them to a clean login.
+        let message;
+        if (data.warning) {
+            message = data.warning + ' Signing you out…';
+        } else if (data.demo_mode) {
+            message = 'Demo mode enabled. Signing you out…';
+        } else {
+            message = 'Connected to your Nobø hub. Signing you out…';
+        }
+        showToast(message, data.warning ? 'warning' : 'success');
+
+        showHubConfigMessage(message + ' Please log in again.', data.warning ? 'warning' : 'success');
+
+        // Close the socket first so its reconnect timer cannot fire mid-redirect.
+        if (ws) {
+            try { ws.close(); } catch (e) { /* already closing */ }
+        }
+        if (reconnectInterval) {
+            clearInterval(reconnectInterval);
+            reconnectInterval = null;
+        }
+
+        setTimeout(() => {
+            window.location.href = '/login';
+        }, data.warning ? 3500 : 1800);
+        return;
+    } catch (error) {
+        console.error('Error saving hub config:', error);
+        showToast('Could not save the hub settings', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Apply Change';
+        }
+    }
+}
+
 // Backwards compatibility alias
 function showError(message) {
     // Detect success messages by leading emoji
@@ -2275,6 +2646,7 @@ function validateAndParseLocalDDMMYYYYHHmmToIso(dateStr, timeStr) {
 }
 
 
+function renderAwayScheduleStatus(data) {
     const statusEl = document.getElementById('scheduleAwayStatus');
     const clearBtn = document.getElementById('btnClearSchedule');
     const startDateInput = document.getElementById('scheduleStartDate');

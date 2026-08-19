@@ -49,6 +49,9 @@ def client():
     """TestClient — background tasks in lifespan are started but the schedule loop
     sleeps 30 s between checks so tests complete before any automatic transitions."""
     with TestClient(app, raise_server_exceptions=True) as c:
+        # The API is deny-by-default; conftest.authenticated_session keeps this
+        # session id valid for every test (see conftest.TEST_SESSION_ID).
+        c.cookies.set("session_id", "pytest-fixed-session-id")
         yield c
 
 
@@ -123,7 +126,11 @@ class TestAwayScheduleModule:
         assert aws.is_schedule_expired(schedule, now) is False
 
     def test_validate_schedule_valid(self):
-        ok, err = aws.validate_schedule(True, "2026-04-22T10:00:00Z", "2026-05-01T13:00:00Z")
+        # Relative to now: a fixed date eventually falls into the past and the
+        # test then fails for the wrong reason.
+        start = datetime.now(timezone.utc) + timedelta(days=1)
+        end = start + timedelta(days=9)
+        ok, err = aws.validate_schedule(True, start.isoformat(), end.isoformat())
         assert ok is True
         assert err is None
 
@@ -203,16 +210,18 @@ class TestGetAwaySchedule:
 
 class TestPutAwaySchedule:
     def test_valid_schedule_saved(self, client):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        end = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
         r = client.put("/api/global-mode/away-schedule", json={
             "enabled": True,
-            "start_at": "2026-04-22T10:00:00Z",
-            "end_at": "2026-05-01T13:00:00Z",
+            "start_at": start,
+            "end_at": end,
         })
         assert r.status_code == 200
         body = r.json()
         assert body["enabled"] is True
-        assert body["start_at"] == "2026-04-22T10:00:00Z"
-        assert body["end_at"] == "2026-05-01T13:00:00Z"
+        assert body["start_at"] == start
+        assert body["end_at"] == end
 
     def test_end_before_start_returns_400(self, client):
         r = client.put("/api/global-mode/away-schedule", json={

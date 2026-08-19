@@ -5,6 +5,7 @@ Provides atomic file-based persistence for:
 - DEMO_ZONES       → data/demo_zones.json
 - demo_schedules   → data/demo_schedules.json
 - server_state     → data/server_state.json  (global_mode_source, …)
+- hub_config       → data/hub_config.json    (demo_mode, serial, ip)
 
 Uses the same atomic-write pattern (write to .tmp then rename) as
 away_schedule.py and auth.py to prevent corruption on abrupt termination.
@@ -23,10 +24,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Storage paths (can be overridden in tests via monkeypatching)
 # ---------------------------------------------------------------------------
-DATA_DIR = Path("data")
+# Resolved from this file's location rather than the working directory, so the
+# same files are used no matter where the app or the tests are started from
+# (QA defect D-03). In the container this is still /app/data, which is where the
+# nobo-data volume is mounted.
+DATA_DIR = Path(__file__).resolve().parent / "data"
 DEMO_ZONES_FILE = DATA_DIR / "demo_zones.json"
 DEMO_SCHEDULES_FILE = DATA_DIR / "demo_schedules.json"
 SERVER_STATE_FILE = DATA_DIR / "server_state.json"
+HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 
 # Default server state values
 _DEFAULT_SERVER_STATE: dict = {"global_mode_source": "manual"}
@@ -172,3 +178,50 @@ def load_server_state() -> dict:
         logger.warning("server_state.json is corrupt: %s — backing up and using defaults", exc)
         _backup_corrupt(SERVER_STATE_FILE)
         return defaults
+
+
+# ---------------------------------------------------------------------------
+# Hub connection config  (demo_mode, serial, ip)
+# ---------------------------------------------------------------------------
+
+def save_hub_config(config: dict) -> None:
+    """Persist the hub connection *config* dict to ``data/hub_config.json`` atomically.
+
+    Expected keys: ``demo_mode`` (bool), ``serial`` (str), ``ip`` (str).
+    """
+    try:
+        _atomic_write(HUB_CONFIG_FILE, config)
+    except Exception as exc:
+        logger.error("Failed to save hub config: %s", exc)
+        raise
+
+
+def load_hub_config() -> Optional[dict]:
+    """
+    Load the hub connection config from ``data/hub_config.json``.
+
+    This file is written when the user changes the hub settings from the web
+    interface. When present it takes precedence over the NOBO_* environment
+    variables, which is what makes the setting survive restarts and reboots.
+
+    Returns:
+        ``dict`` with at least ``demo_mode``/``serial``/``ip`` on success.
+        ``None`` when the file does not exist or is corrupt (caller should fall
+        back to the environment variables).
+    """
+    try:
+        with HUB_CONFIG_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "hub_config.json has unexpected format (expected dict, got %s) — using environment",
+                type(data).__name__,
+            )
+            return None
+        return data
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        logger.warning("hub_config.json is corrupt: %s — backing up and using environment", exc)
+        _backup_corrupt(HUB_CONFIG_FILE)
+        return None

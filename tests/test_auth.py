@@ -70,11 +70,16 @@ def _login(client, username="admin", password="nobohub"):
 # ---------------------------------------------------------------------------
 
 class TestApiUnprotected:
-    def test_api_status_no_auth(self, client):
-        r = client.get("/api/status")
-        assert r.status_code == 200
+    def test_api_status_requires_auth(self, client):
+        """/api/status used to be open to anyone on the LAN (QA defect D-01)."""
+        assert client.get("/api/status").status_code == 401
+
+    def test_api_status_with_auth(self, client):
+        _login(client)
+        assert client.get("/api/status").status_code == 200
 
     def test_api_health_no_auth(self, client):
+        """Health stays public so container healthchecks keep working."""
         r = client.get("/api/health")
         assert r.status_code == 200
 
@@ -202,7 +207,14 @@ class TestRateLimit:
 # ---------------------------------------------------------------------------
 
 class TestWebSocket:
-    def test_ws_accessible_without_auth(self, client):
+    def test_ws_rejects_unauthenticated(self, client):
+        """The live zone feed used to be readable by anyone (QA defect D-01)."""
+        with pytest.raises(Exception):
+            with client.websocket_connect("/ws"):
+                pass
+
+    def test_ws_accessible_with_auth(self, client):
+        _login(client)
         with client.websocket_connect("/ws") as ws:
             # Server sends initial zones_update on connect; consume it first
             initial = ws.receive_json()

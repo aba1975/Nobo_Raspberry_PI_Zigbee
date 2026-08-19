@@ -20,18 +20,25 @@ let _currentUser = null;
 
 function toggleUserPanel() {
     const panel = document.getElementById('userPanel');
-    if (panel.classList.contains('active')) {
+    if (panel.classList.contains('show')) {
         closeUserPanel();
     } else {
         renderUserPanel();
-        panel.classList.add('active');
+        panel.classList.add('show');
     }
 }
 
 function closeUserPanel() {
     const panel = document.getElementById('userPanel');
-    panel.classList.remove('active');
+    panel.classList.remove('show');
 }
+
+// Close the panel with Escape, matching the other modals.
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    const panel = document.getElementById('userPanel');
+    if (panel && panel.classList.contains('show')) closeUserPanel();
+});
 
 // Close panel when clicking the backdrop
 document.getElementById('userPanel').addEventListener('click', function(e) {

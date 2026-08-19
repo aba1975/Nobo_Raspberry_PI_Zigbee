@@ -5,6 +5,8 @@ All tests run in demo mode (NOBO_DEMO=true) so no real Nobø Hub is needed.
 """
 
 import os
+import time
+
 import pytest
 
 # Force demo mode before importing the application module
@@ -13,7 +15,57 @@ os.environ.setdefault("NOBO_DEMO", "true")
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
 
+import auth
 import config_persistence
+
+
+# ---------------------------------------------------------------------------
+# Authenticated session for tests
+# ---------------------------------------------------------------------------
+# The API is deny-by-default (see AuthMiddleware), so tests that exercise
+# /api/* need a session cookie. A fixed session id is re-injected before every
+# test, which lets module-scoped TestClients keep the same cookie for the whole
+# module without it going stale between tests.
+TEST_SESSION_ID = "pytest-fixed-session-id"
+TEST_USERNAME = "admin"
+
+
+@pytest.fixture(autouse=True)
+def authenticated_session():
+    """Make TEST_SESSION_ID a valid admin session for the duration of a test."""
+    auth.sessions[TEST_SESSION_ID] = {"username": TEST_USERNAME, "created": time.time()}
+    yield
+    auth.sessions.pop(TEST_SESSION_ID, None)
+
+
+def authenticate(client):
+    """Attach the shared test session cookie to a TestClient.
+
+    Test modules generally inline ``client.cookies.set("session_id", ...)``
+    instead of importing this, because ``tests`` is a package and importing
+    from ``conftest`` is fragile under pytest's import modes. Keep the literal
+    in sync with TEST_SESSION_ID above.
+    """
+    client.cookies.set("session_id", TEST_SESSION_ID)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def demo_hub_is_connected():
+    """
+    Keep every test starting from "demo hub connected".
+
+    test_hub_config.py deliberately points the app at an unreachable hub. That
+    connection attempt runs on a background thread and only gives up after a
+    five second timeout, long after the test that started it has finished. When
+    it does, it sets ``hub_connected = False`` on the module, and whichever
+    unrelated test happened to be running at that moment got a surprise 503.
+    That produced a single, randomly-placed failure roughly one run in three.
+    """
+    import server
+
+    server.hub_connected = True
+    yield
 
 
 @pytest.fixture(autouse=True)

@@ -6,12 +6,15 @@ FastAPI backend for local control of Nobø heating system via pynobo library
 import os
 import re
 import asyncio
+import ipaddress
 import logging
+import math
 import threading
 from collections import deque
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -33,14 +36,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ===== CONFIGURATION =====
-# Replace these with your actual Nobø Hub values
-# You can also set them via environment variables: NOBO_SERIAL and NOBO_IP
+# These are the *defaults*, taken from environment variables (set via .env).
+# They can be overridden at runtime from the web interface, in which case the
+# chosen values are stored in data/hub_config.json and reloaded on every start
+# (see _load_persisted_hub_config below). That file always wins over the
+# environment, so a setting made in the UI survives restarts and reboots.
 NOBO_SERIAL = os.environ.get('NOBO_SERIAL', '111111111111')  # Replace with your hub's 12-digit serial number
 NOBO_IP = os.environ.get('NOBO_IP', '10.0.0.100')  # Replace with your hub's IP address
 
 # Demo mode - set to True to use simulated data instead of connecting to real hub
 # Can be enabled via environment variable or using the test serial number
 DEMO_MODE = os.environ.get('NOBO_DEMO', '').lower() in ('true', '1', 'yes') or NOBO_SERIAL == '111111111111'
+
+# Where the currently active settings came from: "environment" or "web interface".
+HUB_CONFIG_SOURCE = "environment"
 DEMO_SOFTWARE_VERSION = "1.4.0 (Simulated)"  # Software version shown in demo mode
 
 # Demo mode zone data - 8 grouped zones with realistic Norwegian indoor temperatures
@@ -216,10 +225,29 @@ _server_state = config_persistence.load_server_state()
 global_mode_source: str = _server_state.get("global_mode_source", "manual")  # "manual" | "schedule"
 
 
+def local_now() -> datetime:
+    """Current time in the machine's local timezone, as an aware datetime.
+
+    Everything the user sees or schedules is wall-clock time: "comfort from
+    07:00 on weekdays" means 07:00 on the kitchen clock. The container, however,
+    runs in UTC unless it is told otherwise, so a plain datetime.now() silently
+    ran the week schedule in the wrong timezone (QA defect D-06). compose.yml now
+    shares the host's timezone with the container, and this helper returns an
+    aware datetime so timestamps sent to the browser carry their offset instead
+    of being guessed at.
+    """
+    return datetime.now().astimezone()
+
+
+def local_timezone_name() -> str:
+    """Human-readable name of the timezone the app is running in, e.g. 'CEST'."""
+    return local_now().strftime("%Z") or "UTC"
+
+
 def add_log_entry(direction: str, description: str, command: str = "", source: str = "api"):
     """Add an entry to the command log buffer (thread-safe)."""
     entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
+        "timestamp": local_now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
         "direction": direction,       # "sent" | "received" | "error"
         "command": command,
         "description": description,
@@ -300,6 +328,56 @@ def validate_serial(serial: str) -> tuple[bool, str]:
     return True, clean
 
 
+def validate_ip(ip: str) -> tuple[bool, str]:
+    """Validate and clean an IPv4 address.
+    Returns (is_valid, cleaned_ip_or_error_message)."""
+    clean = str(ip).strip()
+    try:
+        return True, str(ipaddress.IPv4Address(clean))
+    except ValueError:
+        return False, "IP address must be a valid IPv4 address (e.g. 192.168.1.100)"
+
+
+def _load_persisted_hub_config() -> None:
+    """Apply data/hub_config.json over the environment defaults, if it exists.
+
+    Called once at import time so the settings chosen in the web interface are
+    restored automatically on every start, including after a reboot.
+    """
+    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE
+
+    stored = config_persistence.load_hub_config()
+    if not stored:
+        return
+
+    serial_ok, serial = validate_serial(stored.get("serial", ""))
+    ip_ok, ip = validate_ip(stored.get("ip", ""))
+    demo = bool(stored.get("demo_mode", False))
+
+    # Only trust a stored real-hub config if the values are actually usable;
+    # otherwise fall back to demo mode rather than looping on a bad address.
+    if not demo and not (serial_ok and ip_ok):
+        logger.warning(
+            "Stored hub config is invalid (serial_ok=%s, ip_ok=%s) — falling back to demo mode",
+            serial_ok, ip_ok,
+        )
+        demo = True
+
+    if serial_ok:
+        NOBO_SERIAL = serial
+    if ip_ok:
+        NOBO_IP = ip
+    DEMO_MODE = demo
+    HUB_CONFIG_SOURCE = "web interface"
+    logger.info(
+        "Loaded hub config from disk: demo_mode=%s serial=%s ip=%s",
+        DEMO_MODE, NOBO_SERIAL if not DEMO_MODE else "(demo)", NOBO_IP if not DEMO_MODE else "(demo)",
+    )
+
+
+_load_persisted_hub_config()
+
+
 # ===== Lifespan Context Manager =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -313,6 +391,15 @@ async def lifespan(app: FastAPI):
         config_persistence.DATA_DIR,
         "loaded from disk" if config_persistence.DEMO_ZONES_FILE.exists() else "defaults",
         global_mode_source,
+    )
+    # Week schedules run on wall-clock time, so log the timezone the app believes
+    # it is in. If this says UTC on a machine that is not, schedules will fire at
+    # the wrong hour (QA defect D-06) and the /etc/localtime mount in compose.yml
+    # is missing.
+    logger.info(
+        "Local time: %s (%s)",
+        local_now().strftime("%Y-%m-%d %H:%M:%S %z"),
+        local_timezone_name(),
     )
     main_event_loop = asyncio.get_running_loop()
     try:
@@ -358,32 +445,96 @@ app = FastAPI(title="Nobø Web Control", version="1.0.0", lifespan=lifespan)
 auth.init_user_store()
 
 
+# ---------------------------------------------------------------------------
+# Authentication policy
+# ---------------------------------------------------------------------------
+# Deny-by-default: every path needs a valid session except these. /api/health is
+# public so container healthchecks and monitoring keep working without a login.
+PUBLIC_PATHS = frozenset({"/login", "/auth/login", "/favicon.ico", "/api/health"})
+
+# Escape hatch for headless integrations. Off unless explicitly enabled.
+ALLOW_ANON_API = os.environ.get('NOBO_ALLOW_ANON_API', '').lower() in ('true', '1', 'yes')
+if ALLOW_ANON_API:
+    logger.warning(
+        "NOBO_ALLOW_ANON_API is enabled: /api/* and /ws are reachable without a login. "
+        "Only do this on a trusted network."
+    )
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Gate / and /static/* behind session auth; leave all other paths open."""
+    """Require a valid session for every request except a small public allow-list.
+
+    The policy is deny-by-default: anything not explicitly listed in
+    ``PUBLIC_PATHS`` needs a valid ``session_id`` cookie. Browsers asking for a
+    page are redirected to the login screen; API clients get a JSON 401 so they
+    can tell the difference between "not logged in" and "no such endpoint".
+
+    ``NOBO_ALLOW_ANON_API=true`` re-opens ``/api/*`` and ``/ws`` for headless
+    integrations (Home Assistant, scripts, dashboards). It is off by default and
+    should only be enabled on a network you trust.
+    """
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        # Exempt: API, WebSocket, login page, auth endpoints, favicon
-        if (
-            path.startswith("/api/")
-            or path == "/ws"
-            or path == "/login"
-            or path.startswith("/auth/")
-            or path == "/favicon.ico"
-        ):
+
+        if path in PUBLIC_PATHS:
             return await call_next(request)
 
-        # Protect: root UI and static assets
-        if path == "/" or path.startswith("/static/"):
-            session_id = request.cookies.get("session_id")
-            session = auth.get_session(session_id) if session_id else None
-            if not session:
-                return RedirectResponse(url="/login", status_code=302)
+        if ALLOW_ANON_API and (path.startswith("/api/") or path == "/ws"):
+            return await call_next(request)
 
-        return await call_next(request)
+        session_id = request.cookies.get("session_id")
+        if session_id and auth.get_session(session_id):
+            return await call_next(request)
+
+        if path.startswith("/api/") or path.startswith("/auth/"):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return RedirectResponse(url="/login", status_code=302)
 
 
 app.add_middleware(AuthMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Live update policy
+# ---------------------------------------------------------------------------
+# Anything that changes heating state has to reach every other open browser and
+# phone, otherwise a second screen keeps showing stale zones until the page is
+# reloaded (QA defect D-02).
+#
+# This is done in one middleware rather than in each handler on purpose: there
+# are more than a dozen mutating endpoints and any new one would silently
+# inherit the bug if it forgot the call. Broadcasting from here means every
+# successful write is covered, including endpoints added later.
+MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Writes that cannot change zone state, so there is nothing to push.
+# /api/hub/config is excluded because switching hub or demo mode already
+# broadcasts from apply_hub_config once the new zones are actually loaded.
+NO_BROADCAST_PATHS = frozenset({"/api/log/clear", "/api/hub/config"})
+
+
+class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
+    """Push fresh zone data to all WebSocket clients after a successful write."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        path = request.url.path
+        if (
+            request.method in MUTATING_METHODS
+            and path.startswith("/api/")
+            and path not in NO_BROADCAST_PATHS
+            and response.status_code < 400
+        ):
+            # Fire and forget so the caller is not kept waiting for every other
+            # client to be written to.
+            asyncio.create_task(broadcast_zone_update())
+
+        return response
+
+
+app.add_middleware(ZoneBroadcastMiddleware)
 
 
 # ===== Pydantic Models =====
@@ -412,6 +563,12 @@ class ZoneAdd(BaseModel):
 class ZoneUpdate(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
+
+
+class HubConfigUpdate(BaseModel):
+    demo_mode: bool
+    serial: Optional[str] = None
+    ip: Optional[str] = None
 
 
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away'}
@@ -517,11 +674,86 @@ async def connect_to_hub():
     await asyncio.sleep(2)
 
 
-async def reconnect_loop():
-    """Background task that monitors hub connectivity and reconnects with exponential backoff."""
-    if DEMO_MODE:
-        return
+def disconnect_from_hub() -> None:
+    """Stop and clear any live hub connection. Safe to call when not connected."""
+    global hub, hub_connected
 
+    with connection_lock:
+        current_hub = hub
+
+    if current_hub:
+        try:
+            current_hub.stop()
+            logger.info("Disconnected from Nobø Hub")
+        except Exception as exc:
+            logger.warning("Error while disconnecting from hub: %s", exc)
+
+    with connection_lock:
+        hub = None
+        hub_connected = False
+
+
+async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
+    """Switch the running server to a new hub configuration.
+
+    Persists the settings first (so they survive a restart or reboot), then
+    rebinds the module-level globals and rebuilds the hub connection in place.
+    Returns a dict describing the resulting state.
+    """
+    global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE
+
+    config = {"demo_mode": bool(demo_mode), "serial": serial, "ip": ip}
+    config_persistence.save_hub_config(config)
+
+    previous_mode = "demo" if DEMO_MODE else "production"
+
+    # Always drop the existing connection before changing the target.
+    disconnect_from_hub()
+
+    NOBO_SERIAL = serial
+    NOBO_IP = ip
+    DEMO_MODE = bool(demo_mode)
+    HUB_CONFIG_SOURCE = "web interface"
+
+    new_mode = "demo" if DEMO_MODE else "production"
+    logger.info("Hub configuration changed: %s -> %s", previous_mode, new_mode)
+    add_log_entry(
+        "sent",
+        f"Hub configuration changed to {new_mode} mode"
+        + ("" if DEMO_MODE else f" (serial {format_serial_display(serial)} at {ip})"),
+        source="api",
+    )
+
+    try:
+        await connect_to_hub()
+    except Exception as exc:
+        logger.error("Failed to connect using the new hub configuration: %s", exc)
+
+    with connection_lock:
+        connected = hub_connected
+
+    # Push the new zone list to every open browser tab.
+    try:
+        await broadcast_zone_update()
+    except Exception as exc:
+        logger.warning("Could not broadcast zone update after config change: %s", exc)
+
+    return {
+        "demo_mode": DEMO_MODE,
+        "serial": NOBO_SERIAL,
+        "ip": NOBO_IP,
+        "connected": connected,
+        "source": HUB_CONFIG_SOURCE,
+    }
+
+
+async def reconnect_loop():
+    """Background task that monitors hub connectivity and reconnects with exponential backoff.
+
+    The demo-mode check happens on every iteration rather than once at start-up,
+    so the loop keeps working when the user switches between demo mode and a real
+    hub from the web interface without restarting the server.
+    """
     MIN_INTERVAL = 5      # Start at 5 seconds
     MAX_INTERVAL = 300     # Cap at 5 minutes
     interval = MIN_INTERVAL
@@ -529,6 +761,12 @@ async def reconnect_loop():
 
     while True:
         await asyncio.sleep(interval)
+
+        if DEMO_MODE:
+            # Nothing to reconnect to while simulating; reset backoff state.
+            interval = MIN_INTERVAL
+            attempt = 0
+            continue
 
         with connection_lock:
             currently_connected = hub_connected
@@ -587,7 +825,7 @@ async def broadcast_zone_update():
         message = {
             "type": "zones_update",
             "data": zones_data,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": local_now().isoformat()
         }
         
         # Send to all connected clients (thread-safe)
@@ -624,7 +862,7 @@ def get_current_schedule_mode(zone_id: str) -> str:
         except (ValueError, AttributeError):
             return 0
 
-    now = datetime.now()
+    now = local_now()
     day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     current_day = day_names[now.weekday()]
     current_minutes = now.hour * 60 + now.minute
@@ -810,6 +1048,57 @@ def get_zones_data() -> List[Dict[str, Any]]:
     return zones
 
 
+# ---------------------------------------------------------------------------
+# Feature capabilities
+# ---------------------------------------------------------------------------
+# Several editing features are implemented for demo mode only and answer 501
+# against a real hub. The web UI used to offer them anyway, so the buttons were
+# there, did nothing, and returned a raw error (QA defect D-04).
+#
+# This map is the single source of truth: the endpoints raise from it and the UI
+# reads the same values from /api/capabilities, so the two cannot drift apart.
+DEMO_ONLY_FEATURES = {
+    "add_zone": "Creating zones is only available in demo mode. On a real hub, "
+                "add zones in the official Nobø Energy Control app.",
+    "delete_zone": "Deleting zones is only available in demo mode. On a real hub, "
+                   "delete zones in the official Nobø Energy Control app.",
+    "zone_icon": "Zone icons are stored by this app in demo mode only. On a real "
+                 "hub the icon cannot be saved.",
+    "edit_schedule": "Editing week schedules is only available in demo mode. On a "
+                     "real hub, edit the week profile in the official Nobø app.",
+    "add_device": "Adding devices is only available in demo mode. On a real hub, "
+                  "pair devices in the official Nobø Energy Control app.",
+    "rename_device": "Renaming devices is only available in demo mode. On a real "
+                     "hub, rename the device in the official Nobø app.",
+    "replace_device": "Replacing a device is only available in demo mode.",
+    "remove_device": "Removing devices is only available in demo mode. On a real "
+                     "hub, unpair the device in the official Nobø app.",
+    "move_device": "Moving a device between zones is only available in demo mode. "
+                   "On a real hub, move it in the official Nobø app.",
+}
+
+
+def get_capabilities() -> Dict[str, Dict[str, Any]]:
+    """What this installation can actually do right now.
+
+    Everything not listed in DEMO_ONLY_FEATURES (zone and global overrides,
+    temperatures, the away schedule, renaming a zone) works in both modes.
+    """
+    return {
+        name: {
+            "supported": DEMO_MODE,
+            "reason": None if DEMO_MODE else reason,
+        }
+        for name, reason in DEMO_ONLY_FEATURES.items()
+    }
+
+
+def require_capability(name: str) -> None:
+    """Raise 501 with the documented explanation if a feature is demo-only."""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=501, detail=DEMO_ONLY_FEATURES[name])
+
+
 def determine_zone_mode(zone_id: str, zone: Dict) -> str:
     """Determine the current mode of a zone.
 
@@ -828,6 +1117,17 @@ def determine_zone_mode(zone_id: str, zone: Dict) -> str:
 
 
 # ===== API Endpoints =====
+@app.get("/api/capabilities")
+async def get_capabilities_endpoint():
+    """Which editing features work in the current mode.
+
+    The web UI reads this on load and greys out the controls that would only
+    return 501, showing the reason instead of letting the user press a button
+    that cannot work (QA defect D-04).
+    """
+    return {"demo_mode": DEMO_MODE, "features": get_capabilities()}
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint for monitoring and load balancers"""
@@ -837,7 +1137,7 @@ async def health_check():
         "status": "ok",
         "connected": connected,
         "demo_mode": DEMO_MODE,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": local_now().isoformat(),
     }
 
 
@@ -855,7 +1155,11 @@ async def get_status():
         "connected": connected,
         "demo_mode": DEMO_MODE,
         "hub_serial": NOBO_SERIAL if connected else None,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": local_now().isoformat(),
+        # Week schedules run on wall-clock time, so the timezone the app thinks
+        # it is in decides when they fire. Reporting it makes a misconfigured
+        # container obvious instead of silently shifting every schedule.
+        "timezone": local_timezone_name(),
         "away_schedule": {
             "enabled": schedule["enabled"],
             "start_at": schedule["start_at"],
@@ -864,6 +1168,70 @@ async def get_status():
         },
         "global_mode_source": global_mode_source,
     }
+
+
+@app.get("/api/hub/config")
+async def get_hub_config():
+    """Return the current hub connection settings, for the settings form."""
+    with connection_lock:
+        connected = hub_connected
+
+    return {
+        "demo_mode": DEMO_MODE,
+        "serial": NOBO_SERIAL,
+        "serial_display": format_serial_display(NOBO_SERIAL),
+        "ip": NOBO_IP,
+        "connected": connected,
+        "source": HUB_CONFIG_SOURCE,
+    }
+
+
+@app.post("/api/hub/config")
+async def update_hub_config(request: Request, body: HubConfigUpdate):
+    """Switch between demo mode and a real hub from the web interface.
+
+    Requires an admin session — unlike the read-only endpoints this changes how
+    the whole system behaves, so it is not left open for local integrations.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    demo_mode = bool(body.demo_mode)
+
+    if demo_mode:
+        # Keep whatever serial/IP the user typed so the form is still populated
+        # when they switch back, but do not demand that they be valid.
+        serial = parse_serial_input(body.serial or NOBO_SERIAL)
+        ip = str(body.ip or NOBO_IP).strip()
+    else:
+        serial_ok, serial = validate_serial(body.serial or "")
+        if not serial_ok:
+            raise HTTPException(status_code=400, detail=serial)
+
+        ip_ok, ip = validate_ip(body.ip or "")
+        if not ip_ok:
+            raise HTTPException(status_code=400, detail=ip)
+
+    result = await apply_hub_config(demo_mode, serial, ip)
+
+    if not demo_mode and not result["connected"]:
+        result["warning"] = (
+            "Settings saved, but the hub could not be reached. Check the serial "
+            "number and IP address, and make sure the official Nobo app is not "
+            "connected to the hub."
+        )
+
+    # Switching data source changes zones, devices and schedules wholesale. Rather
+    # than trying to patch every open page back into a consistent state, end the
+    # session so the browser returns to the login page and starts clean.
+    result["signed_out"] = True
+
+    response = JSONResponse(result)
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        auth.delete_session(session_id)
+    response.delete_cookie(key="session_id", path="/")
+    return response
 
 
 @app.get("/api/hub")
@@ -899,6 +1267,8 @@ async def get_hub_info():
             "connected": connected
         }
         return hub_info
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting hub info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -917,6 +1287,8 @@ async def get_zones():
     try:
         zones_data = get_zones_data()
         return {"zones": zones_data}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting zones: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -925,6 +1297,8 @@ async def get_zones():
 @app.post("/api/zones")
 async def add_zone(zone: ZoneAdd):
     """Create a new zone"""
+    require_capability("add_zone")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -952,9 +1326,6 @@ async def add_zone(zone: ZoneAdd):
             logger.info(f"Demo mode: Zone '{zone.name}' created with id {new_id}")
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": new_id, "name": zone.name}
-
-        # Real hub mode - not yet implemented
-        raise HTTPException(status_code=501, detail="Add zone not yet implemented for real hub")
 
     except HTTPException:
         raise
@@ -1026,6 +1397,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
 @app.delete("/api/zones/{zone_id}")
 async def delete_zone(zone_id: str):
     """Delete a zone"""
+    require_capability("delete_zone")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1049,9 +1422,6 @@ async def delete_zone(zone_id: str):
             logger.info(f"Demo mode: Zone '{zone_name}' deleted")
             config_persistence.save_demo_zones(DEMO_ZONES)
             return {"status": "success", "zone_id": zone_id}
-
-        # Real hub mode — not yet implemented
-        raise HTTPException(status_code=501, detail="Delete zone not yet implemented for real hub")
 
     except HTTPException:
         raise
@@ -1140,9 +1510,69 @@ async def set_zone_override(zone_id: str, mode: str):
         await asyncio.sleep(0.5)
         
         return {"status": "success", "zone_id": zone_id, "mode": mode}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting zone override: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def round_to_whole_degree(value: float) -> int:
+    """
+    The Eco Hub stores set points as whole degrees. Truncating turned a
+    requested 20.6°C into 20°C, so a room ran colder than the user asked for;
+    round to the nearest degree instead.
+    """
+    return math.floor(value + 0.5)
+
+
+def resolve_temperature_update(
+    temps: "TemperatureUpdate",
+    current_comfort: float,
+    current_eco: float,
+) -> tuple:
+    """
+    Validate a temperature change and return the (comfort, eco) whole degrees
+    to send to the hub.
+
+    Values that are left out keep their current setting, which is why the
+    comfort/eco ordering can only be checked here, once both are known.
+    """
+    if temps.comfort is None and temps.eco is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a comfort and/or eco temperature to set",
+        )
+
+    for label, value in (("Comfort", temps.comfort), ("Eco", temps.eco)):
+        if value is not None and not 7 <= value <= 30:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} temperature must be between 7 and 30°C",
+            )
+
+    comfort = (
+        round_to_whole_degree(temps.comfort)
+        if temps.comfort is not None
+        else round_to_whole_degree(current_comfort)
+    )
+    eco = (
+        round_to_whole_degree(temps.eco)
+        if temps.eco is not None
+        else round_to_whole_degree(current_eco)
+    )
+
+    if eco >= comfort:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Eco temperature ({eco}°C) must be lower than the comfort "
+                f"temperature ({comfort}°C). Otherwise the zone never saves any "
+                f"energy when it drops to eco."
+            ),
+        )
+
+    return comfort, eco
 
 
 @app.post("/api/zones/{zone_id}/temperature")
@@ -1180,19 +1610,20 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
                 )
             
             # In demo mode, just validate and return success
+            comfort, eco = resolve_temperature_update(
+                temps,
+                demo_zone.get('comfort_temp') or 21.0,
+                demo_zone.get('eco_temp') or 17.0,
+            )
             if temps.comfort is not None:
-                if not 7 <= temps.comfort <= 30:
-                    raise HTTPException(status_code=400, detail="Comfort temperature must be between 7 and 30°C")
-                demo_zone['comfort_temp'] = temps.comfort
+                demo_zone['comfort_temp'] = float(comfort)
             if temps.eco is not None:
-                if not 7 <= temps.eco <= 30:
-                    raise HTTPException(status_code=400, detail="Eco temperature must be between 7 and 30°C")
-                demo_zone['eco_temp'] = temps.eco
+                demo_zone['eco_temp'] = float(eco)
             
             add_log_entry(
                 "sent",
-                f"[DEMO] Would send: update_zone(zone_{zone_id}, comfort={temps.comfort}, eco={temps.eco})",
-                command=f"update_zone {zone_id} comfort={temps.comfort} eco={temps.eco}",
+                f"[DEMO] Would send: update_zone(zone_{zone_id}, comfort={comfort}, eco={eco})",
+                command=f"update_zone {zone_id} comfort={comfort} eco={eco}",
                 source="api",
             )
             config_persistence.save_demo_zones(DEMO_ZONES)
@@ -1231,25 +1662,14 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
                 detail=f"Temperature cannot be adjusted remotely for {device_name} devices. Temperature is set manually on the physical device."
             )
         
-        # Validate temperatures (7-30°C range)
-        if temps.comfort is not None:
-            if not 7 <= temps.comfort <= 30:
-                raise HTTPException(status_code=400, detail="Comfort temperature must be between 7 and 30°C")
-        if temps.eco is not None:
-            if not 7 <= temps.eco <= 30:
-                raise HTTPException(status_code=400, detail="Eco temperature must be between 7 and 30°C")
+        # Validate, and fill in whichever set point was not supplied
+        comfort, eco = resolve_temperature_update(
+            temps,
+            zone.get('temp_comfort_c', 21),
+            zone.get('temp_eco_c', 17),
+        )
         
-        # Get current temperatures to avoid overwriting (pynobo stores as whole-degree integers)
-        current_comfort = int(zone.get('temp_comfort_c', 21))
-        current_eco = int(zone.get('temp_eco_c', 17))
-        
-        # Update temperatures using keyword arguments (pynobo expects whole-degree integers)
-        if temps.comfort is not None and temps.eco is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=int(temps.comfort), temp_eco_c=int(temps.eco))
-        elif temps.comfort is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=int(temps.comfort), temp_eco_c=current_eco)
-        elif temps.eco is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=current_comfort, temp_eco_c=int(temps.eco))
+        current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=comfort, temp_eco_c=eco)
         
         # Wait for update
         await asyncio.sleep(0.5)
@@ -1343,6 +1763,8 @@ async def set_global_override(mode: str):
         global_mode_source = "manual"
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
         return {"status": "success", "mode": mode, "source": "manual"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting global override: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1567,13 +1989,14 @@ async def away_schedule_loop():
                 logger.error(f"Error applying Away on schedule activation: {e}")
 
         elif currently_active and last_active:
-            # Still inside window — re-assert Away in case of manual override
-            try:
-                await _apply_global_mode_internal("away", source="schedule")
-                global_mode_source = "schedule"
-                config_persistence.save_server_state({"global_mode_source": global_mode_source})
-            except Exception as e:
-                logger.error(f"Error re-asserting Away during active schedule: {e}")
+            # Deliberately does nothing. This used to re-send Away every 30
+            # seconds "in case of manual override", which meant a user who
+            # came home early and pressed Comfort was silently forced back to
+            # Away within half a minute, with no explanation and a command log
+            # full of repeated Away entries. The schedule now only acts on the
+            # transitions into and out of the away period, so a manual change
+            # made during the holiday holds until the period ends.
+            pass
 
         last_active = currently_active
 
@@ -1612,6 +2035,8 @@ async def get_week_profiles():
                 'profile': profile
             })
         return {"week_profiles": profiles}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting week profiles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1674,6 +2099,8 @@ async def get_zone_schedule(zone_id: str):
 @app.post("/api/zones/{zone_id}/schedule")
 async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
     """Update the weekly schedule for a specific zone"""
+    require_capability("edit_schedule")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1710,10 +2137,6 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
         if zone_id not in current_hub.zones:
             raise HTTPException(status_code=404, detail="Zone not found")
         
-        # This would need to be implemented based on pynobo's week profile format
-        # For now, return not implemented
-        raise HTTPException(status_code=501, detail="Schedule update not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -1737,11 +2160,18 @@ async def get_devices():
         devices = []
         
         for zone in zones_data:
+            names = zone.get('components_names') or []
             for i, serial in enumerate(zone['components']):
                 device_name, supports_comfort, supports_eco = detect_device_type(serial)
+                custom_name = names[i].strip() if i < len(names) and names[i] else ''
                 devices.append({
                     'serial': serial,
                     'serial_display': zone['components_display'][i] if i < len(zone['components_display']) else format_serial_display(serial),
+                    # The friendly name the user gave the device. Renaming used to
+                    # appear to work and then vanish on reload, because the list
+                    # this endpoint returns never carried the name back.
+                    'name': custom_name,
+                    'display_name': custom_name or device_name,
                     'device_type': device_name,
                     'zone_id': zone['zone_id'],
                     'zone_name': zone['name'],
@@ -1752,6 +2182,8 @@ async def get_devices():
                 })
         
         return {"devices": devices}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting devices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1766,6 +2198,8 @@ class DeviceAdd(BaseModel):
 @app.post("/api/devices")
 async def add_device(device: DeviceAdd):
     """Add a new device to a zone"""
+    require_capability("add_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1821,8 +2255,6 @@ async def add_device(device: DeviceAdd):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Add device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -1841,6 +2273,8 @@ class DeviceRename(BaseModel):
 @app.patch("/api/devices/{serial}/name")
 async def rename_device(serial: str, body: DeviceRename):
     """Update the friendly name of a device"""
+    require_capability("rename_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1874,8 +2308,6 @@ async def rename_device(serial: str, body: DeviceRename):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
 
-        raise HTTPException(status_code=501, detail="Device renaming is not yet supported for connected hubs")
-
     except HTTPException:
         raise
     except Exception as e:
@@ -1886,6 +2318,8 @@ async def rename_device(serial: str, body: DeviceRename):
 @app.put("/api/devices/{serial}")
 async def replace_device(serial: str, replacement: DeviceReplace):
     """Replace a device with a new one"""
+    require_capability("replace_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -1953,8 +2387,6 @@ async def replace_device(serial: str, replacement: DeviceReplace):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Replace device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -1965,6 +2397,8 @@ async def replace_device(serial: str, replacement: DeviceReplace):
 @app.delete("/api/devices/{serial}")
 async def remove_device(serial: str):
     """Remove a device from its zone"""
+    require_capability("remove_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2004,8 +2438,6 @@ async def remove_device(serial: str):
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
         
-        raise HTTPException(status_code=501, detail="Remove device not yet implemented for real hub")
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -2020,6 +2452,8 @@ class DeviceMove(BaseModel):
 @app.post("/api/devices/{serial}/move")
 async def move_device(serial: str, move: DeviceMove):
     """Move a device from its current zone to a different zone"""
+    require_capability("move_device")
+
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -2080,9 +2514,6 @@ async def move_device(serial: str, move: DeviceMove):
                 "new_zone_name": dst_zone['name'],
             }
 
-        # Real hub mode
-        raise HTTPException(status_code=501, detail="Move device not yet implemented for real hub")
-
     except HTTPException:
         raise
     except Exception as e:
@@ -2118,7 +2549,17 @@ async def clear_log():
 # ===== WebSocket Endpoint =====
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time updates"""
+    """WebSocket endpoint for real-time updates.
+
+    BaseHTTPMiddleware does not see WebSocket handshakes, so the session check
+    that AuthMiddleware performs for HTTP has to be repeated here. Closing
+    before accepting makes Starlette reject the handshake with HTTP 403.
+    """
+    if not ALLOW_ANON_API:
+        if not auth.get_session(websocket.cookies.get("session_id")):
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     
     async with websocket_lock:
@@ -2138,7 +2579,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_json({
                 "type": "zones_update",
                 "data": zones_data,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": local_now().isoformat()
             })
         
         # Keep connection alive and handle incoming messages
@@ -2473,15 +2914,19 @@ async def admin_delete_user(request: Request, username: str):
 
 
 # ===== Static Files =====
-# Serve static files (HTML, CSS, JS, images)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Resolved from this file's location, not the working directory, so the app and
+# the test suite behave the same no matter where they are started from
+# (QA defect D-03).
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
 async def read_root():
     """Serve the main HTML page"""
     try:
-        with open("static/index.html", "r", encoding="utf-8") as f:
+        with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
             content = f.read()
         return HTMLResponse(content=content)
     except FileNotFoundError:

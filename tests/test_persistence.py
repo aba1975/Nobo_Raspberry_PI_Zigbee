@@ -274,6 +274,9 @@ def reset_demo_state():
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app, raise_server_exceptions=True) as c:
+        # The API is deny-by-default; conftest.authenticated_session keeps this
+        # session id valid for every test (see conftest.TEST_SESSION_ID).
+        c.cookies.set("session_id", "pytest-fixed-session-id")
         yield c
 
 

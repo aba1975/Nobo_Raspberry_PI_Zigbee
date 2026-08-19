@@ -19,7 +19,8 @@ import bcrypt
 # ---------------------------------------------------------------------------
 # Storage paths (override in tests by patching these)
 # ---------------------------------------------------------------------------
-DATA_DIR = Path("data")
+# Resolved from this file's location, not the working directory (QA defect D-03).
+DATA_DIR = Path(__file__).resolve().parent / "data"
 USERS_FILE = DATA_DIR / "users.json"
 
 # ---------------------------------------------------------------------------
