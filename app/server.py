@@ -8,6 +8,7 @@ import re
 import asyncio
 import ipaddress
 import logging
+import math
 import threading
 from collections import deque
 from typing import Dict, List, Optional, Any
@@ -1510,6 +1511,64 @@ async def set_zone_override(zone_id: str, mode: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def round_to_whole_degree(value: float) -> int:
+    """
+    The Eco Hub stores set points as whole degrees. Truncating turned a
+    requested 20.6°C into 20°C, so a room ran colder than the user asked for;
+    round to the nearest degree instead.
+    """
+    return math.floor(value + 0.5)
+
+
+def resolve_temperature_update(
+    temps: "TemperatureUpdate",
+    current_comfort: float,
+    current_eco: float,
+) -> tuple:
+    """
+    Validate a temperature change and return the (comfort, eco) whole degrees
+    to send to the hub.
+
+    Values that are left out keep their current setting, which is why the
+    comfort/eco ordering can only be checked here, once both are known.
+    """
+    if temps.comfort is None and temps.eco is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a comfort and/or eco temperature to set",
+        )
+
+    for label, value in (("Comfort", temps.comfort), ("Eco", temps.eco)):
+        if value is not None and not 7 <= value <= 30:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} temperature must be between 7 and 30°C",
+            )
+
+    comfort = (
+        round_to_whole_degree(temps.comfort)
+        if temps.comfort is not None
+        else round_to_whole_degree(current_comfort)
+    )
+    eco = (
+        round_to_whole_degree(temps.eco)
+        if temps.eco is not None
+        else round_to_whole_degree(current_eco)
+    )
+
+    if eco >= comfort:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Eco temperature ({eco}°C) must be lower than the comfort "
+                f"temperature ({comfort}°C). Otherwise the zone never saves any "
+                f"energy when it drops to eco."
+            ),
+        )
+
+    return comfort, eco
+
+
 @app.post("/api/zones/{zone_id}/temperature")
 async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
     """Set comfort and/or eco temperature for a zone"""
@@ -1545,19 +1604,20 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
                 )
             
             # In demo mode, just validate and return success
+            comfort, eco = resolve_temperature_update(
+                temps,
+                demo_zone.get('comfort_temp') or 21.0,
+                demo_zone.get('eco_temp') or 17.0,
+            )
             if temps.comfort is not None:
-                if not 7 <= temps.comfort <= 30:
-                    raise HTTPException(status_code=400, detail="Comfort temperature must be between 7 and 30°C")
-                demo_zone['comfort_temp'] = temps.comfort
+                demo_zone['comfort_temp'] = float(comfort)
             if temps.eco is not None:
-                if not 7 <= temps.eco <= 30:
-                    raise HTTPException(status_code=400, detail="Eco temperature must be between 7 and 30°C")
-                demo_zone['eco_temp'] = temps.eco
+                demo_zone['eco_temp'] = float(eco)
             
             add_log_entry(
                 "sent",
-                f"[DEMO] Would send: update_zone(zone_{zone_id}, comfort={temps.comfort}, eco={temps.eco})",
-                command=f"update_zone {zone_id} comfort={temps.comfort} eco={temps.eco}",
+                f"[DEMO] Would send: update_zone(zone_{zone_id}, comfort={comfort}, eco={eco})",
+                command=f"update_zone {zone_id} comfort={comfort} eco={eco}",
                 source="api",
             )
             config_persistence.save_demo_zones(DEMO_ZONES)
@@ -1596,25 +1656,14 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
                 detail=f"Temperature cannot be adjusted remotely for {device_name} devices. Temperature is set manually on the physical device."
             )
         
-        # Validate temperatures (7-30°C range)
-        if temps.comfort is not None:
-            if not 7 <= temps.comfort <= 30:
-                raise HTTPException(status_code=400, detail="Comfort temperature must be between 7 and 30°C")
-        if temps.eco is not None:
-            if not 7 <= temps.eco <= 30:
-                raise HTTPException(status_code=400, detail="Eco temperature must be between 7 and 30°C")
+        # Validate, and fill in whichever set point was not supplied
+        comfort, eco = resolve_temperature_update(
+            temps,
+            zone.get('temp_comfort_c', 21),
+            zone.get('temp_eco_c', 17),
+        )
         
-        # Get current temperatures to avoid overwriting (pynobo stores as whole-degree integers)
-        current_comfort = int(zone.get('temp_comfort_c', 21))
-        current_eco = int(zone.get('temp_eco_c', 17))
-        
-        # Update temperatures using keyword arguments (pynobo expects whole-degree integers)
-        if temps.comfort is not None and temps.eco is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=int(temps.comfort), temp_eco_c=int(temps.eco))
-        elif temps.comfort is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=int(temps.comfort), temp_eco_c=current_eco)
-        elif temps.eco is not None:
-            current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=current_comfort, temp_eco_c=int(temps.eco))
+        current_hub.update_zone(zone_id, name=zone['name'], temp_comfort_c=comfort, temp_eco_c=eco)
         
         # Wait for update
         await asyncio.sleep(0.5)
