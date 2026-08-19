@@ -1100,24 +1100,43 @@ def get_zones_data() -> List[Dict[str, Any]]:
 # This map is the single source of truth: the endpoints raise from it and the UI
 # reads the same values from /api/capabilities, so the two cannot drift apart.
 DEMO_ONLY_FEATURES = {
-    "add_zone": "Creating zones is only available in demo mode. On a real hub, "
-                "add zones in the official Nobø Energy Control app.",
-    "delete_zone": "Deleting zones is only available in demo mode. On a real hub, "
-                   "delete zones in the official Nobø Energy Control app.",
-    "zone_icon": "Zone icons are stored by this app in demo mode only. On a real "
-                 "hub the icon cannot be saved.",
-    "edit_schedule": "Editing week schedules is only available in demo mode. On a "
-                     "real hub, edit the week profile in the official Nobø app.",
-    "add_device": "Adding devices is only available in demo mode. On a real hub, "
-                  "pair devices in the official Nobø Energy Control app.",
-    "rename_device": "Renaming devices is only available in demo mode. On a real "
-                     "hub, rename the device in the official Nobø app.",
-    "replace_device": "Replacing a device is only available in demo mode.",
-    "remove_device": "Removing devices is only available in demo mode. On a real "
-                     "hub, unpair the device in the official Nobø app.",
-    "move_device": "Moving a device between zones is only available in demo mode. "
-                   "On a real hub, move it in the official Nobø app.",
+    "add_zone": "Creating zones is not implemented for a real hub in this app. "
+                "The hub itself supports it — the code was never written. Add "
+                "zones in the official Nobø Energy Control app.",
+    "delete_zone": "Deleting zones is not implemented for a real hub in this app. "
+                   "The hub itself supports it — the code was never written. "
+                   "Delete zones in the official Nobø Energy Control app.",
+    "zone_icon": "Zone icons are stored by this app, and it only keeps them for "
+                 "demo zones. The icon cannot be saved while a real hub is "
+                 "connected.",
+    "edit_schedule": "Editing week schedules is not implemented for a real hub in "
+                     "this app. The hub itself supports it — the code was never "
+                     "written. Edit the week profile in the official Nobø app.",
+    "add_device": "Adding devices is not implemented for a real hub in this app, "
+                  "and this app cannot pair new hardware at all. Pair devices in "
+                  "the official Nobø Energy Control app.",
+    "rename_device": "Renaming devices is not implemented for a real hub in this "
+                     "app. The hub itself supports it — the code was never "
+                     "written. Rename the device in the official Nobø app.",
+    "replace_device": "Replacing a device is not implemented for a real hub in "
+                      "this app. Use the official Nobø app.",
+    "remove_device": "Removing devices is not implemented for a real hub in this "
+                     "app. The hub itself supports it — the code was never "
+                     "written. Unpair the device in the official Nobø app.",
+    "move_device": "Moving a device between zones is not implemented for a real "
+                   "hub in this app. The hub itself supports it — the code was "
+                   "never written. Move it in the official Nobø app.",
 }
+"""Features this application only implements against the built-in demo data.
+
+These are *this app's* limitations, not the hub's. The Nobø Eco Hub protocol has
+commands for all of them (A00/R00 for zones, A01/U01/R01 for components,
+A02/U02/R02 for week profiles), and pynobo already wraps the week-profile and
+zone-update ones. The real-hub branches of these endpoints were left unfinished,
+so rather than fail confusingly they are declared unsupported and the UI greys
+them out. Implementing any of them is a matter of writing the code and testing
+it against real hardware.
+"""
 
 
 def get_capabilities() -> Dict[str, Dict[str, Any]]:
