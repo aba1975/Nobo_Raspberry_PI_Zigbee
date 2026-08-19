@@ -2140,7 +2140,11 @@ body {
     -webkit-backdrop-filter: blur(4px);
 }
 
-.modal.show {
+/* `.show` is the canonical open state for every modal. `.active` is accepted as
+   an alias because it is the convention used elsewhere in the app for pages and
+   nav links, and mixing the two up silently renders a modal invisible. */
+.modal.show,
+.modal.active {
     display: flex;
     animation: backdropFadeIn 0.3s ease forwards;
 }

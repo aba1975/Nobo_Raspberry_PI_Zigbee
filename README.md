@@ -403,7 +403,7 @@ Replace `<YOUR_PI_IP>` with your Raspberry Pi's IP address (e.g., `http://192.16
 |----------|----------|
 | `admin`  | `nobohub` |
 
-**Change the default password immediately** after first login by clicking the user icon in the top-right corner.
+**Change the default password immediately** after first login — see [Managing User Accounts](#managing-user-accounts) below.
 
 ### Check logs
 
@@ -418,6 +418,37 @@ cd /opt/nobo-control && docker compose logs --tail 50 -f
 ```
 
 Press `Ctrl+C` to stop following logs.
+
+## Managing User Accounts
+
+Everything to do with accounts lives behind the **user icon (👤) in the top-right corner** of the web interface. Click it to open the **User Settings** panel. Close it with the ✕ button, the `Esc` key, or by clicking outside the panel.
+
+The panel has these sections:
+
+### 🔑 Change Password
+
+Available to every user, for their own account. Enter your current password, then the new one twice. Passwords must be at least 8 characters.
+
+**Do this first**, to replace the default `admin` / `nobohub` credentials.
+
+### ✏️ Rename Account
+
+Change your own username. You stay logged in afterwards.
+
+### 🛠️ Manage Users (admins only)
+
+This section is only shown to users with the `admin` role. It lists every account and lets you:
+
+- **Add a user** — enter a username and password (minimum 8 characters) and pick a role:
+  - **`user`** — can view and control heating.
+  - **`admin`** — can additionally manage accounts and change the hub connection settings.
+- **Delete a user** — click the 🗑️ button next to them. You cannot delete your own account, so there is always at least one admin left.
+
+### 🚪 Logout
+
+Ends your session and returns you to the login page.
+
+> **Note:** User accounts are stored in the Docker data volume (`data/users.json`), with passwords hashed using bcrypt. They survive restarts, software updates and reboots, and are included in `scripts/backup.sh`.
 
 ## Changing Hub Settings From the Web Interface
 
@@ -535,6 +566,21 @@ curl http://localhost:8000/api/hub/config
 To rule out a network problem entirely, switch to demo mode from **Devices → Hub Connection**. If the 8 example zones appear, the Pi and the app are healthy and the issue is purely with reaching the hub.
 
 You do **not** need to restart anything after correcting the address — the app retries in the background and the indicator changes to `Connected` on its own.
+
+### Clicking the user icon (👤) does nothing
+
+The User Settings panel should open when you click the person icon in the top-right corner. If nothing happens:
+
+1. **Hard refresh the page** — `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS). An old cached copy of `auth.js` is the most likely cause.
+2. **Make sure you are on the current version** — this was a genuine bug in earlier builds, where the script opened the panel with one CSS class while the stylesheet styled another, so the panel was technically open but invisible. Update with:
+
+   ```bash
+   sudo bash /opt/nobo-control/scripts/update.sh
+   ```
+
+3. **Check the browser console** — press `F12` and look at the Console tab for errors from `auth.js`.
+
+Note that the **🛠️ Manage Users** section only appears for accounts with the `admin` role. If you can open the panel and change your own password but see no user management, you are signed in as a regular user.
 
 ### "permission denied while trying to connect to the Docker daemon socket"
 
