@@ -92,3 +92,7 @@ echo "To restore, extract and copy files back:"
 echo "  tar -xzf $BACKUP_FILE"
 echo "  sudo cp backup/.env $INSTALL_DIR/"
 echo "  sudo docker cp backup/data/. nobo-web-control:/app/data/"
+# docker cp writes the files as root. The application runs as an unprivileged
+# user, so without this it cannot write them again and logins start failing.
+echo "  sudo docker exec -u root nobo-web-control chown -R nobo:nobo /app/data"
+echo "  sudo systemctl restart nobo-control"

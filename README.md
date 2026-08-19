@@ -16,6 +16,86 @@ This is a port of the original Windows-based project. The application code is id
 
 > **Important:** The Nobo Eco Hub only allows one TCP connection at a time. While this web control system is connected, the official Nobo app cannot connect simultaneously.
 
+## Features
+
+Everything below is reached from the web interface at `http://<pi-ip>:8000`.
+
+### Heating control
+
+| Feature | What it does |
+| --- | --- |
+| **Zone overview** | Every zone with its current temperature, comfort and eco set points, and the mode it is in right now. Updates by itself — you never need to refresh. |
+| **Per-zone override** | Put a single zone into Comfort, Eco or Away, or return it to Normal so it follows its weekly schedule again. |
+| **Global mode** | Put the whole house into Comfort, Eco, Away or Home in one click. |
+| **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. The eco temperature must be lower than the comfort temperature, and values are rounded to whole degrees because that is all the hub stores. |
+| **Weekly schedule** | A per-zone plan of which mode applies at which time on each day of the week (see [Weekly schedule rules](#weekly-schedule-rules)). |
+| **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
+| **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
+
+Some devices — plain on/off receivers such as the R80 RSC 700 — have no
+adjustable set point. Their temperature is set on the device itself, and the
+interface says so rather than pretending the change worked.
+
+### Accounts
+
+| Feature | What it does |
+| --- | --- |
+| **Login** | The whole interface and the entire API require a login. Nothing is readable without one. |
+| **Change password** | Under the 👤 icon. |
+| **Rename your account** | Under the 👤 icon. |
+| **Manage users** | Admins can add, remove and change the role of other users. |
+| **Lockout** | Repeated failed logins from the same address are temporarily blocked. |
+
+### Administration
+
+| Feature | What it does |
+| --- | --- |
+| **Hub settings in the browser** | Switch between demo mode and your real hub, and set the hub serial and IP, without editing files or using SSH. See [Changing Hub Settings From the Web Interface](#changing-hub-settings-from-the-web-interface). |
+| **Demo mode** | A full simulated house with eight zones, so you can try everything before a hub is connected. |
+| **Automatic start** | Starts on boot and restarts by itself if it stops. |
+| **Backup and restore** | A script that captures your settings and data. |
+
+### What works with a real hub, and what does not
+
+This project talks to the hub through
+[pynobo](https://github.com/echoromeo/pynobo), which exposes what the hub's own
+protocol offers. Some things the hub simply does not allow a third party to do.
+
+| Feature | Demo mode | Real hub |
+| --- | --- | --- |
+| View zones, temperatures and modes | ✅ | ✅ |
+| Per-zone and global overrides | ✅ | ✅ |
+| Change comfort / eco temperatures | ✅ | ✅ |
+| Rename a zone | ✅ | ✅ |
+| Scheduled away | ✅ | ✅ |
+| View weekly schedules | ✅ | ✅ |
+| **Edit weekly schedules** | ✅ | ❌ |
+| **Add or delete a zone** | ✅ | ❌ |
+| **Add, remove, move, rename or replace a device** | ✅ | ❌ |
+| **Discover or pair a new device** | ❌ | ❌ |
+
+Use the official Nobø app for anything in the "real hub ❌" rows. Pairing in
+particular is done entirely by the hub during pairing mode; there is no
+discovery in this project, and none is planned.
+
+You do not have to remember this table. When the application is connected to a
+real hub, the controls it cannot honour are greyed out with an explanation, so
+nothing you can click will fail with a "not implemented" error.
+
+### Weekly schedule rules
+
+When you edit a schedule, the whole week is sent at once and it must describe
+every minute of every day:
+
+- All seven days must be present.
+- Each day's blocks must run from `00:00` to `24:00` with no gaps and no overlaps.
+- Blocks must be in order, and each must be at least one minute long.
+- Times are in the Raspberry Pi's own timezone, not UTC (see [Timezone](#timezone)).
+
+A partial update is rejected rather than merged, so that a saved schedule is
+never half old and half new. The editor in the web interface builds a valid
+week for you; these rules matter if you call the API yourself.
+
 ## Prerequisites
 
 ### Hardware
@@ -211,6 +291,20 @@ NOBO_DEMO=false
 - `NOBO_SERIAL`: The 12-digit serial number from the back of your Nobo Eco Hub
 - `NOBO_IP`: The IP address of your hub on your local network
 - `NOBO_DEMO`: Set to `true` to test without a real hub (uses simulated data)
+- `NOBO_ALLOW_ANON_API`: Leave this alone. It is explained under [Security Notes](#security-notes).
+
+**Two things that catch people out:**
+
+1. `NOBO_DEMO` accepts `true`, `1` and `yes` (any capitalisation) as "on".
+   Anything else, including an empty value, means off.
+2. **The serial `111111111111` switches demo mode on by itself**, whatever
+   `NOBO_DEMO` says. That value is also the built-in default, so if you skip
+   creating `.env` entirely the system starts in demo mode and shows a
+   simulated house rather than reporting an error. If you are seeing eight
+   zones called "Large Bathroom", "Kitchen" and so on, this is why.
+
+If the defaults are used because no `.env` exists, the hub IP defaults to
+`10.0.0.100`. That is only a placeholder; it is not where your hub lives.
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
 
@@ -297,7 +391,11 @@ The install script does everything for you: installs Docker, adds you to the doc
 sudo bash /opt/nobo-control/scripts/install.sh
 ```
 
-The first run takes roughly 5-10 minutes, most of it building the Docker image. Then start the service:
+The first run takes roughly 5-10 minutes, most of it building the Docker image.
+
+> The script **enables** the service, meaning it will come up on every boot, but
+> it deliberately does not start it there and then — you have not had a chance
+> to put your hub details in `.env` yet. Nothing is running until you do this:
 
 ```bash
 sudo systemctl start nobo-control
@@ -337,6 +435,25 @@ These commands explained:
 - `systemctl enable` — tells the system to start this service automatically on every boot
 - `systemctl start` — starts it right now
 - `systemctl status` — shows whether it is running
+
+#### Why there are two "restart automatically" settings
+
+`compose.yml` says `restart: always` and the systemd unit says
+`Restart=always`. That looks like a conflict but is not, and you do not need to
+change either:
+
+- **Docker** brings the container back if the application inside it crashes.
+- **systemd** brings the whole thing back if Docker itself, or the machine,
+  went away.
+
+Stopping the service runs `docker compose down`, which removes the container
+altogether, and Docker never resurrects a container that no longer exists. So
+`sudo systemctl stop nobo-control` really does stop it and it stays stopped.
+
+The unit also runs `docker compose pull` before starting. Since the image is
+built on the Pi rather than downloaded, this normally logs "Skipped - No image
+to be pulled" and moves on. It is prefixed with `-` so a failure (for example
+with no internet connection) cannot stop the service from starting.
 
 ### Confirm it really survives a reboot
 
@@ -408,7 +525,15 @@ Replace `<YOUR_PI_IP>` with your Raspberry Pi's IP address (e.g., `http://192.16
 ### Check logs
 
 ```bash
-sudo bash /opt/nobo-control/scripts/logs.sh
+bash /opt/nobo-control/scripts/logs.sh
+```
+
+No `sudo` is needed here, as long as your user is in the `docker` group (the
+install script puts you there). You can also ask for a different number of
+past lines — the default is 50:
+
+```bash
+bash /opt/nobo-control/scripts/logs.sh 200
 ```
 
 Or directly:
@@ -582,6 +707,17 @@ The User Settings panel should open when you click the person icon in the top-ri
 
 Note that the **🛠️ Manage Users** section only appears for accounts with the `admin` role. If you can open the panel and change your own password but see no user management, you are signed in as a regular user.
 
+### Some buttons are greyed out, or I get "not available when connected to a real hub"
+
+That is deliberate. A few things only work on the demo data kept on the Pi —
+adding and deleting zones, moving devices between zones, and similar
+housekeeping. The Nobø hub does not accept those changes over the network, so
+when you are connected to a real hub the buttons are disabled and the API
+answers `501`. Use the official Nobø app for them. Everything to do with actual
+heating — temperatures, modes, schedules, holiday periods — works in both
+modes. The full list is in
+[What works with a real hub](#what-works-with-a-real-hub-and-what-does-not).
+
 ### "permission denied while trying to connect to the Docker daemon socket"
 
 Your user is not in the `docker` group yet, or you have not logged out since being added. Fix it:
@@ -678,8 +814,14 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 tar -xzf ~/nobo-backups/nobo-backup-YYYYMMDD-HHMMSS.tar.gz
 sudo cp backup/.env /opt/nobo-control/
 sudo docker cp backup/data/. nobo-web-control:/app/data/
+# docker cp writes the files as root, but the application runs as a normal
+# user. Without this it cannot save changes and logins start failing.
+sudo docker exec -u root nobo-web-control chown -R nobo:nobo /app/data
 sudo systemctl restart nobo-control
 ```
+
+The restart is not optional: the running application keeps its own copy of this
+data in memory and would overwrite what you just restored.
 
 ## Differences from the Windows Version
 
@@ -704,7 +846,7 @@ Nobo_Raspberry_PI/
 │   ├── away_schedule.py        # Away schedule persistence
 │   ├── config_persistence.py   # Config/state persistence
 │   └── static/                 # Web UI (HTML, CSS, JS, images)
-├── tests/                      # Test suite (pytest)
+├── tests/                      # Test suite (pytest) — see Testing below
 ├── deploy/
 │   └── systemd/
 │       └── nobo-control.service  # systemd unit file
@@ -717,9 +859,12 @@ Nobo_Raspberry_PI/
 │   └── logs.sh                 # View logs
 ├── Dockerfile                  # Container build instructions
 ├── compose.yml                 # Docker Compose configuration
+├── pytest.ini                  # Test configuration (lets pytest find app/ and tests/)
+├── .dockerignore               # What stays out of the image (tests, .git, .env)
 ├── .env.example                # Configuration template
 ├── requirements.txt            # Python runtime dependencies
 ├── requirements-dev.txt        # Development/testing dependencies
+├── CLAUDE.md                   # Notes for AI coding assistants working on this repo
 └── README.md                   # This file
 ```
 
@@ -733,30 +878,171 @@ The container runs with `network_mode: host`, meaning it shares the Pi's network
 
 ## API
 
-The server provides a REST API for integration with other systems (e.g., Home Assistant):
+The server provides a REST API for integration with other systems (for example
+Home Assistant).
 
-- `GET /api/health` — Health check
-- `GET /api/status` — Connection status and away schedule
-- `GET /api/zones` — All zones with current status
-- `POST /api/zones/{zone_id}/override/{mode}` — Set zone mode (comfort/eco/away/normal)
-- `POST /api/zones/{zone_id}/temperature` — Set zone temperatures
-- `POST /api/global/override/{mode}` — Set global mode for all zones
-- `GET /api/zones/{zone_id}/schedule` — Get zone weekly schedule
-- `POST /api/zones/{zone_id}/schedule` — Update zone weekly schedule
-- `GET /api/devices` — List all devices
-- `GET /api/hub/config` — Current hub connection settings (demo mode, serial, IP, source)
-- `POST /api/hub/config` — Switch between demo mode and a real hub (**requires an admin session**; ends the session on success)
-- `WS /ws` — WebSocket for real-time updates
+**Everything requires a login.** Send the `session_id` cookie you get back from
+`POST /auth/login`. The only exception is `GET /api/health`, which is left open
+so monitoring tools can check the service is alive without credentials.
 
-API endpoints (`/api/*` and `/ws`) do not require authentication, so local integrations work without credentials. The one exception is `POST /api/hub/config`, which changes how the whole system behaves and therefore requires a logged-in admin session.
+```bash
+# Log in and keep the session cookie in a file
+curl -c cookies.txt -X POST http://<pi-ip>:8000/auth/login \
+     -d 'username=admin&password=yourpassword'
+
+# Then use it
+curl -b cookies.txt http://<pi-ip>:8000/api/zones
+```
+
+Note that `/auth/login` takes form fields, not JSON.
+
+### Reading
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | Health check. The only endpoint that does not need a login. |
+| `GET /api/status` | Connection status, demo mode, away schedule and the timezone in use |
+| `GET /api/capabilities` | Which features work in the current mode (see [What works with a real hub](#what-works-with-a-real-hub-and-what-does-not)) |
+| `GET /api/zones` | All zones with current status |
+| `GET /api/zones/{zone_id}/schedule` | One zone's weekly schedule |
+| `GET /api/week_profiles` | Week profiles as the hub stores them |
+| `GET /api/devices` | All devices, with their friendly names and zone assignment |
+| `GET /api/hub/config` | Current hub connection settings |
+| `GET /api/log` | Recent commands sent to and received from the hub |
+| `GET /api/global-mode/away-schedule` | The current holiday period, if any |
+| `WS /ws` | Live updates. Pushes the current zones on connect, then again whenever anything changes. |
+
+### Controlling
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/zones/{zone_id}/override/{mode}` | Set one zone to `comfort`, `eco`, `away` or `normal` |
+| `POST /api/global/override/{mode}` | Set every zone at once. Here `home` is accepted as another word for `normal`; on the per-zone endpoint above it is not. |
+| `POST /api/zones/{zone_id}/temperature` | Set `comfort` and/or `eco` for a zone |
+| `PUT /api/zones/{zone_id}` | Rename a zone or change its icon |
+| `PUT /api/global-mode/away-schedule` | Set the holiday period |
+| `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
+| `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
+
+### Administration
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /auth/login` / `POST /auth/logout` | Start and end a session |
+| `GET /auth/me` | Who you are logged in as |
+| `POST /auth/change-password`, `POST /auth/rename` | Your own account |
+| `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
+| `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
+| `POST/PUT/PATCH/DELETE /api/zones`, `/api/devices/...` | Zone and device management — **demo mode only**, see the capability table above |
+
+### If a request fails
+
+The reason is always in the `detail` field, and the status code tells you what
+kind of problem it is:
+
+| Code | Meaning |
+| --- | --- |
+| `400` | The request itself was wrong — for example an eco temperature above the comfort temperature |
+| `401` | Not logged in, or the session expired |
+| `403` | Logged in, but this needs an admin |
+| `404` | No such zone or device |
+| `501` | The feature is not available against a real hub — use the official Nobø app |
+| `503` | The hub is not reachable right now |
+
+### Letting other systems in without a login
+
+If you want Home Assistant or a script to read and control the heating without
+handling a password, set `NOBO_ALLOW_ANON_API=true` in `.env` and restart. That
+opens every `/api/...` address and the live-update connection to anyone who can
+reach the Pi, so only do it on a network where you trust every device. Logging
+in still works as normal, and the admin-only endpoints stay admin-only.
+
+## Testing
+
+The tests run in demo mode and need no hub, no network and no Raspberry Pi.
+
+```bash
+cd /opt/nobo-control          # or wherever you cloned it
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Run one file, or one test, while working on something:
+
+```bash
+python -m pytest tests/test_capabilities.py
+python -m pytest tests/test_temperature_validation.py -k rounding
+```
+
+Run them from the repository root. `pytest.ini` there tells pytest where the
+application code and the tests live, so the command above works regardless of
+which subdirectory you cloned into.
+
+One message in the output is expected and harmless: a
+`PynoboConnectionError: Failed to connect to Nobø Ecohub at 192.0.2.10`
+traceback. A test deliberately points the application at an address that cannot
+answer, to check it survives an unreachable hub.
+
+To run them the same way the application does, in the container image:
+
+```bash
+cd /opt/nobo-control
+docker compose build
+docker run --rm --user root -v "$PWD":/src -w /src \
+  nobo-control-nobo-web-control:latest \
+  sh -c 'pip install -q -r requirements-dev.txt && python -m pytest'
+```
+
+`--user root` is needed because the image runs as an unprivileged user that
+does not own your checkout.
+
+## Timezone
+
+Week schedules and away periods are wall-clock times: "07:00" means seven in
+the morning where the Pi is, not in UTC. Containers default to UTC, so the
+container is given the Pi's own clock settings (`/etc/localtime` and
+`/etc/timezone` are mounted read-only in `compose.yml`).
+
+Check which timezone is actually in use:
+
+```bash
+curl -b cookies.txt http://localhost:8000/api/status
+```
+
+Look at the `timezone` field. It is also written to the log at startup. If it
+says `UTC` when it should not, fix the Pi's own timezone and restart:
+
+```bash
+sudo timedatectl set-timezone Europe/Oslo
+sudo systemctl restart nobo-control
+```
+
+Do not set a `TZ` variable in `.env`. An empty `TZ` is treated as UTC and
+overrides the mounted files, which is exactly the bug this avoids.
 
 ## Security Notes
 
-- This system is designed for use on a trusted local network only
-- Do not expose port 8000 to the internet without a reverse proxy and TLS
-- Change the default admin password immediately after first login
-- The web UI requires login; API endpoints are open for local integrations
-- User passwords are stored with bcrypt hashing
+- **This system is for a trusted local network only.** There is no HTTPS: the
+  login password and session cookie travel across your network in plain text.
+  Anyone able to watch that traffic can read them. On a home network behind a
+  router this is a normal trade-off; on a shared or public network it is not.
+- **Do not forward port 8000 from your router.** If you need access from
+  outside the house, use a VPN back into your network, or put a reverse proxy
+  such as Caddy or nginx in front of it to terminate TLS and reach the
+  application over `http://localhost:8000`. Exposing it directly puts your
+  heating, and a plain-text password, on the public internet.
+- **Change the default `admin` / `nobohub` password immediately.** It is
+  published here and in every copy of this repository.
+- Every API address and the live-update connection require a login, unless you
+  deliberately turn that off with `NOBO_ALLOW_ANON_API` (see above).
+- Repeated failed logins from the same address are temporarily locked out.
+- Passwords are stored as bcrypt hashes, never in plain text.
+- The application runs as an unprivileged user inside the container, so a flaw
+  reachable from a web request does not get root on the Pi. The container does
+  share the Pi's network (`network_mode: host`), which is required to reach the
+  hub, so it is not isolated from your LAN.
+- The data volume holds your user accounts. Treat a backup of it like a
+  password file.
 
 ## License
 
