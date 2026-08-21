@@ -2,9 +2,11 @@
 
 **Status: design exploration for review. Nothing here is merged, and `main` is untouched.**
 
-This document accompanies three working, interactive prototypes built against the real API and
-real zone data. It covers the analysis of the current interface, the problems found, the three
-concepts, a comparison, a recommendation, and what each option would cost to build properly.
+This document accompanies four working, interactive prototypes built against the real API and real
+zone data. It covers the analysis of the current interface, the problems found, the first three
+concepts, a comparison and a recommendation — and then **Concept D**, a fourth design that
+reorders the interface around how a cabin is actually used. Concept D is the current direction;
+sections A–H describe how it was arrived at.
 
 ---
 
@@ -14,6 +16,7 @@ concepts, a comparison, a recommendation, and what each option would cost to bui
 - [A. Analysis of the existing UI](#a-analysis-of-the-existing-ui)
 - [B. UX problems found](#b-ux-problems-found)
 - [C. The three concepts](#c-the-three-concepts)
+- [I. Concept D — Cabin](#i-concept-d--cabin) — the current direction
 - [E. Comparison](#e-comparison)
 - [F. Recommendation](#f-recommendation)
 - [G. Implementation considerations](#g-implementation-considerations)
@@ -43,6 +46,7 @@ Then log in as usual and open:
 | Concept A — At a Glance | `http://<pi>:8000/static/concepts/a/index.html` |
 | Concept B — Room First | `http://<pi>:8000/static/concepts/b/index.html` |
 | Concept C — Heating Board | `http://<pi>:8000/static/concepts/c/index.html` |
+| Concept D — Cabin | `http://<pi>:8000/static/concepts/d/index.html` |
 
 The current application is unchanged and still lives at `/`.
 
@@ -63,11 +67,130 @@ sudo bash scripts/update.sh
 
 ### What the prototypes deliberately do not cover
 
-Each concept covers everyday control: seeing the house, seeing a room, changing a mode, changing a
-temperature, and reading today's schedule. Hub setup, user management, device management, zone
-renaming, weekly schedule *editing* and the command log are out of scope for a design exploration
-and link back to the current app. Every concept says so on screen rather than pretending the
-feature is missing.
+Concepts A, B and C cover everyday control: seeing the house, seeing a room, changing a mode,
+changing a temperature, and reading today's schedule. Hub setup, user management, device
+management, zone renaming, weekly schedule *editing* and the command log are out of scope for
+those three and link back to the current app. Every concept says so on screen rather than
+pretending the feature is missing.
+
+Concept D goes further and covers device management, zone renaming and hub setup directly,
+because the brief that produced it named those as primary. Weekly schedule *editing* and user
+management still link back to the current app.
+
+---
+
+## I. Concept D — Cabin
+
+Concept D is a fourth design, made after reviewing A, B and C. It is not a refinement of them; it
+reorders the whole interface around a different premise.
+
+### The premise
+
+A Nobø system in a cabin is not used like a system in a house. The cabin stands empty most of the
+year. The owner does not open the app to fine-tune the living room — they open it to say *I am
+leaving* or *I am coming back*, and they want the place warm when they arrive.
+
+So the interface is built around the **trip**, not the thermostat.
+
+### What changed, and why
+
+| Decision | Reasoning |
+| --- | --- |
+| The away period is the hero, above everything | It is the most frequent and highest-value action for a cabin. Previously it was buried in a collapsed panel in settings. |
+| Framed as "I'm leaving" / "I'm back now" rather than "away schedule" | People think in trips, not in schedule windows. The window is still what gets saved; only the language changed. |
+| **Set** temperature is the big number; measured temperature sits under it | What you control should be more prominent than what you observe. A, B and C had this the wrong way round. |
+| Rooms with dial-only heaters lead with the mode they are running, not a temperature | See below — this was a correctness fix, not a styling one. |
+| Whole-cabin modes are one row, directly under the trip | Still one tap, but clearly secondary to the trip. |
+| System status is collapsed at the bottom | Useful, occasionally. Never the reason you opened the app. |
+| Settings lead with hub connection and demo mode | Those are what actually get changed. Everything else is rare. |
+| Installable on a phone home screen | A cabin is controlled from a phone, usually just before leaving or arriving. |
+
+### Manual (dial-only) heaters
+
+The API reports two separate facts per zone:
+
+- `supports_temp_adjust` — **any** heater in the room can be set remotely
+- `has_manual_devices` — **at least one** heater cannot
+
+Both can be true at once, so a room can be mixed. Concept D distinguishes all three cases:
+
+| Room | Shown as |
+| --- | --- |
+| All heaters adjustable | `SET TO 21.0°C`, with a working `+` / `−` |
+| Some heaters dial-only | `SET TO 21.0°C`, plus a **Some dial-only** badge |
+| No heater adjustable | `RUNNING · Comfort` and *"Dial sets the temperature"*, with the stepper removed |
+
+The third case matters. Such a room still reports a `comfort_temperature` over the API, and every
+earlier design — including the production UI — displays it as though it were a setpoint. Nothing
+in the system can act on it. Concept D refuses to print a number the hardware cannot honour, and
+says where the temperature really comes from instead. Per device, the same distinction is repeated
+in the room's heater list as **Adjustable** or **Dial on heater**.
+
+### How the away period actually works
+
+This is worth stating precisely, because the UI makes a promise on the system's behalf.
+
+`PUT /api/global-mode/away-schedule` stores a **window**. While the clock is inside that window
+the whole cabin is forced to Away. At the end of the window the cabin returns to Home and every
+room resumes its own weekly schedule.
+
+That has a useful consequence: *warming up before you arrive* is not a separate feature. It is
+just ending the window a few hours earlier than you actually arrive. So the sheet asks when you
+are back, offers a head start of 0–24 hours, subtracts it, and then states the resulting time in
+plain words — "Heating resumes Sun 24 Aug, 14:00" — rather than leaving you to work it out.
+
+Datetimes are sent as absolute ISO instants. The server treats a naive datetime as UTC, so a local
+wall-clock string sent unqualified would silently shift the schedule by the UTC offset. The
+`Nobo.toIsoInstant()` helper converts the local date and time inputs to an absolute instant first.
+
+### Honest capability handling
+
+Adding a heater needs the hub's radio to find nearby devices, which is unavailable in demo mode.
+Rather than offering a control that fails, the flow reads `GET /api/capabilities` and, when
+`features.discover_devices.supported` is false, shows the hub's own stated reason and a route into
+settings. The serial-entry path is still offered when discovery is supported.
+
+### Install on a phone home screen
+
+Concept D ships a web app manifest, a maskable icon, an Apple touch icon, `theme-color`, standalone
+display and safe-area padding for the notch and home indicator.
+
+**On iPhone:** open the concept in Safari, tap Share, then **Add to Home Screen**. It launches
+without Safari's chrome and keeps its own session.
+
+**On Android/Chrome:** the same, via the browser menu's *Install app*.
+
+One caveat, and it is why no backend change was needed. `/static` sits behind the session auth, so
+the manifest is requested with `crossorigin="use-credentials"`, which is the documented way to
+fetch a manifest inside an authenticated session. iOS reads `apple-touch-icon` from the page itself
+in the same authenticated context, so iPhone installs cleanly. If a future Android build ever fails
+to pick up the manifest icons, the fix is to add `/static/concepts/d/manifest.webmanifest` and the
+icon files to `PUBLIC_PATHS` in `app/server.py`. **That change has not been made**, because the
+brief rules out backend changes and iOS — the platform actually asked for — does not need it.
+
+### Visual language
+
+Warm paper, deep pine and a single amber accent for heat, with a cool blue reserved for saving and
+red kept strictly for genuine errors. Flat surfaces, one strong rule down the left of the hero
+card, and no gradients or glass.
+
+It is deliberately not modelled on Netatmo or Mill. Both were looked at as competent examples of
+the category and then set aside; the trip-led structure, the paper-and-pine palette and the roof
+mark are this product's own.
+
+### Device pictures
+
+Unchanged as a requirement and unchanged in practice. Each room row carries up to three device
+thumbnails at 58×30 and the room's heater list shows them at 112×58 — against the production UI's
+44×44 box, which letterboxes roughly 2:1 artwork down to about 44×22. They are never swapped for
+generic icons.
+
+### What Concept D does not do
+
+- It does not **edit** weekly schedules; it renders them read-only and links back to the main app.
+- It does not manage users; that also links back.
+- It cannot show whether an element is genuinely drawing power, because the API does not report it.
+  Heating is inferred from measured versus target temperature and is labelled as an estimate.
 
 ---
 
@@ -473,10 +596,24 @@ app/static/concepts/shared/base.css     reset, palette, device plinth, toasts
 app/static/concepts/a/{index.html,a.css,a.js}
 app/static/concepts/b/{index.html,b.css,b.js}
 app/static/concepts/c/{index.html,c.css,c.js}
+app/static/concepts/d/{index.html,d.css,d.js}
+app/static/concepts/d/manifest.webmanifest
+app/static/concepts/d/icon.svg
+app/static/concepts/d/icon-180.png       apple touch icon
+app/static/concepts/d/icon-192.png
+app/static/concepts/d/icon-512.png
+app/static/concepts/d/icon-maskable.png
+app/static/concepts/d/make_icons.py      regenerates the icons above
 docs/UI_REDESIGN.md                     this document
 ```
 
-**Files modified:** none, other than a pointer added to `README.md`.
+**Files modified:** `app/static/concepts/index.html` (Concept D added to the chooser),
+`app/static/concepts/shared/core.js` (additive only — away-schedule, hub-config, device, zone and
+week-profile calls, plus date and manual-device helpers; concepts A, B and C are unaffected), and a
+pointer added to `README.md`.
+
+`app/static/concepts/d/make_icons.py` is a build-time helper for regenerating the app icons. It is
+never imported by the application and never runs on the Pi.
 
 **Backend or functional behaviour changed:** none. No Python file was touched. No route, request
 shape, response shape, data model, authentication rule, configuration mechanism or hub
@@ -505,3 +642,32 @@ Defects found and fixed during that pass: Concept C hid every device thumbnail b
 temperatures were drawn as an em dash at display size, which read as a black bar; and the `hidden`
 attribute was being overridden by component `display` rules, leaving Concept B's sheet permanently
 on screen and swallowing clicks.
+
+### Verification performed for Concept D
+
+Concept D was deployed to the same Pi and tested the same way, with 40 assertions covering desktop
+and mobile. All pass. In addition to the checks above:
+
+- The away period was set through the UI, confirmed saved via `GET /api/global-mode/away-schedule`,
+  the timeline confirmed to appear, then cleared again so the device was left exactly as found.
+- The setpoint stepper was confirmed to write to `/api/zones/{id}/temperature`, read back from
+  `/api/zones`, then restored to its original value.
+- Rooms the API reports as having dial-only heaters were confirmed to be labelled as such in the
+  UI, matched one for one against `has_manual_devices`.
+- The set temperature was measured as more than 1.8× the type size of the measured temperature.
+- The manifest and all five icons return 200 inside an authenticated session, and the manifest is
+  `standalone` with at least two icons.
+- Every heater in a room's list states whether it is adjustable or dial-only.
+- The weekly schedule renders all seven days; add, move and remove are present.
+- No horizontal scrolling on a 390px viewport; every button meets the 44px touch minimum.
+
+Defects found and fixed during that pass:
+
+1. **A room whose heaters are all dial-only displayed a set temperature.** The API returns a
+   `comfort_temperature` for such a room, but nothing in the system can act on it. It now leads
+   with the mode it is running and states that the dial sets the temperature, and the stepper is
+   removed rather than shown permanently disabled.
+2. **Touch targets below 44px.** Steppers and icon buttons are raised on narrow screens and under a
+   coarse pointer.
+3. **The room name was a 23px tap target.** Its hit area now covers the whole room card, with the
+   stepper layered above so adjusting a temperature still does not open the room.

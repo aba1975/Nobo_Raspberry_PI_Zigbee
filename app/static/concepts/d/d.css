@@ -344,7 +344,9 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .9rem;
   padding: .7rem; border: 1px solid var(--rule); border-radius: var(--radius-sm);
 }
-.dev .np-device { width: 76px; height: 40px; }
+/* This is where you check you are looking at the right piece of hardware,
+   so the picture is given real size rather than a thumbnail. */
+.dev .np-device { width: 112px; height: 58px; }
 .dev-name { font-weight: 620; }
 .dev-meta { font-size: .78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .dev-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }

@@ -994,15 +994,21 @@ Nobo_Raspberry_PI/
 
 ## Design Exploration (Not Part of `main`)
 
-A UI/UX redesign exploration lives on the `ui-redesign-exploration` branch. It adds three working,
+A UI/UX redesign exploration lives on the `ui-redesign-exploration` branch. It adds four working,
 interactive design concepts as extra pages under `/static/concepts/`, built against the real API so
 they can be compared side by side on a real device.
+
+Concepts A, B and C explore three different ways to present the existing interface. **Concept D
+("Cabin")** is the current direction: it reorders the interface around the away period, because a
+cabin stands empty most of the year. It leads with "I'm leaving" and "I'm back", shows the
+temperature a room is *set* to as the headline with the measured temperature underneath, flags
+heaters whose temperature can only be turned by hand, and installs on an iPhone home screen.
 
 It is a **design exploration for review, not a proposed change.** It has not been merged, it does
 not alter the current interface, and it changes no backend, API, data-model or authentication
 behaviour.
 
-The write-up — analysis of the current UI, the usability problems found, the three concepts, a
+The write-up — analysis of the current UI, the usability problems found, the concepts, a
 comparison and a recommendation — is in [`docs/UI_REDESIGN.md`](docs/UI_REDESIGN.md) on that
 branch, along with instructions for trying the prototypes and switching back.
 
