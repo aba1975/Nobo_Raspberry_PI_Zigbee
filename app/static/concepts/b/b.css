@@ -1,0 +1,408 @@
+/*
+ * Concept B - "Room First"
+ *
+ * Design philosophy: the application behaves like the thermostat itself. One
+ * room fills the screen. The device you are controlling is shown as a real
+ * object at real size, and the target temperature is set on a dial, the way
+ * it would be on the wall.
+ *
+ * Visual language: a dark, calm "appliance" surface so the warm dial and the
+ * hardware image read as the two objects on screen. Deliberately low
+ * chrome - no cards inside cards, no borders where space will do.
+ */
+
+:root {
+  --bg:        #0F1317;
+  --panel:     #171C22;
+  --panel-2:   #1E242B;
+  --line:      #2A3138;
+  --ink:       #F2F5F7;
+  --ink-2:     #A7B2BD;
+  --ink-3:     #76818C;
+  --radius:    18px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ---------- Room rail ----------
+ *
+ * Navigation is lateral, not hierarchical. Every room, its temperature and
+ * its state are legible from the rail, so the switcher doubles as a compact
+ * overview and the user is never more than one tap from any room.
+ */
+
+.rail {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 30;
+}
+
+.rail-track {
+  display: flex; gap: var(--sp-2);
+  overflow-x: auto; scroll-behavior: smooth;
+  scrollbar-width: none; flex: 1;
+  scroll-snap-type: x proximity;
+}
+.rail-track::-webkit-scrollbar { display: none; }
+
+.rail-arrow {
+  display: grid; place-items: center;
+  width: 40px; height: 44px; border-radius: 12px;
+  background: var(--panel-2); color: var(--ink-2);
+  font-size: 22px; line-height: 1; flex-shrink: 0;
+}
+.rail-arrow:hover { background: #29313A; color: var(--ink); }
+.rail-arrow:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.rail-chip {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 9px 14px; border-radius: 12px;
+  background: var(--panel-2); color: var(--ink-2);
+  white-space: nowrap; flex-shrink: 0; min-height: 56px;
+  scroll-snap-align: center;
+  border: 1px solid transparent;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.rail-chip:hover { background: #29313A; }
+
+.rail-chip[aria-selected="true"] {
+  background: #2C353E; color: var(--ink); border-color: #3E4956;
+}
+
+.rail-chip-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+
+.rail-chip-temp {
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; gap: 5px;
+}
+
+.rail-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--st-unknown); }
+.rail-chip[data-heat="heating"] .rail-chip-dot { background: var(--st-heating); }
+.rail-chip[data-heat="holding"] .rail-chip-dot { background: var(--st-holding); }
+
+/* ---------- Stage ---------- */
+
+.stage {
+  flex: 1;
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-4) var(--sp-7);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-7);
+  align-items: center;
+}
+
+.stage-loading, .stage-error {
+  grid-column: 1 / -1; text-align: center; color: var(--ink-2); padding: var(--sp-8) 0;
+}
+.stage-error { color: #F2B5AF; }
+
+/* ---------- Left: the physical device ----------
+ *
+ * This is the concept's answer to "which thermostat am I controlling". The
+ * artwork gets a lit stage, its real proportions, and the identifying
+ * details next to it rather than a 44px thumbnail on a settings page.
+ */
+
+.hardware { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+.room-title {
+  display: flex; align-items: center; gap: var(--sp-3);
+  font-size: clamp(26px, 3.4vw, 38px); font-weight: 640; letter-spacing: -0.025em;
+}
+.room-title .room-icon { font-size: 0.8em; }
+
+.room-sub { color: var(--ink-2); font-size: 15px; margin-top: -6px; }
+
+.device-stage {
+  background:
+    radial-gradient(ellipse at 50% 88%, rgba(224, 138, 46, 0.13), rgba(0, 0, 0, 0) 62%),
+    linear-gradient(165deg, #222A32 0%, #171D23 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-4);
+}
+
+.device-stage .np-device {
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  background: transparent;
+  height: auto;
+}
+
+.device-stage .np-device img {
+  filter: invert(1) hue-rotate(180deg) brightness(1.2) contrast(0.95);
+  mix-blend-mode: screen;
+}
+
+.device-facts { display: flex; flex-wrap: wrap; gap: var(--sp-4) var(--sp-5); }
+.fact-k { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+.fact-v { font-size: 15px; font-weight: 580; font-variant-numeric: tabular-nums; }
+
+/* Several devices in one room: small selectable thumbnails under the stage. */
+.device-picker { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+.device-thumb {
+  padding: 6px; border-radius: 10px; background: var(--panel-2);
+  border: 1px solid transparent; width: 78px;
+}
+.device-thumb[aria-pressed="true"] { border-color: var(--st-heating); background: #2A3039; }
+.device-thumb .np-device { width: 100%; aspect-ratio: 2 / 1; height: auto; background: transparent; }
+.device-thumb .np-device img { filter: invert(1) hue-rotate(180deg) brightness(1.2); mix-blend-mode: screen; }
+.device-thumb span { display: block; font-size: 10px; color: var(--ink-3); margin-top: 3px; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Right: the dial ---------- */
+
+.control { display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); }
+
+.dial-wrap { position: relative; width: min(360px, 82vw); }
+
+.dial { width: 100%; height: auto; display: block; touch-action: none; cursor: pointer; }
+
+.dial-track    { stroke: #2A323A; }
+.dial-progress { stroke: var(--st-heating); transition: stroke-dasharray 120ms linear; }
+.dial-progress[data-mode="eco"]  { stroke: var(--st-eco); }
+.dial-progress[data-mode="away"] { stroke: var(--st-away); }
+.dial-handle   { fill: #FFFFFF; stroke: #0F1317; stroke-width: 3; }
+.dial-current  { stroke: var(--ink-2); stroke-width: 3; stroke-linecap: round; }
+.dial-tick     { stroke: #39424C; stroke-width: 2; stroke-linecap: round; }
+.dial-tick-label { fill: var(--ink-3); font-size: 11px; font-weight: 600; }
+
+.dial:focus-visible { outline: none; }
+.dial:focus-visible .dial-handle { stroke: #66A6FF; stroke-width: 4; }
+
+/* The readout lives inside the dial, where the eye already is. */
+.dial-readout {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none; gap: 2px;
+}
+
+.dial-now {
+  font-size: clamp(52px, 11vw, 72px); font-weight: 620; letter-spacing: -0.04em;
+  line-height: 1; font-variant-numeric: tabular-nums;
+}
+.dial-now .deg { font-size: 0.38em; font-weight: 550; color: var(--ink-2); letter-spacing: 0; }
+
+.dial-caption { font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+
+.dial-target { font-size: 17px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.dial-target b { color: var(--ink); font-weight: 640; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 620;
+  background: #262E36; color: var(--ink-2);
+}
+.chip-glyph { font-size: 9px; }
+.chip[data-heat="heating"] { background: rgba(224, 138, 46, 0.17); color: #F0B269; }
+.chip[data-heat="holding"] { background: rgba(91, 122, 153, 0.20); color: #A8C2DA; }
+
+/* Fine adjustment beside the dial, for a mouse and for keyboards. */
+.nudge { display: flex; align-items: center; gap: var(--sp-4); }
+
+.nudge-btn {
+  width: 54px; height: 54px; border-radius: 50%;
+  background: var(--panel-2); color: var(--ink);
+  font-size: 26px; line-height: 1; display: grid; place-items: center;
+}
+.nudge-btn:hover { background: #29313A; }
+.nudge-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.setpoint-switch { display: flex; gap: 3px; background: var(--panel-2); border-radius: 11px; padding: 3px; }
+.setpoint-switch button {
+  padding: 7px 15px; border-radius: 9px; font-size: 13px; font-weight: 580; color: var(--ink-2); min-height: 38px;
+}
+.setpoint-switch button[aria-pressed="true"] { background: #333C46; color: var(--ink); }
+
+.locked-msg {
+  background: var(--panel-2); border-radius: 12px; padding: var(--sp-3) var(--sp-4);
+  font-size: 14px; color: var(--ink-2); text-align: center; max-width: 360px;
+}
+
+/* ---------- Modes and schedule ---------- */
+
+.below { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--sp-5); }
+
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); max-width: 560px; }
+
+.mode-btn {
+  padding: 13px 6px; border-radius: 13px;
+  background: var(--panel-2); color: var(--ink-2);
+  font-size: 14px; font-weight: 580;
+  display: flex; flex-direction: column; align-items: center; gap: 5px; min-height: 64px;
+}
+.mode-btn:hover { background: #29313A; }
+.mode-btn .mb-glyph { font-size: 10px; }
+
+.mode-btn[aria-pressed="true"] { background: #333C46; color: var(--ink); box-shadow: inset 0 0 0 2px var(--st-holding); }
+.mode-btn[aria-pressed="true"][data-mode="comfort"] { box-shadow: inset 0 0 0 2px var(--st-heating); color: #F0B269; }
+.mode-btn[aria-pressed="true"][data-mode="eco"]     { box-shadow: inset 0 0 0 2px var(--st-eco);     color: #7CD3A8; }
+.mode-btn[aria-pressed="true"][data-mode="away"]    { box-shadow: inset 0 0 0 2px var(--st-away);    color: #9AC4EC; }
+
+.block-label { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-bottom: var(--sp-3); }
+
+.timeline { position: relative; height: 40px; border-radius: 10px; overflow: hidden; display: flex; background: var(--panel-2); }
+.timeline-seg { height: 100%; display: grid; place-items: center; font-size: 10px; color: rgba(255,255,255,0.75); overflow: hidden; }
+.timeline-seg[data-mode="comfort"] { background: rgba(224, 138, 46, 0.42); }
+.timeline-seg[data-mode="eco"]     { background: rgba(46, 158, 107, 0.38); }
+.timeline-seg[data-mode="away"]    { background: rgba(74, 143, 209, 0.38); }
+.timeline-seg[data-mode="off"]     { background: rgba(138, 148, 160, 0.30); }
+.timeline-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.timeline-legend { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); margin-top: 5px; }
+.next-change { font-size: 15px; color: var(--ink-2); margin-top: var(--sp-3); }
+.next-change b { color: var(--ink); }
+
+.note { font-size: 12px; color: var(--ink-3); line-height: 1.55; }
+
+.link-btn {
+  display: inline-block; padding: 11px 16px; border-radius: 11px;
+  background: var(--panel-2); color: var(--ink); font-size: 14px; font-weight: 560; text-decoration: none;
+}
+.link-btn:hover { background: #29313A; }
+
+/* ---------- Dock ---------- */
+
+.dock {
+  position: sticky; bottom: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.dock-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-radius: 12px;
+  background: var(--panel-2); color: var(--ink); font-size: 14px; font-weight: 570;
+}
+.dock-btn:hover { background: #29313A; }
+.dock-glyph { font-size: 14px; }
+
+.dock-conn { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-3); }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-unknown); }
+.dock-conn.is-live .conn-dot { background: var(--st-eco); }
+.dock-conn.is-offline .conn-dot { background: var(--st-error); }
+
+/* ---------- Sheet ---------- */
+
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); }
+
+.sheet {
+  position: fixed; z-index: 60; left: 50%; bottom: 0; transform: translateX(-50%);
+  width: min(720px, 100%); max-height: 88vh;
+  background: var(--panel);
+  border: 1px solid var(--line); border-bottom: none;
+  border-top-left-radius: 20px; border-top-right-radius: 20px;
+  display: flex; flex-direction: column;
+  animation: sheet-up 200ms cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+@keyframes sheet-up { from { transform: translate(-50%, 26px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+.sheet-inner { overflow-y: auto; padding: var(--sp-5); padding-bottom: calc(var(--sp-7) + env(safe-area-inset-bottom)); }
+
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.sheet-head h2 { font-size: 20px; font-weight: 640; letter-spacing: -0.02em; }
+
+.close-btn { width: 40px; height: 40px; border-radius: 11px; background: var(--panel-2); color: var(--ink-2); font-size: 18px; display: grid; place-items: center; }
+.close-btn:hover { background: #29313A; color: var(--ink); }
+
+/* Overview inside the sheet: the breadth this concept trades away, on demand. */
+.mini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-3); }
+
+.mini {
+  text-align: left; padding: var(--sp-3); border-radius: 13px;
+  background: var(--panel-2); border-left: 3px solid var(--st-unknown);
+}
+.mini:hover { background: #29313A; }
+.mini[data-heat="heating"] { border-left-color: var(--st-heating); }
+.mini[data-heat="holding"] { border-left-color: var(--st-holding); }
+.mini-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-temp { font-size: 26px; font-weight: 630; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.mini-temp .deg { font-size: 14px; color: var(--ink-2); font-weight: 550; }
+.mini-sub { font-size: 12px; color: var(--ink-3); }
+
+.segmented { display: flex; background: var(--panel-2); border-radius: 12px; padding: 3px; gap: 3px; }
+.segmented button { flex: 1; padding: 11px 8px; border-radius: 10px; font-size: 14px; font-weight: 570; color: var(--ink-2); min-height: 44px; }
+.segmented button[aria-pressed="true"] { background: #333C46; color: var(--ink); }
+
+.kv { display: flex; justify-content: space-between; gap: var(--sp-4); padding: 7px 0; font-size: 14px; border-bottom: 1px solid var(--line); }
+.kv:last-child { border-bottom: none; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; font-weight: 570; text-align: right; }
+
+/* ---------- Responsive ----------
+ *
+ * On a phone the two halves stack with the dial first: the control is what
+ * you came for, and the hardware picture confirms it just below without
+ * costing you the fold.
+ */
+
+@media (max-width: 900px) {
+  .stage {
+    grid-template-columns: 1fr;
+    gap: var(--sp-5);
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    align-items: start;
+  }
+  .control { order: 1; }
+  .hardware { order: 2; }
+  .below { order: 3; }
+  .room-title { font-size: 24px; }
+  .device-stage { padding: var(--sp-4); }
+  .modes { max-width: none; }
+  .rail-arrow { display: none; }
+}
+
+@media (max-width: 420px) {
+  .modes { grid-template-columns: repeat(2, 1fr); }
+  .nudge-btn { width: 50px; height: 50px; }
+}
+
+/* ---------- Light mode ----------
+ * The concept is designed dark, but a daylight variant keeps it usable in a
+ * bright room rather than forcing a dark screen on the wall in the morning.
+ */
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #EEF0F3; --panel: #FFFFFF; --panel-2: #F0F2F5; --line: #DEE2E7;
+    --ink: #161B21; --ink-2: #59636D; --ink-3: #838D97;
+  }
+  .rail-chip[aria-selected="true"] { background: #E3E7EC; border-color: #C9D1D9; }
+  .rail-arrow:hover, .nudge-btn:hover, .dock-btn:hover, .mode-btn:hover,
+  .device-thumb:hover, .mini:hover, .link-btn:hover, .close-btn:hover { background: #E5E9ED; }
+  .device-stage {
+    background: radial-gradient(ellipse at 50% 92%, rgba(224,138,46,0.10), rgba(0,0,0,0) 60%),
+                linear-gradient(165deg, #FBFCFD 0%, #EDF1F5 100%);
+  }
+  .device-stage .np-device img,
+  .device-thumb .np-device img { filter: contrast(1.35) saturate(0.9); mix-blend-mode: multiply; }
+  .dial-track { stroke: #DDE2E8; }
+  .dial-handle { stroke: #FFFFFF; fill: #161B21; }
+  .dial-tick { stroke: #C7CFD7; }
+  .mode-btn[aria-pressed="true"] { background: #E3E7EC; }
+  .segmented button[aria-pressed="true"], .setpoint-switch button[aria-pressed="true"] { background: #FFFFFF; box-shadow: 0 1px 3px rgba(0,0,0,0.14); }
+  .chip[data-heat="heating"] { background: var(--st-heating-soft); color: var(--st-heating-ink); }
+  .chip[data-heat="holding"] { background: var(--st-holding-soft); color: var(--st-holding-ink); }
+  .timeline-seg { color: rgba(0,0,0,0.6); }
+  .timeline-now { background: #161B21; }
+  .scrim { background: rgba(20, 26, 32, 0.44); }
+}

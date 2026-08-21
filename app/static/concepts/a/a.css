@@ -1,0 +1,616 @@
+/*
+ * Concept A - "At a Glance"
+ *
+ * Design philosophy: the house is one screen. Every room is a tile carrying
+ * its measured temperature at display size, its heating state as words plus
+ * colour plus shape, and a picture of the actual hardware in it. Comparing
+ * rooms is the primary job; controlling one room is a second, deliberate
+ * step in a drawer.
+ *
+ * Visual language: calm paper-grey background, white cards, one accent per
+ * card driven by state. No gradients for decoration, no glass, no shadows
+ * beyond a soft lift on interactive surfaces.
+ */
+
+:root {
+  --bg:        #F4F5F7;
+  --surface:   #FFFFFF;
+  --line:      #E3E6EA;
+  --line-soft: #EEF0F3;
+  --ink:       #1C2229;
+  --ink-2:     #5A646F;
+  --ink-3:     #8A939D;
+  --radius:    14px;
+  --radius-sm: 10px;
+  --lift:      0 1px 2px rgba(16, 24, 32, 0.05), 0 4px 12px rgba(16, 24, 32, 0.05);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.wrap { width: min(1240px, 100%); margin: 0 auto; padding: 0 var(--sp-4); }
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(244, 245, 247, 0.94);
+  backdrop-filter: saturate(1.4) blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 60px;
+}
+
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+
+.brand-mark {
+  width: 12px; height: 12px; border-radius: 3px;
+  background: var(--st-heating);
+  box-shadow: 0 0 0 4px var(--st-heating-soft);
+}
+
+.brand-text { font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
+
+.topbar-right { display: flex; align-items: center; gap: var(--sp-3); }
+
+.conn {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; color: var(--ink-2); white-space: nowrap;
+}
+
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--st-unknown);
+}
+
+.conn.is-live    .conn-dot { background: var(--st-eco); }
+.conn.is-offline .conn-dot { background: var(--st-error); }
+
+.icon-btn {
+  display: grid; place-items: center;
+  width: 40px; height: 40px; border-radius: 10px;
+  color: var(--ink-2);
+}
+
+.icon-btn:hover { background: #E9EBEF; color: var(--ink); }
+
+/* ---------- House summary ---------- */
+
+.main { padding-top: var(--sp-5); padding-bottom: var(--sp-8); }
+
+.house {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--sp-5);
+  box-shadow: var(--lift);
+  margin-bottom: var(--sp-6);
+}
+
+/* The system state in one plain-English sentence, before any widgets. */
+.house-line {
+  font-size: clamp(18px, 2.4vw, 23px);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  max-width: 46ch;
+}
+
+.house-line em { font-style: normal; color: var(--st-heating-ink); }
+
+.house-stats {
+  display: flex; flex-wrap: wrap; gap: var(--sp-5);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line-soft);
+}
+
+.stat-k { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.stat-v { font-size: 20px; font-weight: 620; letter-spacing: -0.01em; }
+.stat-v small { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+
+.house-mode {
+  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line-soft);
+}
+
+.house-mode-label { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+
+/* Segmented control: four rare actions compressed to one control instead of
+   four full-width buttons and three lines of help text. */
+.segmented {
+  display: inline-flex;
+  background: #EDEFF2;
+  border-radius: 11px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.seg {
+  padding: 8px 16px;
+  border-radius: 9px;
+  font-size: 14px; font-weight: 560;
+  color: var(--ink-2);
+  min-height: 40px;
+}
+
+.seg:hover { color: var(--ink); }
+
+.seg[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(16, 24, 32, 0.14);
+}
+
+.seg[aria-pressed="true"][data-mode="eco"]     { color: var(--st-eco-ink); }
+.seg[aria-pressed="true"][data-mode="away"]    { color: var(--st-away-ink); }
+.seg[aria-pressed="true"][data-mode="comfort"] { color: var(--st-heating-ink); }
+
+.mode-mixed {
+  font-size: 13px; color: var(--ink-3);
+}
+
+/* ---------- Section head ---------- */
+
+.section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--sp-4); margin-bottom: var(--sp-4);
+}
+
+.section-head h2 { font-size: 15px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+
+.section-hint { font-size: 13px; color: var(--ink-3); }
+
+/* ---------- Room grid ---------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: var(--sp-4);
+}
+
+.tile {
+  position: relative;
+  display: flex; flex-direction: column;
+  text-align: left;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+  overflow: hidden;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 4px rgba(16, 24, 32, 0.06), 0 10px 24px rgba(16, 24, 32, 0.09);
+  border-color: #D4D9DF;
+}
+
+/* State is carried by an edge bar as well as by colour, so the tiles remain
+   distinguishable without colour vision. */
+.tile::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 4px;
+  background: var(--st-unknown);
+}
+
+.tile[data-heat="heating"]::before { background: var(--st-heating); }
+.tile[data-heat="holding"]::before { background: var(--st-holding); }
+
+.tile-body { padding: var(--sp-4) var(--sp-4) var(--sp-3) calc(var(--sp-4) + 4px); }
+
+.tile-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-3); margin-bottom: var(--sp-3);
+}
+
+.tile-name {
+  font-size: 17px; font-weight: 620; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+
+.tile-name .room-icon { font-size: 18px; line-height: 1; flex-shrink: 0; }
+.tile-name .room-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Heating state: colour + glyph + word. Never colour alone. */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 620; white-space: nowrap;
+  background: var(--st-off-soft); color: var(--st-off-ink);
+}
+
+.chip-glyph { font-size: 9px; line-height: 1; }
+
+.chip[data-heat="heating"] { background: var(--st-heating-soft); color: var(--st-heating-ink); }
+.chip[data-heat="holding"] { background: var(--st-holding-soft); color: var(--st-holding-ink); }
+
+.tile-temp { display: flex; align-items: baseline; gap: var(--sp-3); }
+
+/* The number the user came for, at a size they can read across a room. */
+.temp-now {
+  font-size: 46px; font-weight: 630; letter-spacing: -0.035em;
+  line-height: 1; font-variant-numeric: tabular-nums;
+}
+
+.temp-now .deg { font-size: 22px; font-weight: 560; color: var(--ink-2); letter-spacing: 0; }
+
+.temp-target {
+  font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+
+.temp-target b { font-weight: 620; color: var(--ink); }
+
+/* A quiet gap indicator: how far the room is from where it should be. */
+.gauge {
+  position: relative; height: 4px; border-radius: 2px;
+  background: var(--line); margin-top: var(--sp-3); overflow: hidden;
+}
+
+.gauge-fill { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--st-holding); }
+.tile[data-heat="heating"] .gauge-fill { background: var(--st-heating); }
+
+.tile-mode {
+  margin-top: var(--sp-3);
+  font-size: 13px; color: var(--ink-2);
+  display: flex; align-items: center; gap: 6px;
+}
+
+.dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--st-off); flex-shrink: 0;
+}
+.dot[data-mode="comfort"] { background: var(--st-heating); }
+.dot[data-mode="eco"]     { background: var(--st-eco); }
+.dot[data-mode="away"]    { background: var(--st-away); }
+.dot[data-mode="normal"]  { background: var(--st-holding); }
+
+/* ---------- Device band ----------
+ *
+ * The hardware picture is part of the room tile, not an afterthought at the
+ * bottom of a settings page. A wide plinth suits the 2:1 line art, and the
+ * model name sits beside it so the picture is identifiable even when small.
+ */
+
+.tile-devices {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-3) calc(var(--sp-4) + 4px);
+  border-top: 1px solid var(--line-soft);
+  background: #FAFBFC;
+}
+
+.tile-devices .np-device { width: 84px; height: 44px; }
+
+.device-meta { min-width: 0; }
+.device-model { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.device-count { font-size: 12px; color: var(--ink-3); }
+
+.tile-more {
+  margin-left: auto; color: var(--ink-3); font-size: 20px; line-height: 1; padding-left: var(--sp-2);
+}
+
+/* ---------- Skeletons and empty state ---------- */
+
+.skel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  height: 210px;
+  overflow: hidden;
+  position: relative;
+}
+
+.skel::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.75), transparent);
+  animation: shimmer 1.3s infinite;
+}
+
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+.empty, .errorbox {
+  grid-column: 1 / -1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--ink-2);
+}
+
+.errorbox { border-color: #F0C8C4; background: var(--st-error-soft); color: #7B2E28; }
+.errorbox h3 { font-size: 16px; margin-bottom: var(--sp-2); color: #5F231E; }
+
+/* ---------- Drawer ---------- */
+
+.scrim {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(18, 24, 30, 0.42);
+  animation: fade 140ms ease-out;
+}
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.drawer {
+  position: fixed; z-index: 60;
+  background: var(--surface);
+  display: flex; flex-direction: column;
+  top: 0; right: 0; bottom: 0;
+  width: min(480px, 100%);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 40px rgba(16, 24, 32, 0.16);
+  animation: slide-in 180ms cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.drawer-inner { overflow-y: auto; padding: var(--sp-5); padding-bottom: var(--sp-8); }
+
+.drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-3); margin-bottom: var(--sp-4);
+}
+
+.drawer-head h2 { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; }
+
+.close-btn {
+  display: grid; place-items: center;
+  width: 40px; height: 40px; border-radius: 10px;
+  color: var(--ink-2); font-size: 20px; flex-shrink: 0;
+}
+.close-btn:hover { background: #EDEFF2; color: var(--ink); }
+
+/* Device hero: the drawer is where "which thing am I controlling" is
+   answered properly, so the picture gets real space here. */
+.hero {
+  display: flex; align-items: center; gap: var(--sp-4);
+  background: #F7F9FB;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.hero .np-device { width: 132px; height: 68px; background: transparent; }
+.hero-meta .hero-model { font-size: 15px; font-weight: 620; }
+.hero-meta .hero-serial { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.readout {
+  display: flex; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+
+.readout-now { font-size: 64px; font-weight: 630; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.readout-now .deg { font-size: 28px; font-weight: 560; color: var(--ink-2); letter-spacing: 0; }
+
+.block {
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--sp-4);
+  margin-top: var(--sp-4);
+}
+
+.block h3 {
+  font-size: 12px; font-weight: 650; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-3);
+  margin-bottom: var(--sp-3);
+}
+
+/* ---------- Temperature slider ----------
+ *
+ * Chosen over +/- for the primary control: setting 19 to 22 is one gesture
+ * instead of six taps, and the scale shows the range at the same time.
+ * Steppers remain at either end for precision and for keyboard users.
+ */
+
+.setter { display: flex; align-items: center; gap: var(--sp-3); }
+
+.step-btn {
+  width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0;
+  background: #EFF1F4; color: var(--ink);
+  font-size: 22px; font-weight: 500; line-height: 1;
+  display: grid; place-items: center;
+}
+.step-btn:hover { background: #E3E7EB; }
+.step-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.setter-mid { flex: 1; min-width: 0; }
+
+.setter-value {
+  text-align: center; font-size: 30px; font-weight: 640;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+
+.setter-value .deg { font-size: 16px; color: var(--ink-2); font-weight: 550; }
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 32px; background: transparent; margin: 0;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--st-away) 0%, var(--st-eco) 42%, var(--st-heating) 100%);
+}
+input[type="range"]::-moz-range-track {
+  height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--st-away) 0%, var(--st-eco) 42%, var(--st-heating) 100%);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 26px; height: 26px; border-radius: 50%; margin-top: -10px;
+  background: var(--surface); border: 2px solid var(--ink);
+  box-shadow: 0 2px 6px rgba(16, 24, 32, 0.25); cursor: grab;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--ink);
+  box-shadow: 0 2px 6px rgba(16, 24, 32, 0.25); cursor: grab;
+}
+
+.scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); margin-top: -2px; }
+
+.setter-caption { font-size: 13px; color: var(--ink-2); margin-top: var(--sp-2); }
+
+.locked-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 14px; color: var(--ink-2); padding-top: var(--sp-3);
+}
+.locked-row b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- Mode picker in drawer ---------- */
+
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); }
+
+.mode-btn {
+  padding: 12px 4px; border-radius: 11px;
+  background: #F1F3F5; color: var(--ink-2);
+  font-size: 13px; font-weight: 580;
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  min-height: 62px;
+}
+.mode-btn:hover { background: #E7EAEE; }
+.mode-btn .mb-glyph { font-size: 10px; }
+
+.mode-btn[aria-pressed="true"] { background: var(--st-holding-soft); color: var(--st-holding-ink); box-shadow: inset 0 0 0 2px var(--st-holding); }
+.mode-btn[aria-pressed="true"][data-mode="comfort"] { background: var(--st-heating-soft); color: var(--st-heating-ink); box-shadow: inset 0 0 0 2px var(--st-heating); }
+.mode-btn[aria-pressed="true"][data-mode="eco"]     { background: var(--st-eco-soft);     color: var(--st-eco-ink);     box-shadow: inset 0 0 0 2px var(--st-eco); }
+.mode-btn[aria-pressed="true"][data-mode="away"]    { background: var(--st-away-soft);    color: var(--st-away-ink);    box-shadow: inset 0 0 0 2px var(--st-away); }
+
+/* ---------- Today's schedule strip ---------- */
+
+.strip {
+  display: flex; height: 30px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--line); position: relative;
+}
+
+.strip-seg { height: 100%; }
+.strip-seg[data-mode="comfort"] { background: var(--st-heating-soft); }
+.strip-seg[data-mode="eco"]     { background: var(--st-eco-soft); }
+.strip-seg[data-mode="away"]    { background: var(--st-away-soft); }
+.strip-seg[data-mode="off"]     { background: var(--st-off-soft); }
+
+.strip-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); }
+
+.strip-legend { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+
+.next-change { font-size: 14px; color: var(--ink-2); margin-top: var(--sp-3); }
+.next-change b { color: var(--ink); }
+
+/* ---------- Device list in drawer ---------- */
+
+.dev-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) 0; border-bottom: 1px solid var(--line-soft);
+}
+.dev-row:last-child { border-bottom: none; }
+.dev-row .np-device { width: 76px; height: 40px; }
+.dev-row-name { font-size: 14px; font-weight: 580; }
+.dev-row-sub { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* Configuration and destructive actions are deliberately out of the way of
+   the everyday control surface. */
+.advanced { margin-top: var(--sp-5); }
+.advanced summary {
+  cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-2);
+  padding: var(--sp-3) 0; list-style: none;
+}
+.advanced summary::-webkit-details-marker { display: none; }
+.advanced summary::before { content: "\25B8 "; color: var(--ink-3); }
+.advanced[open] summary::before { content: "\25BE "; }
+.advanced p { font-size: 13px; color: var(--ink-2); margin-bottom: var(--sp-3); }
+
+.link-btn {
+  display: inline-block; padding: 10px 14px; border-radius: 10px;
+  background: #EFF1F4; color: var(--ink); font-size: 14px;
+  font-weight: 560; text-decoration: none;
+}
+.link-btn:hover { background: #E3E7EB; }
+
+.note {
+  font-size: 12px; color: var(--ink-3); line-height: 1.5; margin-top: var(--sp-3);
+}
+
+/* ---------- Settings sheet ---------- */
+
+.kv { display: flex; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-2) 0; font-size: 14px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; font-weight: 580; text-align: right; }
+
+/* ---------- Responsive ----------
+ *
+ * The phone layout is not the desktop layout narrowed. The drawer becomes a
+ * bottom sheet reachable with a thumb, tiles go single column so the
+ * temperature stays large, and the house summary loses its secondary stats.
+ */
+
+@media (max-width: 720px) {
+  .wrap { padding: 0 var(--sp-3); }
+  .house { padding: var(--sp-4); border-radius: 12px; }
+  .house-stats { gap: var(--sp-4); }
+  .stat-v { font-size: 17px; }
+  .segmented { width: 100%; }
+  .seg { flex: 1; padding: 10px 4px; font-size: 13px; }
+  .house-mode { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+
+  .grid { grid-template-columns: 1fr; gap: var(--sp-3); }
+  .temp-now { font-size: 42px; }
+
+  .drawer {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100%; max-height: 92vh;
+    border-left: none; border-top-left-radius: 18px; border-top-right-radius: 18px;
+    animation: sheet-up 200ms cubic-bezier(0.22, 0.8, 0.3, 1);
+  }
+  .drawer-inner { padding: var(--sp-4); padding-bottom: calc(var(--sp-8) + env(safe-area-inset-bottom)); }
+  .drawer::before {
+    content: ""; display: block; width: 40px; height: 4px; border-radius: 2px;
+    background: var(--line); margin: 10px auto 0;
+  }
+  .readout-now { font-size: 54px; }
+  .hero .np-device { width: 104px; height: 56px; }
+}
+
+@keyframes sheet-up { from { transform: translateY(28px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Wide screens: more columns rather than wider cards, so a room tile keeps
+   the same comfortable reading size. */
+@media (min-width: 1400px) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+}
+
+/* ---------- Dark mode ---------- */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181C; --surface: #1C2126; --line: #2C333A; --line-soft: #242A30;
+    --ink: #ECEFF2; --ink-2: #A3AEB9; --ink-3: #7A848F;
+    --lift: 0 1px 2px rgba(0,0,0,0.4), 0 4px 14px rgba(0,0,0,0.3);
+    --st-heating-soft: #38291608; --st-holding-soft: #1F262D;
+  }
+  .topbar { background: rgba(20, 24, 28, 0.94); }
+  .icon-btn:hover, .close-btn:hover { background: #262D34; }
+  .segmented { background: #232A31; }
+  .seg[aria-pressed="true"] { background: #2F373F; }
+  .tile-devices { background: #1A1F24; }
+  .hero { background: #191E23; }
+  .step-btn, .link-btn, .mode-btn { background: #262D34; color: var(--ink); }
+  .step-btn:hover, .link-btn:hover, .mode-btn:hover { background: #303840; }
+  .skel::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent); }
+  .errorbox { background: #2B1D1C; border-color: #5A322E; color: #F0C0BB; }
+  .errorbox h3 { color: #F6D6D2; }
+  /* Keep the pale line art legible on a dark stage. */
+  .np-device { background: linear-gradient(170deg, #262D34 0%, #1E242A 100%); }
+  .np-device img { filter: invert(1) hue-rotate(180deg) contrast(0.9) brightness(1.15); mix-blend-mode: screen; }
+  .hero .np-device { background: transparent; }
+}

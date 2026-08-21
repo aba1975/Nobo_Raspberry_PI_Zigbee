@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F5F6F8">
+<title>Concept A &mdash; At a Glance | Nob&oslash; Control</title>
+<link rel="stylesheet" href="/static/concepts/shared/base.css?v=1">
+<link rel="stylesheet" href="/static/concepts/a/a.css?v=1">
+</head>
+<body>
+
+<div class="np-banner">
+  <span><strong>Design concept A &mdash; At a Glance.</strong> A prototype, not the live app.</span>
+  <a href="/static/concepts/index.html">Compare concepts</a>
+  <a href="/">Back to the current app</a>
+</div>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">Home</span>
+    </div>
+    <div class="topbar-right">
+      <p class="conn" id="conn"><span class="conn-dot" aria-hidden="true"></span><span id="connText">Connecting</span></p>
+      <button class="icon-btn np-tap" id="settingsBtn" aria-label="Settings and account">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.53.6.92 1.15 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap main">
+
+  <!-- The house in one line, plus the mode control that used to be four
+       large buttons and a paragraph of explanation. -->
+  <section class="house" aria-labelledby="houseHeading">
+    <h1 class="np-visually-hidden" id="houseHeading">Your home</h1>
+    <p class="house-line" id="houseLine">Reading your home&hellip;</p>
+    <div class="house-stats" id="houseStats"></div>
+    <div class="house-mode">
+      <span class="house-mode-label" id="houseModeLabel">House mode</span>
+      <div class="segmented" role="group" aria-labelledby="houseModeLabel" id="houseMode">
+        <button class="seg np-tap" data-mode="home"    type="button">Schedule</button>
+        <button class="seg np-tap" data-mode="comfort" type="button">Comfort</button>
+        <button class="seg np-tap" data-mode="eco"     type="button">Eco</button>
+        <button class="seg np-tap" data-mode="away"    type="button">Away</button>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="roomsHeading">
+    <div class="section-head">
+      <h2 id="roomsHeading">Rooms</h2>
+      <p class="section-hint" id="roomsHint"></p>
+    </div>
+    <div class="grid" id="grid" aria-busy="true"></div>
+  </section>
+
+</main>
+
+<!-- Detail: a right-hand drawer on desktop, a bottom sheet on a phone. -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
+  <div class="drawer-inner" id="drawerInner"></div>
+</aside>
+
+<script src="/static/concepts/shared/core.js?v=1"></script>
+<script src="/static/concepts/a/a.js?v=1"></script>
+</body>
+</html>

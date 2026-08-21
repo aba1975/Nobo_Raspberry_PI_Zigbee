@@ -1,0 +1,405 @@
+/*
+ * Concept C - "Heating Board"
+ *
+ * Design philosophy: one surface, no navigation. Every room is a row you can
+ * read and adjust in place. Opening a room expands it rather than replacing
+ * the screen, and on a wide display the detail is simply a second pane, so
+ * the user never loses sight of the rest of the house.
+ *
+ * Visual language: warm paper, thin rules instead of cards, a typographic
+ * hierarchy rather than a decorative one. Density with air.
+ */
+
+:root {
+  --bg:        #FAFAF8;
+  --surface:   #FFFFFF;
+  --line:      #E6E4DE;
+  --line-soft: #F0EEE8;
+  --ink:       #1A1917;
+  --ink-2:     #5C5A54;
+  --ink-3:     #8C8981;
+  --radius:    12px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.wrap { width: min(1440px, 100%); margin: 0 auto; padding: 0 var(--sp-4); }
+
+/* ---------- Header ---------- */
+
+.board-head {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 30;
+}
+
+.head-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); padding-top: var(--sp-4); }
+
+.head-title { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
+
+.head-right { display: flex; align-items: center; gap: var(--sp-3); }
+
+.conn { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-unknown); }
+.conn.is-live .conn-dot { background: var(--st-eco); }
+.conn.is-offline .conn-dot { background: var(--st-error); }
+
+.ghost-btn {
+  padding: 8px 14px; border-radius: 9px; font-size: 14px; font-weight: 560;
+  color: var(--ink-2); border: 1px solid var(--line);
+}
+.ghost-btn:hover { background: var(--line-soft); color: var(--ink); }
+
+/* The whole system in one sentence. This replaces four large mode buttons
+   and a paragraph of explanatory text as the first thing on the page. */
+.head-status {
+  font-size: clamp(17px, 2.1vw, 21px);
+  font-weight: 550;
+  letter-spacing: -0.012em;
+  line-height: 1.4;
+  max-width: 62ch;
+  padding: var(--sp-3) 0 var(--sp-4);
+}
+.head-status b { font-weight: 660; }
+.head-status .warm { color: var(--st-heating-ink); }
+
+.toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-4); flex-wrap: wrap;
+  padding-bottom: var(--sp-3);
+}
+
+.seg-group { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.seg-label { font-size: 13px; color: var(--ink-3); font-weight: 600; margin-right: var(--sp-1); }
+
+.seg {
+  padding: 7px 13px; border-radius: 8px; font-size: 13px; font-weight: 560;
+  color: var(--ink-2); border: 1px solid var(--line); background: var(--surface);
+  min-height: 38px;
+}
+.seg:hover { background: var(--line-soft); }
+.seg[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+.filters { display: flex; align-items: center; gap: var(--sp-2); }
+
+.select {
+  padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  min-height: 38px;
+}
+
+.toggle-btn {
+  padding: 8px 13px; border-radius: 8px; font-size: 13px; font-weight: 560;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  min-height: 38px;
+}
+.toggle-btn:hover { background: var(--line-soft); }
+.toggle-btn[aria-pressed="true"] { background: var(--st-heating-soft); border-color: var(--st-heating); color: var(--st-heating-ink); }
+
+/* ---------- Board layout ---------- */
+
+.board { padding-top: var(--sp-5); padding-bottom: var(--sp-8); display: block; }
+
+.list {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.detail { display: none; }
+
+/* ---------- Room row ---------- */
+
+.row { border-bottom: 1px solid var(--line-soft); }
+.row:last-child { border-bottom: none; }
+
+.row-main {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1.6fr) auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4) 0 0;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  transition: background 110ms ease;
+}
+.row-main:hover { background: #FCFBF8; }
+.row.is-open .row-main { background: #F7F5F0; }
+
+/* State as a full-height stripe: readable at a glance down the whole list,
+   and not dependent on colour alone because the state word is in the row. */
+.row-stripe { align-self: stretch; background: var(--st-unknown); }
+.row[data-heat="heating"] .row-stripe { background: var(--st-heating); }
+.row[data-heat="holding"] .row-stripe { background: var(--st-holding); }
+
+.row-id { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; padding: var(--sp-4) 0 var(--sp-4) var(--sp-4); }
+
+.row-icon { font-size: 20px; flex-shrink: 0; }
+
+.row-text { min-width: 0; }
+.row-name { font-size: 16px; font-weight: 620; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-mode { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--st-off); flex-shrink: 0; }
+.dot[data-mode="comfort"] { background: var(--st-heating); }
+.dot[data-mode="eco"]     { background: var(--st-eco); }
+.dot[data-mode="away"]    { background: var(--st-away); }
+.dot[data-mode="normal"]  { background: var(--st-holding); }
+
+/* Device thumbnails inline in the row: hardware recognition without opening
+   anything, which is the thing the current UI hides on a settings page. */
+.row-devices { display: flex; align-items: center; gap: 5px; }
+.row-devices .np-device { width: 56px; height: 30px; border-radius: 7px; }
+.row-devices .more { font-size: 12px; color: var(--ink-3); font-weight: 600; }
+
+.row-temp { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.row-now { font-size: 27px; font-weight: 640; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.row-now .deg { font-size: 14px; font-weight: 540; color: var(--ink-2); letter-spacing: 0; }
+.row-state { font-size: 12px; font-weight: 620; white-space: nowrap; }
+.row[data-heat="heating"] .row-state { color: var(--st-heating-ink); }
+.row[data-heat="holding"] .row-state { color: var(--st-holding-ink); }
+.row[data-heat="unknown"] .row-state { color: var(--ink-3); }
+
+/* Inline setter: the everyday adjustment happens here, with no navigation
+   and no dialog. Press and hold accelerates. */
+.row-set { display: flex; align-items: center; gap: 2px; }
+
+.set-btn {
+  width: 40px; height: 40px; border-radius: 9px;
+  background: var(--line-soft); color: var(--ink);
+  font-size: 19px; line-height: 1; display: grid; place-items: center;
+}
+.set-btn:hover { background: #E9E6DF; }
+.set-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.set-value {
+  min-width: 74px; text-align: center;
+  font-size: 16px; font-weight: 620; font-variant-numeric: tabular-nums;
+}
+.set-value small { display: block; font-size: 10px; font-weight: 620; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-3); }
+
+.row-open {
+  width: 36px; height: 36px; border-radius: 8px; color: var(--ink-3);
+  font-size: 17px; display: grid; place-items: center;
+}
+.row-open:hover { background: var(--line-soft); color: var(--ink); }
+.row.is-open .row-open { transform: rotate(90deg); }
+
+/* ---------- Expanded detail ---------- */
+
+.row-detail {
+  padding: var(--sp-4) var(--sp-4) var(--sp-5) calc(var(--sp-4) + 4px);
+  background: #FCFBF8;
+  border-top: 1px solid var(--line-soft);
+}
+
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--sp-5); }
+
+.dblock h3 {
+  font-size: 11px; font-weight: 680; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: var(--sp-3);
+}
+
+/* Device gallery: the pictures at a size where the hardware is identifiable. */
+.gallery { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+
+.gcard {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  padding: var(--sp-2); width: 168px;
+}
+.gcard .np-device { width: 100%; aspect-ratio: 2 / 1; height: auto; }
+.gcard-name { font-size: 13px; font-weight: 600; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gcard-sub { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.temp-rows { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+.temp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); border-radius: 9px; background: var(--surface);
+  border: 1px solid var(--line);
+}
+.temp-row-label { font-size: 14px; font-weight: 570; }
+.temp-row-label small { display: block; font-size: 12px; font-weight: 450; color: var(--ink-3); }
+
+/* Direct numeric entry as well as steppers: fastest route for a user who
+   knows the number they want. */
+.num-input {
+  width: 76px; text-align: center; padding: 8px 6px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface);
+  font-size: 15px; font-weight: 620; font-variant-numeric: tabular-nums;
+  min-height: 40px;
+}
+.num-input:disabled { background: var(--line-soft); color: var(--ink-3); }
+
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-2); }
+
+.mode-btn {
+  padding: 11px 4px; border-radius: 9px; background: var(--surface);
+  border: 1px solid var(--line); color: var(--ink-2);
+  font-size: 13px; font-weight: 570;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 58px;
+}
+.mode-btn:hover { background: var(--line-soft); }
+.mode-btn .mb-glyph { font-size: 9px; }
+.mode-btn[aria-pressed="true"] { background: var(--st-holding-soft); border-color: var(--st-holding); color: var(--st-holding-ink); }
+.mode-btn[aria-pressed="true"][data-mode="comfort"] { background: var(--st-heating-soft); border-color: var(--st-heating); color: var(--st-heating-ink); }
+.mode-btn[aria-pressed="true"][data-mode="eco"]     { background: var(--st-eco-soft);     border-color: var(--st-eco);     color: var(--st-eco-ink); }
+.mode-btn[aria-pressed="true"][data-mode="away"]    { background: var(--st-away-soft);    border-color: var(--st-away);    color: var(--st-away-ink); }
+
+.strip { display: flex; height: 26px; border-radius: 7px; overflow: hidden; border: 1px solid var(--line); position: relative; }
+.strip-seg { height: 100%; }
+.strip-seg[data-mode="comfort"] { background: var(--st-heating-soft); }
+.strip-seg[data-mode="eco"]     { background: var(--st-eco-soft); }
+.strip-seg[data-mode="away"]    { background: var(--st-away-soft); }
+.strip-seg[data-mode="off"]     { background: var(--st-off-soft); }
+.strip-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ink); }
+.strip-legend { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+.next-change { font-size: 14px; color: var(--ink-2); margin-top: var(--sp-2); }
+.next-change b { color: var(--ink); }
+
+.note { font-size: 12px; color: var(--ink-3); line-height: 1.55; }
+
+.link-btn {
+  display: inline-block; padding: 9px 14px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-size: 13px; font-weight: 560; text-decoration: none;
+}
+.link-btn:hover { background: var(--line-soft); }
+
+/* ---------- Empty, loading, error ---------- */
+
+.skel-row { height: 82px; border-bottom: 1px solid var(--line-soft); position: relative; overflow: hidden; }
+.skel-row::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,0.035), transparent);
+  animation: shimmer 1.3s infinite;
+}
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+.empty, .errorbox { padding: var(--sp-7) var(--sp-4); text-align: center; color: var(--ink-2); }
+.errorbox { background: var(--st-error-soft); color: #7B2E28; }
+.errorbox h3 { font-size: 16px; margin-bottom: var(--sp-2); }
+
+/* ---------- Sheet ---------- */
+
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(26, 25, 23, 0.42); }
+
+.sheet {
+  position: fixed; z-index: 60; top: 0; right: 0; bottom: 0;
+  width: min(440px, 100%); background: var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: -10px 0 36px rgba(26, 25, 23, 0.14);
+  display: flex; flex-direction: column;
+}
+.sheet-inner { overflow-y: auto; padding: var(--sp-5); }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.sheet-head h2 { font-size: 19px; font-weight: 650; }
+.close-btn { width: 38px; height: 38px; border-radius: 9px; color: var(--ink-2); font-size: 17px; display: grid; place-items: center; }
+.close-btn:hover { background: var(--line-soft); color: var(--ink); }
+
+.kv { display: flex; justify-content: space-between; gap: var(--sp-4); padding: 8px 0; font-size: 14px; border-bottom: 1px solid var(--line-soft); }
+.kv:last-child { border-bottom: none; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; font-weight: 570; text-align: right; }
+
+/* ---------- Wide screens: master and detail ----------
+ *
+ * Above 1100px the expanded room moves into its own pane. Nothing scrolls
+ * away, nothing navigates, and the rest of the house stays visible while a
+ * single room is being adjusted.
+ */
+
+@media (min-width: 1100px) {
+  .board { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: var(--sp-5); align-items: start; }
+  .detail { display: block; position: sticky; top: 190px; }
+  .detail-inner {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: var(--sp-5);
+    max-height: calc(100vh - 220px); overflow-y: auto;
+  }
+  .detail-empty { padding: var(--sp-6); text-align: center; color: var(--ink-3); font-size: 14px; }
+  .detail .detail-grid { grid-template-columns: 1fr; gap: var(--sp-5); }
+  .detail .gcard { width: 100%; }
+  .row-detail { display: none; }   /* the detail lives in the pane instead */
+}
+
+/* ---------- Narrow screens ----------
+ *
+ * The row collapses to two lines: identity and temperature on top, the
+ * setter below at full thumb size. The device thumbnails stay, because
+ * recognising the hardware matters most on the device you carry to the room.
+ */
+
+@media (max-width: 860px) {
+  .row-main {
+    grid-template-columns: 4px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "stripe id open"
+      "stripe temp temp"
+      "stripe set set";
+    gap: var(--sp-2) var(--sp-3);
+    padding: 0 var(--sp-3) var(--sp-3) 0;
+    align-items: center;
+  }
+  .row-stripe { grid-area: stripe; }
+  .row-id { grid-area: id; padding: var(--sp-3) 0 0 var(--sp-3); }
+  .row-open { grid-area: open; margin-top: var(--sp-3); }
+  .row-devices { display: none; }
+  .row-temp { grid-area: temp; padding-left: var(--sp-3); }
+  .row-set { grid-area: set; padding-left: var(--sp-3); justify-content: space-between; }
+  .set-btn { width: 48px; height: 48px; font-size: 21px; }
+  .set-value { flex: 1; }
+  .row-now { font-size: 30px; }
+  .toolbar { gap: var(--sp-3); }
+  .filters { width: 100%; }
+  .select { flex: 1; }
+  .head-status { font-size: 16px; }
+  .board-head { position: static; }
+  .sheet { top: auto; left: 0; right: 0; width: 100%; max-height: 90vh;
+    border-left: none; border-top-left-radius: 18px; border-top-right-radius: 18px; }
+  .detail-grid { grid-template-columns: 1fr; }
+  .gcard { width: calc(50% - var(--sp-2)); }
+}
+
+/* ---------- Dark mode ---------- */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161A; --surface: #1D1D22; --line: #30303A; --line-soft: #262630;
+    --ink: #EDEDF0; --ink-2: #A5A5B0; --ink-3: #7C7C88;
+  }
+  .row-main:hover { background: #22222A; }
+  .row.is-open .row-main { background: #24242D; }
+  .row-detail { background: #1A1A20; }
+  .set-btn { background: #2A2A34; }
+  .set-btn:hover { background: #33333F; }
+  .seg[aria-pressed="true"] { background: var(--ink); color: #16161A; }
+  .ghost-btn:hover, .toggle-btn:hover, .link-btn:hover, .mode-btn:hover, .close-btn:hover, .row-open:hover { background: #2A2A34; }
+  .select, .num-input, .toggle-btn, .ghost-btn, .seg, .mode-btn, .gcard, .temp-row, .link-btn { background: #22222A; }
+  .errorbox { background: #2C1D1C; color: #F0C0BB; }
+  .skel-row::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent); }
+  .np-device { background: linear-gradient(170deg, #2A2A34 0%, #212129 100%); }
+  .np-device img { filter: invert(1) hue-rotate(180deg) contrast(0.9) brightness(1.15); mix-blend-mode: screen; }
+  .toggle-btn[aria-pressed="true"] { background: #3A2B18; border-color: var(--st-heating); color: #F0B269; }
+  .mode-btn[aria-pressed="true"][data-mode="comfort"] { background: #3A2B18; color: #F0B269; }
+  .mode-btn[aria-pressed="true"][data-mode="eco"]     { background: #17331F; color: #7CD3A8; }
+  .mode-btn[aria-pressed="true"][data-mode="away"]    { background: #172A3D; color: #9AC4EC; }
+  .mode-btn[aria-pressed="true"]                      { background: #232E38; color: #A8C2DA; }
+  .strip-seg[data-mode="comfort"] { background: #4A3418; }
+  .strip-seg[data-mode="eco"]     { background: #1D4029; }
+  .strip-seg[data-mode="away"]    { background: #1D3550; }
+  .strip-seg[data-mode="off"]     { background: #33333D; }
+  .strip-now { background: #EDEDF0; }
+  .head-status .warm { color: #F0B269; }
+  .row[data-heat="heating"] .row-state { color: #F0B269; }
+  .row[data-heat="holding"] .row-state { color: #A8C2DA; }
+}
