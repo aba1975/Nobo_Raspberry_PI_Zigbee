@@ -227,6 +227,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .mode-glyph { font-size: 1.15rem; line-height: 1; }
 .mode-btn:hover { border-color: var(--pine); color: var(--ink); }
 .mode-btn[aria-pressed="true"] { background: var(--pine-wash); border-color: var(--pine); color: var(--pine); }
+/* "Schedule"/"Home" means following the week, so it takes the schedule violet -
+   otherwise a selected Schedule button reads as Eco now that Eco is green. */
+.mode-btn[data-zmode="normal"][aria-pressed="true"],
+.mode-btn[data-global="home"][aria-pressed="true"],
+.mode-btn[data-global="normal"][aria-pressed="true"] { background: var(--m-sched-wash); border-color: var(--m-sched); color: var(--m-sched); }
 .mode-btn[data-global="comfort"][aria-pressed="true"] { background: var(--m-comfort-wash); border-color: var(--m-comfort); color: var(--m-comfort); }
 .mode-btn[data-global="eco"][aria-pressed="true"] { background: var(--m-eco-wash); border-color: var(--m-eco); color: var(--m-eco); }
 .mode-btn[data-global="away"][aria-pressed="true"] { background: var(--m-away-wash); border-color: var(--m-away); color: var(--m-away); }
