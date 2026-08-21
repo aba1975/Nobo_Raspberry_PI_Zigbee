@@ -150,6 +150,65 @@ Rather than offering a control that fails, the flow reads `GET /api/capabilities
 `features.discover_devices.supported` is false, shows the hub's own stated reason and a route into
 settings. The serial-entry path is still offered when discovery is supported.
 
+### Leaving: the two kinds of away
+
+There are two genuinely different ways of leaving, and conflating them is confusing, so Concept D
+names both:
+
+| | What it is | How it ends |
+| --- | --- | --- |
+| **Away period** | A window with a return date. The hero flow. | By itself, at the end of the window. Rooms resume their schedules. |
+| **Away with no return date** | The same thing the `Away` mode button does. | Only when you end it. Nothing brings the heating back. |
+
+The second is offered inside the leaving sheet as *"Stay away with no return date"*, with a
+sentence explaining the difference, so it is not something you reach only by guessing that the mode
+row does something subtly different from the trip card.
+
+When the cabin *is* on constant away, the trip card says so — "Away until you say otherwise" — and
+carries **I'm back now** and **Set a return date**. Without that, a cabin left on constant away had
+no route back on the screen that claims to be about trips.
+
+### Deleting an away period
+
+An away period can be deleted from the trip card and from inside the leaving sheet, in both cases
+behind a confirmation. This was a real defect in the first build: the only destructive control was
+labelled *"Cancel away period"* and it sat next to a sheet whose dismiss button said *"Cancel"* —
+two different meanings of the same word, one row apart. The destructive action is now **Delete away
+period** and is styled as destructive; dismissing a sheet is **Close**.
+
+### Editing the week
+
+The hub stores a week as *switch points*: "from this moment, be in this state". The server, in
+turn, insists that every day is covered from `00:00` to `24:00` with no gaps and no overlaps, that
+every time falls on a quarter hour, and that each day begins at midnight.
+
+Editing start-and-end blocks against those rules is a trap — nearly every intermediate edit is
+invalid, and the user finds out only when saving fails. So the editor works the way the hub does:
+**a day is a list of "from HH:MM, run <mode>" rows, the first pinned to `00:00`.** A gap is then
+impossible by construction, and the `start`/`end` payload is derived on save.
+
+- Day tabs for Mon–Sun, with a live preview bar of the day being edited.
+- **Copy this day to** Monday–Friday, the weekend, or every day. Cabin weeks are usually uniform.
+- Times snap to the nearest quarter hour, and say so when they move.
+- Duplicate times and a missing midnight are rejected in the client with a plain-language message,
+  before the request is made.
+- Modes are `comfort`, `eco`, `away` and `off` — exactly what a hub week profile can hold.
+
+One warning matters: a week profile can be **shared by several rooms**. `GET /api/zones/{id}/schedule`
+returns `shared_with_zones`, and both the room view and the editor name those rooms and state that
+saving changes them too.
+
+### Rooms as boxes
+
+Rooms are a responsive grid — `repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr))` — so the same
+card is one column on a phone and as many as the window can hold on a desktop, with no viewport
+breakpoints to maintain. Cards in a row share a height, and the device pictures sit on the bottom
+edge so they line up across the row.
+
+Inside the card the room name takes a full row, then the set temperature and its stepper share the
+row below. The whole card is the tap target that opens the room; the stepper is layered above it so
+adjusting a temperature does not navigate.
+
 ### Install on a phone home screen
 
 Concept D ships a web app manifest, a maskable icon, an Apple touch icon, `theme-color`, standalone
@@ -187,10 +246,11 @@ generic icons.
 
 ### What Concept D does not do
 
-- It does not **edit** weekly schedules; it renders them read-only and links back to the main app.
-- It does not manage users; that also links back.
+- It does not manage users; that links back to the main app.
 - It cannot show whether an element is genuinely drawing power, because the API does not report it.
   Heating is inferred from measured versus target temperature and is labelled as an estimate.
+- The week editor writes whole profiles. It does not rename or reassign profiles, so a room sharing
+  a profile keeps sharing it — the editor warns rather than silently splitting them.
 
 ---
 
@@ -645,7 +705,7 @@ on screen and swallowing clicks.
 
 ### Verification performed for Concept D
 
-Concept D was deployed to the same Pi and tested the same way, with 40 assertions covering desktop
+Concept D was deployed to the same Pi and tested the same way, with 56 assertions covering desktop
 and mobile. All pass. In addition to the checks above:
 
 - The away period was set through the UI, confirmed saved via `GET /api/global-mode/away-schedule`,
@@ -671,3 +731,19 @@ Defects found and fixed during that pass:
    coarse pointer.
 3. **The room name was a 23px tap target.** Its hit area now covers the whole room card, with the
    stepper layered above so adjusting a temperature still does not open the room.
+
+### Second review pass
+
+A review on the device raised four more. All four are fixed and covered by new assertions:
+
+1. **An away period could not be deleted.** The only destructive control read *"Cancel away period"*
+   and sat beside a sheet whose dismiss button read *"Cancel"*. Delete is now explicit and
+   destructive on the card and in the sheet, dismissal is **Close**, and the QA harness deletes the
+   period through the UI rather than through the API, so the button is proven to work.
+2. **No obvious way to go away with no return date.** The leaving sheet now offers it directly and
+   explains how it differs from a period; constant away has a route back on the trip card.
+3. **The week could not be edited.** It now can, in switch points rather than blocks. The harness
+   opens the editor, adds a change, saves, verifies against `GET /api/zones/{id}/schedule` that the
+   hub took it, re-checks that every day is still fully covered, and restores the original week.
+4. **Rooms were a list.** They are boxes in a grid that reflows by width. Asserted as multi-column
+   at 1440px, single column at 390px, and equal height within a row.

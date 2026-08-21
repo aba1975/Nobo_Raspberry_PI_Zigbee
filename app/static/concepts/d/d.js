@@ -935,15 +935,22 @@
       });
 
       root.querySelector('[data-act="add"]').onclick = () => {
-        const used = new Set(draft[day].map(p => p.at));
-        let at = null;
-        for (let m = 360; m <= 1425; m += 15) {
-          const c = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-          if (!used.has(c)) { at = c; break; }
+        /* Drop the new change in the middle of the longest stretch of the day
+           and flip the mode, so one tap produces a change you can see rather
+           than a second switch point that does nothing. */
+        const pts = draft[day];
+        const bounds = pts.map(p => Nobo.minutesOf(p.at)).concat(1440);
+        let best = -1, at = null, splitMode = pts[0].mode;
+        for (let i = 0; i < pts.length; i++) {
+          const span = bounds[i + 1] - bounds[i];
+          const mid = Math.round((bounds[i] + bounds[i + 1]) / 2 / 15) * 15;
+          if (span > best && mid > bounds[i] && mid < bounds[i + 1]) {
+            best = span; at = mid; splitMode = pts[i].mode;
+          }
         }
-        if (!at) { Nobo.toast('This day is already full of changes', 'error'); return; }
-        const last = draft[day][draft[day].length - 1];
-        draft[day].push({ at, mode: last && last.mode === 'comfort' ? 'eco' : 'comfort' });
+        if (at == null) { Nobo.toast('This day has no room left for another change', 'error'); return; }
+        const hhmm = String(Math.floor(at / 60)).padStart(2, '0') + ':' + String(at % 60).padStart(2, '0');
+        draft[day].push({ at: hhmm, mode: splitMode === 'comfort' ? 'eco' : 'comfort' });
         paint();
       };
 
