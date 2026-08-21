@@ -225,12 +225,15 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .zone {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  grid-template-rows: auto auto 1fr;
+  /* The name gets a row of its own so it is never squeezed by the temperature
+     next to it, then the set temperature and its stepper share the row below. */
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto auto 1fr;
   grid-template-areas:
-    "name  set  step"
-    "meta  set  step"
-    "devs  devs devs";
+    "name name"
+    "meta meta"
+    "set  step"
+    "devs devs";
   align-items: center;
   gap: .15rem .9rem;
   background: var(--card);
@@ -242,10 +245,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 
 .zone-open {
   grid-area: name;
-  display: flex; align-items: center; gap: .5rem;
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
   background: none; border: 0; padding: 0; margin: 0;
   font: inherit; font-size: 1.06rem; font-weight: 640; color: var(--ink);
-  text-align: left; cursor: pointer; min-width: 0;
+  text-align: left; cursor: pointer; min-width: 0; width: 100%;
 }
 /* The room name is a small target on its own, so its hit area is stretched
    across the whole card. The stepper sits above it and stays independent. */
@@ -262,7 +265,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 
 /* The set temperature is the headline number. The measured temperature is
    support, so it sits underneath at a much smaller size. */
-.zone-set { grid-area: set; text-align: right; line-height: 1; }
+.zone-set { grid-area: set; text-align: left; line-height: 1; margin-top: .55rem; }
 .set-value {
   font-size: clamp(1.85rem, 6vw, 2.35rem);
   font-weight: 660; letter-spacing: -.03em;
@@ -280,7 +283,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .set-mode { font-size: clamp(1.25rem, 4vw, 1.5rem); font-weight: 640; letter-spacing: -.01em; }
 .zd-mode { font-size: clamp(2rem, 9vw, 2.8rem); font-weight: 650; letter-spacing: -.02em; }
 
-.stepper { grid-area: step; position: relative; z-index: 1; display: flex; flex-direction: column; gap: .3rem; }
+.stepper {
+  grid-area: step; align-self: end; position: relative; z-index: 1;
+  display: flex; flex-direction: row; gap: .35rem; margin-top: .55rem;
+}
 .step-btn {
   width: 40px; height: 34px; border-radius: 10px;
   border: 1px solid var(--rule); background: var(--card); color: var(--ink);

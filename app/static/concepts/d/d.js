@@ -512,12 +512,12 @@
         </div>
         ${remote ? `
         <div class="stepper">
-          <button class="step-btn" type="button" data-step="up" data-zone="${esc(zone.zone_id)}"
-            ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
-            aria-label="Raise ${esc(zone.name)} set temperature">+</button>
           <button class="step-btn" type="button" data-step="down" data-zone="${esc(zone.zone_id)}"
             ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
             aria-label="Lower ${esc(zone.name)} set temperature">&minus;</button>
+          <button class="step-btn" type="button" data-step="up" data-zone="${esc(zone.zone_id)}"
+            ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
+            aria-label="Raise ${esc(zone.name)} set temperature">+</button>
         </div>` : ''}
         <div class="zone-devices">${thumbs}${more}</div>
       </li>`;
