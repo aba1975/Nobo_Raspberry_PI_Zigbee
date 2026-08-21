@@ -254,6 +254,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .set-now { display: block; margin-top: .3rem; font-size: .78rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .set-none { font-size: .95rem; font-weight: 600; color: var(--ink-faint); }
+/* A room whose heaters are dial-only leads with what it is running rather
+   than with a set temperature nothing can act on. */
+.set-mode { font-size: clamp(1.25rem, 4vw, 1.5rem); font-weight: 640; letter-spacing: -.01em; }
+.zd-mode { font-size: clamp(2rem, 9vw, 2.8rem); font-weight: 650; letter-spacing: -.02em; }
 
 .stepper { grid-area: step; display: flex; flex-direction: column; gap: .3rem; }
 .step-btn {
@@ -415,4 +419,14 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .mode-row { grid-template-columns: repeat(2, 1fr); }
   .dev { grid-template-columns: auto 1fr; }
   .dev > .dev-actions { grid-column: 1 / -1; }
+}
+
+/* Touch targets. A 34px stepper is fine under a mouse and too small under a
+   thumb, so anything driven by touch or shown on a narrow screen is raised
+   to the 44px minimum. */
+@media (max-width: 720px), (pointer: coarse) {
+  .step-btn { width: 48px; height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .topbar-back { min-width: 44px; min-height: 44px; }
+  .sysbox > summary { min-height: 44px; display: flex; align-items: center; }
 }

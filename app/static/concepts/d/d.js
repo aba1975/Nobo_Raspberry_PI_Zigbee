@@ -405,33 +405,48 @@
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
     const target = Nobo.targetTemp(zone);
-    const adjustable = key !== null && zone.supports_temp_adjust !== false;
+    /* When no heater in the room can be adjusted remotely, the room still
+       reports a comfort temperature - but nothing can act on it. Showing it
+       as "set to" would be a straight lie, so these rooms lead with the mode
+       they are running and say where the temperature actually comes from. */
+    const remote = zone.supports_temp_adjust !== false;
+    const adjustable = key !== null && remote;
 
     const scheduled = (zone.current_mode || 'normal') === 'normal';
-    const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc((Nobo.MODES[mode] || {}).label || mode)}</span>`;
+    const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
+    const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
 
-    const manualBadge = zone.has_manual_devices
-      ? `<span class="badge badge-manual" title="One or more heaters in this room have no remote temperature control. Their temperature is set by a dial on the heater itself.">Dial on heater</span>`
-      : '';
+    const manualBadge = !remote
+      ? `<span class="badge badge-manual" title="No heater in this room can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
+      : (zone.has_manual_devices
+          ? `<span class="badge badge-manual" title="Some heaters in this room have no remote temperature control. Their temperature is set by a dial on the heater itself.">Some dial-only</span>`
+          : '');
 
     const comps = zone.components || [];
     const thumbs = comps.slice(0, 3)
       .map(c => `<span class="np-device">${Nobo.deviceImg(c)}</span>`).join('');
     const more = comps.length > 3 ? `<span class="more">+${comps.length - 3}</span>` : '';
 
-    const setBlock = target == null
-      ? `<span class="set-none">Not set</span>`
-      : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
+    let label, setBlock;
+    if (!remote) {
+      label = 'Running';
+      setBlock = `<span class="set-mode">${esc(modeLabel)}</span>`;
+    } else {
+      label = 'Set to';
+      setBlock = target == null
+        ? `<span class="set-none">Not set</span>`
+        : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
+    }
 
     const nowBlock = zone.current_temperature == null
-      ? `<span class="set-now">No sensor</span>`
+      ? `<span class="set-now">${remote ? 'No sensor' : 'Dial sets the temperature'}</span>`
       : `<span class="set-now">now ${Nobo.fmtTemp(zone.current_temperature)}&deg;</span>`;
 
     const stepTitle = adjustable
       ? ''
-      : (mode === 'away'
-          ? 'Away uses a fixed system temperature'
-          : 'This room has no remotely adjustable heaters');
+      : (!remote
+          ? 'Turn the dial on the heater to change this room'
+          : 'Away uses a fixed system temperature');
 
     return `
       <li class="zone" data-zone="${esc(zone.zone_id)}">
@@ -440,7 +455,7 @@
         </button>
         <div class="zone-meta">${modeBadge}${manualBadge}</div>
         <div class="zone-set">
-          <span class="set-label">Set to</span>
+          <span class="set-label">${esc(label)}</span>
           ${setBlock}
           ${nowBlock}
         </div>
@@ -559,20 +574,30 @@
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
     const target = Nobo.targetTemp(zone);
-    const adjustable = key !== null && zone.supports_temp_adjust !== false;
+    const remote = zone.supports_temp_adjust !== false;
+    const adjustable = key !== null && remote;
     const devices = devicesOfZone(zone.zone_id);
+    const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
 
     const whichSetpoint = key === 'eco' ? 'eco temperature' : key === 'comfort' ? 'comfort temperature' : 'away temperature';
 
+    const headLabel = remote ? `Set to (${whichSetpoint})` : 'Running';
+    const headValue = remote
+      ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
+      : `<span class="zd-mode">${esc(modeLabel)}</span>`;
+    const headSub = !remote
+      ? 'The temperature in this room is set by the dial on each heater'
+      : (zone.current_temperature == null
+          ? 'No temperature sensor in this room'
+          : 'Measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now');
+
     root.innerHTML = `
       <section class="zd-head">
-        <span class="set-label">Set to (${esc(whichSetpoint)})</span>
+        <span class="set-label">${esc(headLabel)}</span>
         <div class="zd-set">
           <div>
-            <div class="zd-big">${target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target)}</div>
-            <p class="zd-sub">${zone.current_temperature == null
-              ? 'No temperature sensor in this room'
-              : 'Measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now'}</p>
+            <div class="zd-big">${headValue}</div>
+            <p class="zd-sub">${esc(headSub)}</p>
           </div>
           <div class="zd-steps">
             <button class="step-btn" type="button" data-zstep="down" ${adjustable ? '' : 'disabled'}
@@ -581,9 +606,9 @@
               aria-label="Raise set temperature">+</button>
           </div>
         </div>
-        ${adjustable ? '' : `<div class="note note-warn">${mode === 'away'
-          ? 'Away uses a fixed system temperature, so it cannot be changed per room.'
-          : 'No heater in this room can be adjusted from here. Use the dial on the heater.'}</div>`}
+        ${adjustable ? '' : `<div class="note note-warn">${!remote
+          ? 'No heater in this room can be adjusted from here. You can still switch the room between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
+          : 'Away uses a fixed system temperature, so it cannot be changed per room.'}</div>`}
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
