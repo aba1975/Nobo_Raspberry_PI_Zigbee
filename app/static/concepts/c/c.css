@@ -357,7 +357,7 @@ body {
      on a phone you are usually standing in front of the heater, so being able
      to match the picture to the thing on the wall matters more here, not less. */
   .row-devices { grid-area: dev; justify-content: flex-end; padding-right: var(--sp-2); }
-  .row-devices .np-device { width: 48px; height: 26px; }
+  .row-devices .np-device { width: 60px; height: 32px; }
   .row-temp { grid-area: temp; padding-left: var(--sp-3); }
   .row-set { grid-area: set; padding-left: var(--sp-3); justify-content: space-between; }
   .set-btn { width: 48px; height: 48px; font-size: 21px; }

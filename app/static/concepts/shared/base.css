@@ -22,6 +22,12 @@ body {
 
 img { max-width: 100%; display: block; }
 
+/* The `hidden` attribute only carries a user-agent `display: none`, so any
+   component rule that sets `display` outranks it. Every dialog here is toggled
+   with `hidden`, and without this the "closed" sheets and drawers stay on
+   screen and keep swallowing clicks aimed at what is behind them. */
+[hidden] { display: none !important; }
+
 button, input, select, textarea { font: inherit; color: inherit; }
 
 button { cursor: pointer; border: none; background: none; }

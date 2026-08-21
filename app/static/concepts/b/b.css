@@ -98,6 +98,9 @@ body {
   width: min(1180px, 100%);
   margin: 0 auto;
   padding: var(--sp-6) var(--sp-4) var(--sp-7);
+  /* The dock is sticky and opaque, so the last block of the stage would sit
+     underneath it at the end of a scroll. Reserve its height. */
+  scroll-padding-bottom: 96px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--sp-7);
