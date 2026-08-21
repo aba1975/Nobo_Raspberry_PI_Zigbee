@@ -992,6 +992,20 @@ Nobo_Raspberry_PI/
 └── README.md                   # This file
 ```
 
+## Design Exploration (Not Part of `main`)
+
+A UI/UX redesign exploration lives on the `ui-redesign-exploration` branch. It adds three working,
+interactive design concepts as extra pages under `/static/concepts/`, built against the real API so
+they can be compared side by side on a real device.
+
+It is a **design exploration for review, not a proposed change.** It has not been merged, it does
+not alter the current interface, and it changes no backend, API, data-model or authentication
+behaviour.
+
+The write-up — analysis of the current UI, the usability problems found, the three concepts, a
+comparison and a recommendation — is in [`docs/UI_REDESIGN.md`](docs/UI_REDESIGN.md) on that
+branch, along with instructions for trying the prototypes and switching back.
+
 ## Ports
 
 | Port | Protocol | Purpose |
