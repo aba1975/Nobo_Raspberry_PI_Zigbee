@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Cabin">
+  <rect width="512" height="512" rx="112" fill="#2F5D50"/>
+  <!-- Roof: a cabin, drawn as one confident stroke rather than a literal house. -->
+  <path d="M256 132 L404 268 L360 268 L256 182 L152 268 L108 268 Z" fill="#F6F2EA"/>
+  <!-- Warmth rising inside it. -->
+  <path d="M256 240 c26 26 26 44 0 66 c-26 22 -26 44 0 66"
+        fill="none" stroke="#E08A2E" stroke-width="26" stroke-linecap="round"/>
+</svg>

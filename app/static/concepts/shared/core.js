@@ -49,6 +49,42 @@ const Nobo = (() => {
                                        method: 'POST', body: JSON.stringify(temps) }),
     logout:        ()              => req('/auth/logout', { method: 'POST' }),
     me:            ()              => req('/auth/me'),
+
+    /* Added for concept D. All pre-existing endpoints - see docs/UI_REDESIGN.md. */
+
+    // The away schedule is a window: while now is inside it the house is held
+    // in Away, and it returns to Home at the end. Datetimes are ISO-8601; the
+    // server treats a naive value as UTC, so always send an absolute instant.
+    awaySchedule:      ()     => req('/api/global-mode/away-schedule'),
+    setAwaySchedule:   (body) => req('/api/global-mode/away-schedule', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    clearAwaySchedule: ()     => req('/api/global-mode/away-schedule', { method: 'DELETE' }),
+
+    hubConfig:    ()     => req('/api/hub/config'),
+    setHubConfig: (body) => req('/api/hub/config', { method: 'POST', body: JSON.stringify(body) }),
+
+    devices:      ()               => req('/api/devices').then(r => r.devices || r),
+    addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
+    updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {
+                                       method: 'PUT', body: JSON.stringify(body) }),
+    removeDevice: (serial)         => req(`/api/devices/${encodeURIComponent(serial)}`, { method: 'DELETE' }),
+    moveDevice:   (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}/move`, {
+                                       method: 'POST', body: JSON.stringify(body) }),
+
+    // Discovery needs the hub's radio, so it is unavailable in demo mode.
+    // /api/capabilities says so, with a reason worth showing to the user.
+    startDeviceSearch: () => req('/api/devices/search', { method: 'POST' }),
+    deviceSearch:      () => req('/api/devices/search'),
+    stopDeviceSearch:  () => req('/api/devices/search', { method: 'DELETE' }),
+
+    addZone:      (body)         => req('/api/zones', { method: 'POST', body: JSON.stringify(body) }),
+    updateZone:   (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}`, {
+                                     method: 'PUT', body: JSON.stringify(body) }),
+    removeZone:   (zoneId)       => req(`/api/zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
+
+    weekProfiles: () => req('/api/week_profiles').then(r => r.week_profiles || r),
+    setSchedule:  (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
+                                     method: 'POST', body: JSON.stringify(body) }),
   };
 
   /* ---------------------------------------------------------------
@@ -375,11 +411,82 @@ const Nobo = (() => {
   const TEMP_MAX = 30;
   const clampTemp = (v) => Math.min(TEMP_MAX, Math.max(TEMP_MIN, Math.round(v * 2) / 2));
 
+  /* ---------------------------------------------------------------
+   * Trip helpers (concept D)
+   *
+   * The away schedule is the cabin owner's main job, so it gets proper
+   * date handling rather than free-text parsing.
+   * ------------------------------------------------------------- */
+
+  /**
+   * Turn an <input type="date"> value and an <input type="time"> value,
+   * both of which are LOCAL wall-clock, into an absolute ISO instant.
+   * The server treats a naive datetime as UTC, so sending local wall-clock
+   * text unqualified would shift the schedule by the UTC offset.
+   */
+  function toIsoInstant(dateStr, timeStr) {
+    if (!dateStr) return null;
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    const [hh, mm] = String(timeStr || '00:00').split(':').map(Number);
+    if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    const dt = new Date(y, m - 1, d, hh, mm, 0, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+  }
+
+  /** Split an ISO instant back into local date and time input values. */
+  function fromIsoInstant(iso) {
+    if (!iso) return { date: '', time: '' };
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return { date: '', time: '' };
+    const p = (n) => String(n).padStart(2, '0');
+    return {
+      date: `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`,
+      time: `${p(dt.getHours())}:${p(dt.getMinutes())}`,
+    };
+  }
+
+  /** "Sun 24 Aug, 18:00" - short, unambiguous, no locale surprises. */
+  function fmtWhen(iso) {
+    if (!iso) return '';
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return '';
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const p = (n) => String(n).padStart(2, '0');
+    return `${days[dt.getDay()]} ${dt.getDate()} ${months[dt.getMonth()]}, ${p(dt.getHours())}:${p(dt.getMinutes())}`;
+  }
+
+  /** "in 6 days" / "in 4 hours" / "now". Always relative to the real clock. */
+  function fmtUntil(iso) {
+    if (!iso) return '';
+    const ms = new Date(iso).getTime() - Date.now();
+    if (Number.isNaN(ms)) return '';
+    if (ms <= 0) return 'now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `in ${mins} min`;
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return `in ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+    return `in ${Math.round(hours / 24)} days`;
+  }
+
+  /**
+   * A device is "manual" when it supports neither comfort nor eco: its
+   * temperature is set by a dial on the device itself and the app can only
+   * switch it on and off. Mirrors detect_device_type() on the server.
+   */
+  function isManualDevice(dev) {
+    if (!dev) return false;
+    if (typeof dev.supports_temp_adjust === 'boolean') return !dev.supports_temp_adjust;
+    return !dev.supports_comfort && !dev.supports_eco;
+  }
+
   return {
     api, DEVICE_MODELS, deviceModel, deviceName, deviceImg,
     MODES, effectiveMode, targetTemp, heatState, HEAT_STATE,
     houseMode, houseSummary, todaySchedule, DAY_KEYS, minutesOf, fmtClock,
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
+    toIsoInstant, fromIsoInstant, fmtWhen, fmtUntil, isManualDevice,
   };
 })();

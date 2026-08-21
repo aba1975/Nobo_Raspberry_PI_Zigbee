@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cabin - Nobø Control</title>
+
+<!-- Installable on a phone home screen. The manifest sits behind the app's
+     session auth, so it must be requested with credentials. -->
+<link rel="manifest" href="/static/concepts/d/manifest.webmanifest" crossorigin="use-credentials">
+<meta name="theme-color" content="#2F5D50" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15201C" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cabin">
+<link rel="apple-touch-icon" href="/static/concepts/d/icon-180.png">
+<link rel="icon" type="image/svg+xml" href="/static/concepts/d/icon.svg">
+
+<link rel="stylesheet" href="/static/concepts/shared/base.css">
+<link rel="stylesheet" href="/static/concepts/d/d.css">
+</head>
+<body class="d">
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <button class="topbar-back" id="btnBack" hidden aria-label="Back to all rooms">
+    <span aria-hidden="true">‹</span>
+  </button>
+  <div class="topbar-title">
+    <strong id="topTitle">Cabin</strong>
+    <span class="topbar-sub" id="topSub">Nobø Control</span>
+  </div>
+  <div class="topbar-actions">
+    <span class="link-state" id="linkState" title="Connection to the hub">
+      <span class="link-dot" aria-hidden="true"></span>
+      <span class="link-text">Checking</span>
+    </span>
+    <button class="icon-btn" id="btnSettings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20">
+        <path fill="currentColor" d="M12 8a4 4 0 100 8 4 4 0 000-8zm8.4 4a8.4 8.4 0 01-.1 1.2l2 1.6-1.9 3.3-2.4-1a8.3 8.3 0 01-2 1.2l-.4 2.6h-3.8l-.4-2.6a8.3 8.3 0 01-2-1.2l-2.4 1L3.7 14.8l2-1.6A8.4 8.4 0 015.6 12c0-.4 0-.8.1-1.2l-2-1.6 1.9-3.3 2.4 1a8.3 8.3 0 012-1.2l.4-2.6h3.8l.4 2.6c.7.3 1.4.7 2 1.2l2.4-1 1.9 3.3-2 1.6c.1.4.1.8.1 1.2z"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============ HOME ============ -->
+  <section class="view" id="viewHome">
+
+    <!-- The one thing a cabin owner does most: leave, and come back. -->
+    <section class="trip" id="trip" aria-labelledby="tripHeading">
+      <h1 class="trip-eyebrow" id="tripHeading">The cabin</h1>
+      <p class="trip-state" id="tripState">Loading…</p>
+      <p class="trip-detail" id="tripDetail"></p>
+
+      <div class="trip-timeline" id="tripTimeline" hidden>
+        <div class="tl-track"><div class="tl-fill" id="tlFill"></div><div class="tl-now" id="tlNow"></div></div>
+        <div class="tl-labels">
+          <span id="tlStart"></span>
+          <span id="tlEnd"></span>
+        </div>
+      </div>
+
+      <div class="trip-actions" id="tripActions"></div>
+    </section>
+
+    <!-- Direct mode control, secondary to the trip but still one tap away. -->
+    <section class="modes" aria-labelledby="modesHeading">
+      <h2 class="section-title" id="modesHeading">Whole cabin</h2>
+      <div class="mode-row" role="group" aria-label="Set every room at once">
+        <button class="mode-btn" data-global="home"    type="button"><span class="mode-glyph" aria-hidden="true">⌂</span>Home</button>
+        <button class="mode-btn" data-global="comfort" type="button"><span class="mode-glyph" aria-hidden="true">☀</span>Comfort</button>
+        <button class="mode-btn" data-global="eco"     type="button"><span class="mode-glyph" aria-hidden="true">☾</span>Eco</button>
+        <button class="mode-btn" data-global="away"    type="button"><span class="mode-glyph" aria-hidden="true">✈</span>Away</button>
+      </div>
+    </section>
+
+    <section class="rooms" aria-labelledby="roomsHeading">
+      <div class="section-head">
+        <h2 class="section-title" id="roomsHeading">Rooms</h2>
+        <span class="section-note" id="roomsNote"></span>
+      </div>
+      <ul class="zone-list" id="zoneList"></ul>
+    </section>
+
+    <!-- Deliberately last: useful, but not what you came for. -->
+    <details class="sysbox" id="sysBox">
+      <summary>System status</summary>
+      <dl class="sysgrid" id="sysGrid"></dl>
+    </details>
+  </section>
+
+  <!-- ============ ZONE DETAIL ============ -->
+  <section class="view" id="viewZone" hidden></section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="view" id="viewSettings" hidden></section>
+
+</main>
+
+<!-- Bottom sheet, used for the leaving flow and for confirmations. -->
+<div class="sheet-scrim" id="sheetScrim" hidden></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+  <div class="sheet-grab" aria-hidden="true"></div>
+  <h2 class="sheet-title" id="sheetTitle"></h2>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+
+<script src="/static/concepts/shared/core.js"></script>
+<script src="/static/concepts/d/d.js"></script>
+</body>
+</html>

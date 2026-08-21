@@ -1,0 +1,16 @@
+{
+  "name": "Cabin - Nobø Control",
+  "short_name": "Cabin",
+  "description": "Heating control for a cabin: set the away period, then the rooms.",
+  "start_url": "/static/concepts/d/index.html",
+  "scope": "/static/concepts/d/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F6F2EA",
+  "theme_color": "#2F5D50",
+  "icons": [
+    { "src": "/static/concepts/d/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/concepts/d/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/concepts/d/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
