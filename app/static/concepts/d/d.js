@@ -36,6 +36,7 @@
     view: 'home',        // 'home' | 'zone' | 'settings'
     zoneId: null,
     schedule: null,
+    scheduleMeta: null,
     /* While a write is in flight, or the user is mid-gesture, incoming live
        updates must not redraw the control out from under them. */
     pending: new Set(),
@@ -163,7 +164,7 @@
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
         <button class="btn" data-act="plan" type="button">Change return</button>
-        <button class="btn" data-act="cancel-trip" type="button">Cancel away period</button>`;
+        <button class="btn btn-danger" data-act="delete-trip" type="button">Delete away period</button>`;
 
     } else if (a.enabled && a.start_at) {
       card.classList.add('is-away');
@@ -172,13 +173,20 @@
       drawTimeline(a.start_at, a.end_at);
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="plan" type="button">Change plan</button>
-        <button class="btn" data-act="cancel-trip" type="button">Cancel away period</button>`;
+        <button class="btn btn-danger" data-act="delete-trip" type="button">Delete away period</button>`;
 
     } else {
       if (mode === 'away') {
+        /* Away with no window: the same state the "Away" mode button produces.
+           It never ends by itself, so the way out has to be on this card. */
         card.classList.add('is-away');
-        stateEl.textContent = 'Away, with no return date';
-        detail.textContent  = 'Every room is on away. Nothing will bring the heating back automatically - set a return date so it warms up before you arrive.';
+        stateEl.textContent = 'Away until you say otherwise';
+        detail.textContent  = 'Every room is on away and nothing will bring the heating back automatically. Set a return date and it will warm up before you arrive.';
+        actions.innerHTML = `
+          <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
+          <button class="btn" data-act="plan" type="button">Set a return date</button>`;
+        wireTripActions(actions);
+        return;
       } else if (mode === 'comfort') {
         card.classList.add('is-heat');
         stateEl.textContent = 'Warming the whole cabin';
@@ -196,24 +204,31 @@
       actions.innerHTML = `<button class="btn btn-primary" data-act="leave" type="button">I'm leaving &rarr;</button>`;
     }
 
+    wireTripActions(actions);
+  }
+
+  function wireTripActions(actions) {
     actions.querySelectorAll('button').forEach(b => {
       b.onclick = () => {
         const act = b.dataset.act;
         if (act === 'leave' || act === 'plan') openTripSheet();
         if (act === 'arrive') arriveNow();
-        if (act === 'cancel-trip') {
-          confirmSheet('Cancel the away period?',
-            'The cabin goes back to its normal schedules straight away.',
-            'Cancel away period', async () => {
-              try {
-                await Nobo.api.clearAwaySchedule();
-                Nobo.toast('Away period cancelled');
-                await refresh(true);
-              } catch (e) { Nobo.toast(e.message, 'error'); }
-            });
-        }
+        if (act === 'delete-trip') deleteAwayPeriod();
       };
     });
+  }
+
+  /** Remove the away window entirely. Reachable from the card and the sheet. */
+  function deleteAwayPeriod() {
+    confirmSheet('Delete the away period?',
+      'The dates are removed and the cabin goes back to its normal schedules straight away.',
+      'Delete away period', async () => {
+        try {
+          await Nobo.api.clearAwaySchedule();
+          Nobo.toast('Away period deleted');
+          await refresh(true);
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      }, true);
   }
 
   function drawTimeline(startIso, endIso) {
@@ -286,9 +301,22 @@
       </label>
 
       <div class="sheet-actions">
-        <button class="btn" data-act="cancel" type="button">Cancel</button>
+        <button class="btn" data-act="dismiss" type="button">Close</button>
         <button class="btn btn-primary" data-act="save" type="button">Set away period</button>
       </div>
+
+      <div class="sheet-alt">
+        <p class="zd-sub">Not sure when you are back?</p>
+        <button class="btn btn-wide" data-act="constant" type="button">Stay away with no return date</button>
+        <small class="field-hint">The same as the Away button: every room holds the away
+        temperature until you come back and end it yourself.</small>
+      </div>
+
+      ${a.enabled ? `
+      <div class="sheet-alt">
+        <button class="btn btn-danger btn-wide" data-act="delete" type="button">Delete this away period</button>
+        <small class="field-hint">Removes the dates and returns the cabin to its normal schedules.</small>
+      </div>` : ''}
     `, (root) => {
       const hint = root.querySelector('#tsHint');
 
@@ -309,7 +337,10 @@
       root.querySelectorAll('input, select').forEach(el => el.addEventListener('input', updateHint));
       updateHint();
 
-      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="dismiss"]').onclick = closeSheet;
+      root.querySelector('[data-act="constant"]').onclick = () => stayAwayIndefinitely();
+      const del = root.querySelector('[data-act="delete"]');
+      if (del) del.onclick = () => deleteAwayPeriod();
       root.querySelector('[data-act="save"]').onclick = async () => {
         const start = Nobo.toIsoInstant(root.querySelector('#tsStartDate').value,
                                         root.querySelector('#tsStartTime').value);
@@ -336,9 +367,29 @@
       'The away period ends now and every room returns to its normal schedule.',
       "I'm back", async () => {
         try {
-          await Nobo.api.clearAwaySchedule();
+          /* There may be no window to clear - the cabin can be on constant
+             away from the mode button - so a 404 here is not a failure. */
+          await Nobo.api.clearAwaySchedule().catch(() => {});
           await Nobo.api.setGlobalMode('home');
           Nobo.toast('Welcome back - heating resumed');
+          await refresh(true);
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      });
+  }
+
+  /**
+   * Away with no end date. Identical to pressing the Away mode button, offered
+   * here as well so the two ways of leaving are not confused with each other:
+   * a period has a return date and ends itself, this one does not.
+   */
+  function stayAwayIndefinitely() {
+    confirmSheet('Stay away with no return date?',
+      'Every room drops to the away temperature and stays there until you end it yourself. Any away period you had planned is removed.',
+      'Stay away', async () => {
+        try {
+          await Nobo.api.clearAwaySchedule().catch(() => {});
+          await Nobo.api.setGlobalMode('away');
+          Nobo.toast('Away - no return date set');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       });
@@ -555,12 +606,20 @@
     state.view = 'zone';
     state.zoneId = String(zoneId);
     state.schedule = null;
+    state.scheduleMeta = null;
     switchView();
     renderZoneDetail();
+    await loadSchedule(zoneId);
+  }
+
+  /** Load the week for one room. A profile can be shared, so keep the whole
+      response - the editor has to warn which other rooms it also changes. */
+  async function loadSchedule(zoneId) {
     try {
       const res = await Nobo.api.schedule(zoneId);
       state.schedule = res && res.schedule ? res.schedule : null;
-    } catch (_) { state.schedule = null; }
+      state.scheduleMeta = res || null;
+    } catch (_) { state.schedule = null; state.scheduleMeta = null; }
     if (state.view === 'zone') renderZoneDetail();
   }
 
@@ -629,7 +688,10 @@
       </section>
 
       <section class="card">
-        <h2>This room's week</h2>
+        <div class="card-head">
+          <h2>This room's week</h2>
+          <button class="btn" type="button" data-act="edit-week">Edit week</button>
+        </div>
         ${renderSchedule()}
       </section>
 
@@ -663,6 +725,11 @@
     if (addBtn) addBtn.onclick = () => addDeviceSheet(zone);
     root.querySelector('[data-act="rename-zone"]').onclick = () => renameZone(zone);
     root.querySelector('[data-act="delete-zone"]').onclick = () => deleteZone(zone);
+    const weekBtn = root.querySelector('[data-act="edit-week"]');
+    if (weekBtn) {
+      weekBtn.disabled = !state.schedule;
+      weekBtn.onclick = () => editWeek(zone);
+    }
   }
 
   function devRow(d) {
@@ -705,12 +772,222 @@
       return `<div class="sched-day"><span>${label}</span><div class="sched-bar">${segs}</div></div>`;
     }).join('');
 
+    const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
+    const sharedNote = shared.length
+      ? `<div class="note note-warn">This week is shared with ${esc(shared.join(', '))}.
+         Editing it here changes those rooms too.</div>`
+      : '';
+
     return `<div class="sched">${rows}</div>
       <div class="sched-key">
         <span><i style="background:var(--amber)"></i>Comfort</span>
         <span><i style="background:var(--frost)"></i>Eco</span>
-        <span><i style="background:var(--pine)"></i>Normal</span>
-      </div>`;
+        <span><i style="background:var(--away)"></i>Away</span>
+        <span><i style="background:var(--off)"></i>Off</span>
+      </div>
+      ${sharedNote}`;
+  }
+
+  /* ------------------------------------------------------------------
+   * Editing the week
+   *
+   * The hub models a week as switch points - "from this moment, be in this
+   * state" - and the server insists every day is covered from 00:00 to 24:00
+   * with no gaps or overlaps. Editing blocks with a start AND an end makes it
+   * far too easy to build a week the hub rejects, so the editor works in
+   * switch points directly: a day is a list of "from HH:MM, <mode>" rows, the
+   * first one pinned to 00:00. Gaps are then impossible by construction and
+   * the payload is derived on save.
+   * ---------------------------------------------------------------- */
+
+  const SCHED_DAYS = [
+    ['monday', 'Mon'], ['tuesday', 'Tue'], ['wednesday', 'Wed'], ['thursday', 'Thu'],
+    ['friday', 'Fri'], ['saturday', 'Sat'], ['sunday', 'Sun'],
+  ];
+  const SCHED_MODES = [['comfort', 'Comfort'], ['eco', 'Eco'], ['away', 'Away'], ['off', 'Off']];
+
+  /** Blocks -> switch points. Only the start of each block carries meaning. */
+  function pointsOfDay(blocks) {
+    const pts = (blocks || []).map(b => ({ at: b.start, mode: b.mode }));
+    if (!pts.length || pts[0].at !== '00:00') pts.unshift({ at: '00:00', mode: 'eco' });
+    return pts;
+  }
+
+  /** Switch points -> blocks, with each ending where the next begins. */
+  function blocksOfPoints(pts) {
+    const sorted = pts.slice().sort((a, b) => Nobo.minutesOf(a.at) - Nobo.minutesOf(b.at));
+    return sorted.map((p, i) => ({
+      start: p.at,
+      end: i + 1 < sorted.length ? sorted[i + 1].at : '24:00',
+      mode: p.mode,
+    }));
+  }
+
+  const snap15 = (hhmm) => {
+    const m = Nobo.minutesOf(hhmm);
+    if (m == null || isNaN(m)) return null;
+    const s = Math.min(1425, Math.max(0, Math.round(m / 15) * 15));
+    return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  };
+
+  function editWeek(zone) {
+    if (!state.schedule) { Nobo.toast('The weekly schedule has not loaded yet', 'error'); return; }
+
+    const draft = {};
+    SCHED_DAYS.forEach(([key]) => { draft[key] = pointsOfDay(state.schedule[key]); });
+    let day = SCHED_DAYS[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1][0];
+
+    const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
+
+    openSheet(`${zone.name} · weekly schedule`, `
+      ${shared.length ? `<div class="note note-warn">This schedule is shared with
+        ${esc(shared.join(', '))}. Saving changes those rooms as well.</div>` : ''}
+      <p class="zd-sub">Each row says what the room does from that time until the next
+      change. The day always starts at 00:00, so there can never be a gap.</p>
+
+      <div class="day-tabs" role="tablist" aria-label="Day of the week">
+        ${SCHED_DAYS.map(([k, l]) => `<button class="day-tab" type="button" role="tab"
+          data-day="${k}" aria-selected="false">${l}</button>`).join('')}
+      </div>
+
+      <div class="sched-bar sched-preview" id="weekPreview"></div>
+
+      <div id="weekRows" class="week-rows"></div>
+
+      <div class="week-tools">
+        <button class="btn" type="button" data-act="add">Add a change</button>
+        <select id="weekCopy" aria-label="Copy this day to other days">
+          <option value="">Copy this day to…</option>
+          <option value="week">Monday to Friday</option>
+          <option value="weekend">Saturday and Sunday</option>
+          <option value="all">Every day</option>
+        </select>
+      </div>
+
+      <div class="sheet-actions">
+        <button class="btn" data-act="dismiss" type="button">Close</button>
+        <button class="btn btn-primary" data-act="save" type="button">Save schedule</button>
+      </div>
+    `, (root) => {
+      const rowsEl = root.querySelector('#weekRows');
+
+      const paint = () => {
+        root.querySelectorAll('.day-tab').forEach(t => {
+          t.setAttribute('aria-selected', String(t.dataset.day === day));
+        });
+
+        const pts = draft[day].slice().sort((a, b) => Nobo.minutesOf(a.at) - Nobo.minutesOf(b.at));
+        draft[day] = pts;
+
+        root.querySelector('#weekPreview').innerHTML = blocksOfPoints(pts).map(b => {
+          const w = Math.max(0, Nobo.minutesOf(b.end) - Nobo.minutesOf(b.start)) / 14.4;
+          return `<span class="sched-seg m-${esc(b.mode)}" style="width:${w}%"
+            title="${esc(b.start)}-${esc(b.end)} ${esc(b.mode)}"></span>`;
+        }).join('');
+
+        rowsEl.innerHTML = pts.map((p, i) => `
+          <div class="week-row">
+            <label class="week-from">
+              <span>From</span>
+              ${i === 0
+                ? `<input type="time" value="00:00" disabled title="Every day starts at midnight">`
+                : `<input type="time" step="900" value="${esc(p.at)}" data-at="${i}">`}
+            </label>
+            <label class="week-mode">
+              <span>Run</span>
+              <select data-mode="${i}">
+                ${SCHED_MODES.map(([v, l]) => `<option value="${v}"${p.mode === v ? ' selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </label>
+            <button class="btn btn-danger week-del" type="button" data-del="${i}"
+              ${i === 0 ? 'disabled title="The first change of the day cannot be removed"' : ''}
+              aria-label="Remove this change">&times;</button>
+          </div>`).join('');
+
+        rowsEl.querySelectorAll('[data-at]').forEach(inp => {
+          inp.onchange = () => {
+            const i = Number(inp.dataset.at);
+            const snapped = snap15(inp.value);
+            if (!snapped) { paint(); return; }
+            if (snapped === '00:00') {
+              Nobo.toast('00:00 is already the start of the day', 'error');
+              paint(); return;
+            }
+            if (draft[day].some((q, j) => j !== i && q.at === snapped)) {
+              Nobo.toast('There is already a change at ' + snapped, 'error');
+              paint(); return;
+            }
+            if (snapped !== inp.value) Nobo.toast('The hub only accepts quarter hours - moved to ' + snapped);
+            draft[day][i].at = snapped;
+            paint();
+          };
+        });
+        rowsEl.querySelectorAll('[data-mode]').forEach(sel => {
+          sel.onchange = () => { draft[day][Number(sel.dataset.mode)].mode = sel.value; paint(); };
+        });
+        rowsEl.querySelectorAll('[data-del]').forEach(b => {
+          b.onclick = () => { draft[day].splice(Number(b.dataset.del), 1); paint(); };
+        });
+      };
+
+      root.querySelectorAll('.day-tab').forEach(t => {
+        t.onclick = () => { day = t.dataset.day; paint(); };
+      });
+
+      root.querySelector('[data-act="add"]').onclick = () => {
+        const used = new Set(draft[day].map(p => p.at));
+        let at = null;
+        for (let m = 360; m <= 1425; m += 15) {
+          const c = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+          if (!used.has(c)) { at = c; break; }
+        }
+        if (!at) { Nobo.toast('This day is already full of changes', 'error'); return; }
+        const last = draft[day][draft[day].length - 1];
+        draft[day].push({ at, mode: last && last.mode === 'comfort' ? 'eco' : 'comfort' });
+        paint();
+      };
+
+      root.querySelector('#weekCopy').onchange = (e) => {
+        const which = e.target.value;
+        e.target.value = '';
+        if (!which) return;
+        const targets = which === 'week' ? SCHED_DAYS.slice(0, 5).map(d => d[0])
+          : which === 'weekend' ? SCHED_DAYS.slice(5).map(d => d[0])
+          : SCHED_DAYS.map(d => d[0]);
+        targets.forEach(t => { draft[t] = draft[day].map(p => ({ at: p.at, mode: p.mode })); });
+        Nobo.toast('Copied to ' + targets.length + ' days');
+        paint();
+      };
+
+      root.querySelector('[data-act="dismiss"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async () => {
+        const payload = {};
+        for (const [key, label] of SCHED_DAYS) {
+          const pts = draft[key];
+          const times = pts.map(p => p.at);
+          if (new Set(times).size !== times.length) {
+            Nobo.toast(label + ' has two changes at the same time', 'error'); return;
+          }
+          if (!times.includes('00:00')) { Nobo.toast(label + ' has to start at 00:00', 'error'); return; }
+          payload[key] = blocksOfPoints(pts);
+        }
+        const btn = root.querySelector('[data-act="save"]');
+        btn.disabled = true;
+        hold(6000);
+        try {
+          await Nobo.api.setSchedule(zone.zone_id, { schedule: payload });
+          closeSheet();
+          Nobo.toast('Weekly schedule saved');
+          await loadSchedule(zone.zone_id);
+          await refresh(true);
+        } catch (e) {
+          btn.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+
+      paint();
+    });
   }
 
   /* ------------------------------------------------------------------

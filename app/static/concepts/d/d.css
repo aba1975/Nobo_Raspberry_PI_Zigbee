@@ -36,6 +36,11 @@
   --danger:     #C9453C;
   --danger-wash:#F8E7E5;
 
+  /* Schedule states that are neither heating nor saving: away holds a fixed
+     low temperature, off is not heating at all. */
+  --away:       #9AB6C6;
+  --off:        #C3BCB0;
+
   --radius:     18px;
   --radius-sm:  12px;
   --shadow:     0 1px 2px rgba(33,31,28,.05), 0 8px 24px rgba(33,31,28,.06);
@@ -65,6 +70,8 @@
     --frost-wash: #17242B;
     --danger:     #F08078;
     --danger-wash:#2C1A19;
+    --away:       #4E6D7C;
+    --off:        #4A4740;
     --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
   }
 }
@@ -205,12 +212,21 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* -------------------------------------------------------------- rooms */
 
 .rooms { margin-bottom: 1.5rem; }
-.zone-list { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .6rem; }
+/* Rooms are boxes, not a list: the grid reflows from one column on a phone to
+   as many as the window can hold without ever squeezing a card below the width
+   its set temperature and stepper need. */
+.zone-list {
+  list-style: none; margin: .6rem 0 0; padding: 0;
+  display: grid; gap: .6rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr));
+  align-items: stretch;
+}
 
 .zone {
   position: relative;
   display: grid;
   grid-template-columns: 1fr auto auto;
+  grid-template-rows: auto auto 1fr;
   grid-template-areas:
     "name  set  step"
     "meta  set  step"
@@ -277,6 +293,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    your own hardware. They are never swapped for a generic icon. */
 .zone-devices {
   grid-area: devs;
+  align-self: end;
   display: flex; align-items: center; flex-wrap: wrap; gap: .4rem;
   margin-top: .7rem; padding-top: .7rem; border-top: 1px dashed var(--rule);
 }
@@ -358,17 +375,53 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sched-seg { height: 100%; }
 .sched-seg.m-comfort { background: var(--amber); }
 .sched-seg.m-eco     { background: var(--frost); }
-.sched-seg.m-away    { background: color-mix(in srgb, var(--frost) 55%, var(--rule)); }
+.sched-seg.m-away    { background: var(--away); }
+.sched-seg.m-off     { background: var(--off); }
 .sched-seg.m-normal  { background: var(--pine); }
 .sched-key { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: .7rem; font-size: .76rem; color: var(--ink-soft); }
 .sched-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: .3rem; vertical-align: -1px; }
+
+/* ------------------------------------------------- editing the week */
+
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
+.card-head h2 { margin: 0; }
+
+.day-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: .2rem 0 .9rem; }
+.day-tab {
+  flex: 1 1 auto; min-width: 3rem;
+  padding: .5rem .35rem; border-radius: 10px;
+  border: 1px solid var(--rule); background: var(--card); color: var(--ink-soft);
+  font: inherit; font-size: .82rem; font-weight: 620; cursor: pointer;
+}
+.day-tab[aria-selected="true"] {
+  background: var(--amber-wash); border-color: var(--amber); color: var(--amber);
+}
+
+.sched-preview { height: 26px; margin-bottom: .9rem; }
+
+.week-rows { display: grid; gap: .5rem; }
+.week-row {
+  display: grid; grid-template-columns: 1fr 1fr auto; gap: .55rem; align-items: end;
+}
+.week-row label { display: block; margin: 0; }
+.week-row label > span {
+  display: block; font-size: .7rem; font-weight: 650; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: .25rem;
+}
+.week-row input, .week-row select { width: 100%; }
+.week-del { padding: .45rem .7rem; font-size: 1.1rem; line-height: 1; }
+
+.week-tools { display: flex; gap: .55rem; margin-top: .9rem; flex-wrap: wrap; }
+.week-tools .btn { flex: 0 0 auto; }
+.week-tools select { flex: 1 1 12rem; }
 
 /* ------------------------------------------------------------ settings */
 
 .field { display: block; margin-bottom: .95rem; }
 .field > span { display: block; font-size: .8rem; font-weight: 620; margin-bottom: .32rem; }
 .field input[type="text"], .field input[type="date"], .field input[type="time"],
-.field input[type="password"], .field select {
+.field input[type="password"], .field select,
+.week-row input[type="time"], .week-row select, .week-tools select {
   width: 100%; font: inherit; padding: .68rem .8rem; min-height: 44px;
   border: 1px solid var(--rule); border-radius: 11px;
   background: var(--paper); color: var(--ink);
@@ -409,23 +462,23 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sheet-actions { display: flex; gap: .6rem; margin-top: 1.2rem; }
 .sheet-actions .btn { flex: 1; }
 
+/* A secondary route out of the sheet - a different way of leaving, or getting
+   rid of the period altogether - kept clearly apart from the main action. */
+.sheet-alt { margin-top: 1.4rem; padding-top: 1.1rem; border-top: 1px solid var(--rule); }
+.sheet-alt .zd-sub { margin: 0 0 .55rem; }
+.btn-wide { width: 100%; justify-content: center; }
+
 /* --------------------------------------------------------- responsive */
 
-@media (min-width: 720px) {
-  .zone {
-    grid-template-columns: 1fr auto auto auto;
-    grid-template-areas:
-      "name devs set step"
-      "meta devs set step";
-    align-items: center;
-  }
-  .zone-devices { margin-top: 0; padding-top: 0; border-top: 0; max-width: 200px; justify-content: flex-end; }
-}
+/* The room cards no longer change shape with the viewport - they are boxes in
+   a grid, so the card keeps one layout at every width and it is the number of
+   columns that changes. */
 
 @media (max-width: 400px) {
   .mode-row { grid-template-columns: repeat(2, 1fr); }
   .dev { grid-template-columns: auto 1fr; }
   .dev > .dev-actions { grid-column: 1 / -1; }
+  .week-row { grid-template-columns: 1fr 1fr auto; }
 }
 
 /* Touch targets. A 34px stepper is fine under a mouse and too small under a
@@ -436,4 +489,6 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .icon-btn { width: 44px; height: 44px; }
   .topbar-back { min-width: 44px; min-height: 44px; }
   .sysbox > summary { min-height: 44px; display: flex; align-items: center; }
+  .day-tab { min-height: 44px; }
+  .week-del { min-width: 44px; min-height: 44px; }
 }
