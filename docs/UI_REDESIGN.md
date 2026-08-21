@@ -229,13 +229,55 @@ brief rules out backend changes and iOS — the platform actually asked for — 
 
 ### Visual language
 
-Warm paper, deep pine and a single amber accent for heat, with a cool blue reserved for saving and
-red kept strictly for genuine errors. Flat surfaces, one strong rule down the left of the hero
-card, and no gradients or glass.
+Warm paper, deep pine and a single amber accent for heat, with red kept strictly for genuine
+errors. Flat surfaces, one strong rule down the left of the hero card, and no gradients or glass.
+
+**Mode colours were reworked in the third review pass.** The four modes are now far apart in hue,
+because they have to be legible next to each other inside a 20-pixel schedule bar:
+
+| Mode | Colour | Why |
+|---|---|---|
+| Comfort | Red `#C0413A` | Heating hard. Asked for explicitly. |
+| Eco | Green `#2E8B57` | Saving. Asked for explicitly. |
+| Away | Blue `#2C6FB8` | Cold — a fixed 7 °C. Asked for explicitly. |
+| Following the schedule | Violet `#7A57A8` | Distinct from all three, so "on schedule" never reads as one of the modes. |
+| Off | Neutral grey | No hue, because nothing is happening. |
+
+This overrides the earlier note that red was reserved for errors alone; the user's mental model
+(red = hot) won, and errors are distinguished by shape and wording — a warning note block or a
+toast — rather than by colour alone. Every colour has a dark-mode counterpart, and mode is never
+the *only* signal: each segment carries a title attribute and every badge carries its label in
+words.
 
 It is deliberately not modelled on Netatmo or Mill. Both were looked at as competent examples of
 the category and then set aside; the trip-led structure, the paper-and-pine palette and the roof
 mark are this product's own.
+
+### Away is 7 °C, and what to do about it
+Nobø's Away is a fixed 7 °C anti-frost temperature. It is set by the hub, it is not exposed as a
+setpoint, and there is no way to raise it. This is a real limitation of the platform, and the
+previous UI simply did not mention it — so a user who wanted a room to sit at 12 °C while away had
+no way to discover that Away could not do that.
+
+Concept D says so wherever Away can be chosen: on the leaving sheet, on the room detail, in the
+week editor as soon as a row is set to Away, and in the schedule legend ("Away · 7 °C"). Each place
+points at the one thing that *does* work — Eco, which has a real per-room temperature.
+
+**Rooms that must not get cold.** Settings now carries a list of rooms that hold their Eco
+temperature instead of dropping to Away, for the bathroom with pipes in the wall, the workshop, the
+wine store. Turning it on marks those zones; a global Away then applies Away everywhere and
+immediately re-overrides the marked zones to Eco. A zone override beats the global override on the
+hub, so the room stays on Eco for the whole trip.
+
+**This one needed a backend change, and that was deliberate.** An away *period* is applied by
+`away_schedule_loop()` in `server.py`, a background loop that acts on the transition into the
+window — typically at 06:00 on a Friday with no browser open anywhere. A client-side exception list
+would have worked perfectly in every manual test and then silently done nothing on exactly the
+trips it was bought for. The change is additive: a new `away_exceptions.json` in the data volume,
+`_apply_away_exceptions()` called after Away is applied on both the manual and the scheduled path,
+and `GET`/`PUT /api/global-mode/away-exceptions`. No existing endpoint changed shape, so concepts
+A, B, C and the production UI are unaffected. It is covered by 16 new tests in
+`tests/test_away_exceptions.py`, including the scheduled-transition case.
 
 ### Device pictures
 
@@ -251,6 +293,11 @@ generic icons.
   Heating is inferred from measured versus target temperature and is labelled as an estimate.
 - The week editor writes whole profiles. It does not rename or reassign profiles, so a room sharing
   a profile keeps sharing it — the editor warns rather than silently splitting them.
+- It cannot raise the 7 °C Away temperature. Nothing can; the away-exception list works around it
+  by using Eco, it does not fix it.
+- The away-exception list applies to *global* Away — pressing Away, or an away period starting. It
+  does not intercept a single room that you set to Away by hand, because that is an explicit,
+  deliberate choice about that one room.
 
 ---
 
@@ -591,6 +638,12 @@ strip, responsive behaviour, focus states and keyboard support. All of it runs o
 Per §1 of the brief, these are the two places where a UI improvement depends on something the
 backend does not currently provide. **Neither has been implemented.**
 
+> **Update, third review pass.** A third case turned up that could not be left as a flag: holding a
+> room on Eco while the rest of the house goes Away. Unlike the two below, it is not cosmetic — an
+> away period is applied by a server-side loop with no browser open, so a UI-only version would
+> silently fail. It *was* implemented, additively, and is described under "Away is 7 °C, and what to
+> do about it" in section I.
+
 #### 1. A truthful heating indicator
 
 There is no `heating_active` field on `/api/zones`, and the hub does not report element power in
@@ -747,3 +800,22 @@ A review on the device raised four more. All four are fixed and covered by new a
    hub took it, re-checks that every day is still fully covered, and restores the original week.
 4. **Rooms were a list.** They are boxes in a grid that reflows by width. Asserted as multi-column
    at 1440px, single column at 390px, and equal height within a row.
+
+### Third review pass
+
+Four more points from using the device, and the first one that could not be solved in the UI alone.
+
+1. **The "Edit week" button touched the Monday bar.** The heading row had no space beneath it, so
+   the button appeared attached to the schedule it sits above. `.card-head` now carries a 1rem
+   bottom margin and wraps on narrow screens instead of squeezing.
+2. **Mode colours were too close together.** Comfort is now red, Eco green, Away blue, and
+   following the schedule violet, in both light and dark mode. See "Visual language" above.
+3. **Away being 7 �C was invisible.** It is now stated on the leaving sheet, on the room detail, in
+   the schedule legend, and in the week editor as soon as a row uses Away � each time pointing at
+   Eco as the way to hold a room warmer.
+4. **Rooms that must not get cold.** A new Settings list of zones held on Eco during Away, applied
+   on the server so it works when an away period starts with no browser open. Backend rationale is
+   in "Away is 7 �C, and what to do about it" above.
+
+Verified by 419 pytest tests (16 of them new, in `tests/test_away_exceptions.py`) plus the
+browser harness run against the live Pi.

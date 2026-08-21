@@ -30,6 +30,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. The eco temperature must be lower than the comfort temperature, and values are rounded to whole degrees because that is all the hub stores. |
 | **Weekly schedule** | A per-zone plan of which mode applies at which time on each day of the week (see [Weekly schedule rules](#weekly-schedule-rules)). |
 | **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
+| **Rooms that must not get cold** | Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be raised. Nominate the zones that should hold their **Eco** temperature instead — a bathroom with pipes in the wall, a workshop — and they stay on Eco whenever the rest of the house goes Away, whether you pressed Away or an away period started on its own. See [Rooms that must not get cold](#rooms-that-must-not-get-cold). |
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
@@ -167,6 +168,37 @@ rejected.
 A partial update is rejected rather than merged, so that a saved schedule is
 never half old and half new. The editor in the web interface builds a valid
 week for you; these rules matter if you call the API yourself.
+
+### Rooms that must not get cold
+
+**Away is 7 °C, and that is fixed.** It is an anti-frost setting decided by the
+Nobø hub. It is not a set point, it is not exposed by the protocol, and no app —
+this one, Nobø's own, or any other — can raise it. If a room needs to stay
+warmer than 7 °C while you are away, Away is the wrong tool: **Eco** is the only
+mode with a temperature you control that is still below Comfort.
+
+So the app lets you nominate the rooms that should be held on Eco instead of
+Away. Under **Settings → Rooms that must not get cold**, tick the zones
+concerned. From then on:
+
+- pressing **Away**, or an **away period** starting, sets every zone to Away as
+  before, and then immediately puts the ticked zones back on **Eco**;
+- the ticked zones stay on Eco for the whole trip;
+- coming **Home** returns every zone, ticked or not, to its weekly schedule.
+
+This works because a per-zone override outranks the global override on the hub.
+
+Two things worth knowing:
+
+- The list is applied **on the Raspberry Pi, not in your browser.** An away
+  period starts in a background loop, which is usually running with nobody
+  logged in — so the exception has to live on the server to be worth anything.
+- It only affects **global** Away. Setting one room to Away by hand is treated
+  as a deliberate choice about that room and is left alone.
+
+The list is stored in `data/away_exceptions.json` and is included in a backup.
+If a zone in the list is deleted, it is ignored rather than causing an error,
+and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
 
 ## Prerequisites
 
@@ -1055,6 +1087,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/hub/config` | Current hub connection settings |
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
+| `GET /api/global-mode/away-exceptions` | Zones held on Eco during Away, plus the fixed away temperature |
 | `WS /ws` | Live updates. Pushes the current zones on connect, then again whenever anything changes. |
 
 ### Controlling
@@ -1067,6 +1100,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `PUT /api/zones/{zone_id}` | Rename a zone or change its icon |
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
+| `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
 
 ### Zones and devices

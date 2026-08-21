@@ -36,10 +36,24 @@
   --danger:     #C9453C;
   --danger-wash:#F8E7E5;
 
-  /* Schedule states that are neither heating nor saving: away holds a fixed
-     low temperature, off is not heating at all. */
-  --away:       #9AB6C6;
-  --off:        #C3BCB0;
+  /* Mode colours. These four are the language of the whole app, so they are
+     deliberately far apart in hue and readable next to each other in a 20px
+     schedule bar: comfort is red (heating hard), eco is green (saving),
+     away is blue (cold - a fixed 7 C anti-frost), and following the schedule
+     is violet so it never reads as "one of the other three". */
+  --m-comfort:      #C0413A;
+  --m-comfort-wash: #FAE8E6;
+  --m-eco:          #2E8B57;
+  --m-eco-wash:     #E4F2E9;
+  --m-away:         #2C6FB8;
+  --m-away-wash:    #E4EEF8;
+  --m-sched:        #7A57A8;
+  --m-sched-wash:   #EEE9F6;
+
+  /* Off is not heating at all: no hue, so it cannot be mistaken for a mode
+     that is doing something. */
+  --away:       var(--m-away);
+  --off:        #B3ADA2;
 
   --radius:     18px;
   --radius-sm:  12px;
@@ -70,8 +84,16 @@
     --frost-wash: #17242B;
     --danger:     #F08078;
     --danger-wash:#2C1A19;
-    --away:       #4E6D7C;
-    --off:        #4A4740;
+    --away:       var(--m-away);
+    --off:        #605B52;
+    --m-comfort:      #EE7B72;
+    --m-comfort-wash: #2E1A18;
+    --m-eco:          #5FC489;
+    --m-eco-wash:     #16281E;
+    --m-away:         #6FA8E6;
+    --m-away-wash:    #16222E;
+    --m-sched:        #B394E0;
+    --m-sched-wash:   #221B2E;
     --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
   }
 }
@@ -205,9 +227,9 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .mode-glyph { font-size: 1.15rem; line-height: 1; }
 .mode-btn:hover { border-color: var(--pine); color: var(--ink); }
 .mode-btn[aria-pressed="true"] { background: var(--pine-wash); border-color: var(--pine); color: var(--pine); }
-.mode-btn[data-global="comfort"][aria-pressed="true"] { background: var(--amber-wash); border-color: var(--amber); color: var(--amber); }
-.mode-btn[data-global="eco"][aria-pressed="true"],
-.mode-btn[data-global="away"][aria-pressed="true"] { background: var(--frost-wash); border-color: var(--frost); color: var(--frost); }
+.mode-btn[data-global="comfort"][aria-pressed="true"] { background: var(--m-comfort-wash); border-color: var(--m-comfort); color: var(--m-comfort); }
+.mode-btn[data-global="eco"][aria-pressed="true"] { background: var(--m-eco-wash); border-color: var(--m-eco); color: var(--m-eco); }
+.mode-btn[data-global="away"][aria-pressed="true"] { background: var(--m-away-wash); border-color: var(--m-away); color: var(--m-away); }
 
 /* -------------------------------------------------------------- rooms */
 
@@ -312,9 +334,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   font-size: .71rem; font-weight: 650; letter-spacing: .01em;
   border: 1px solid transparent; white-space: nowrap;
 }
-.badge-mode-comfort { background: var(--amber-wash); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
-.badge-mode-eco,
-.badge-mode-away    { background: var(--frost-wash); color: var(--frost); border-color: color-mix(in srgb, var(--frost) 35%, transparent); }
+.badge-mode-comfort { background: var(--m-comfort-wash); color: var(--m-comfort); border-color: color-mix(in srgb, var(--m-comfort) 35%, transparent); }
+.badge-mode-eco     { background: var(--m-eco-wash); color: var(--m-eco); border-color: color-mix(in srgb, var(--m-eco) 35%, transparent); }
+.badge-mode-away    { background: var(--m-away-wash); color: var(--m-away); border-color: color-mix(in srgb, var(--m-away) 35%, transparent); }
+.badge-mode-normal  { background: var(--m-sched-wash); color: var(--m-sched); border-color: color-mix(in srgb, var(--m-sched) 35%, transparent); }
 .badge-mode-normal  { background: var(--pine-wash);  color: var(--pine);  border-color: color-mix(in srgb, var(--pine) 30%, transparent); }
 /* A dial you can only turn by hand is a real constraint, so it is called out
    in words, not by a colour alone. */
@@ -379,17 +402,19 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sched-day > span { font-size: .78rem; color: var(--ink-faint); font-weight: 600; }
 .sched-bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; background: var(--rule); }
 .sched-seg { height: 100%; }
-.sched-seg.m-comfort { background: var(--amber); }
-.sched-seg.m-eco     { background: var(--frost); }
-.sched-seg.m-away    { background: var(--away); }
+.sched-seg.m-comfort { background: var(--m-comfort); }
+.sched-seg.m-eco     { background: var(--m-eco); }
+.sched-seg.m-away    { background: var(--m-away); }
 .sched-seg.m-off     { background: var(--off); }
-.sched-seg.m-normal  { background: var(--pine); }
+.sched-seg.m-normal  { background: var(--m-sched); }
 .sched-key { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: .7rem; font-size: .76rem; color: var(--ink-soft); }
 .sched-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: .3rem; vertical-align: -1px; }
 
 /* ------------------------------------------------- editing the week */
 
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
+/* The heading row sits directly above the Monday schedule bar, so it needs
+   real space under it - otherwise "Edit week" appears to be stuck to Monday. */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .card-head h2 { margin: 0; }
 
 .day-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: .2rem 0 .9rem; }
@@ -498,3 +523,21 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .day-tab { min-height: 44px; }
   .week-del { min-width: 44px; min-height: 44px; }
 }
+
+/* ------------------------------------------------- away exceptions (settings)
+   Rooms held on Eco while the rest of the house goes Away. A plain checkbox
+   list: the choice is per room and there are rarely more than a dozen rooms. */
+.exc-list { display: grid; gap: .2rem; margin: .9rem 0 .2rem; }
+.exc-row {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .7rem;
+  padding: .6rem .2rem; min-height: 44px; cursor: pointer;
+  border-bottom: 1px solid var(--rule);
+}
+.exc-row:last-child { border-bottom: 0; }
+.exc-row input { width: 20px; height: 20px; accent-color: var(--m-eco); }
+.exc-name { font-weight: 600; }
+.exc-note { font-size: .76rem; color: var(--ink-faint); white-space: nowrap; }
+
+/* The 7 C explanation, shown next to Away wherever Away can be chosen. */
+.away-hint { margin: .7rem 0 0; }
+.sched-away-note { margin: .55rem 0 0; }

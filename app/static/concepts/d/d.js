@@ -13,8 +13,10 @@
  *   - devices whose temperature can only be turned by hand are called out in
  *     words on the room row and again on each device.
  *
- * Read/write against existing endpoints only. Nothing here needs a backend
- * change.
+ * Read/write against existing endpoints only, with one exception: the away
+ * exceptions list (rooms held on Eco during Away) is stored and applied on the
+ * server, because an away period starts in a background loop with no browser
+ * open. See docs/UI_REDESIGN.md.
  */
 
 (() => {
@@ -22,6 +24,16 @@
 
   const $  = (sel, root = document) => root.querySelector(sel);
   const esc = Nobo.escapeHtml;
+
+  /* Away is a fixed 7 C anti-frost temperature set by Nobø. It is not a
+     configurable setpoint, and users reasonably assume it is - so every place
+     Away appears says so, and points at Eco as the way to hold a room warmer.
+     The real value is read from the API and overwrites this default. */
+  let AWAY_TEMP = 7;
+  const AWAY_TEMP_LABEL = () => `${AWAY_TEMP}°C`;
+  const AWAY_EXPLAINER = () =>
+    `Away is a fixed ${AWAY_TEMP}°C anti-frost setting from Nobø and cannot be raised. ` +
+    `To keep a room warmer than that, use Eco and set its Eco temperature.`;
 
   /* ------------------------------------------------------------------
    * State
@@ -267,8 +279,9 @@
     const leavingNow = !a.enabled || !a.start_at || new Date(a.start_at) <= now;
 
     openSheet(a.enabled ? 'Change your away period' : "You're leaving", `
-      <p class="zd-sub">The cabin drops to the away temperature and comes back to its
-      normal schedule when you return.</p>
+      <p class="zd-sub">Every room drops to Away — a fixed ${AWAY_TEMP_LABEL()} anti-frost
+      temperature set by Nobø — and returns to its normal schedule when you get back.
+      Rooms that must stay warmer can be held on Eco instead, under Settings.</p>
 
       <label class="field">
         <span>Leaving</span>
@@ -668,7 +681,7 @@
         </div>
         ${adjustable ? '' : `<div class="note note-warn">${!remote
           ? 'No heater in this room can be adjusted from here. You can still switch the room between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
-          : 'Away uses a fixed system temperature, so it cannot be changed per room.'}</div>`}
+          : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per room. To hold this room warmer while you are away, put it on Eco, or list it under Settings as a room that must not get cold.`}</div>`}
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
@@ -780,11 +793,12 @@
 
     return `<div class="sched">${rows}</div>
       <div class="sched-key">
-        <span><i style="background:var(--amber)"></i>Comfort</span>
-        <span><i style="background:var(--frost)"></i>Eco</span>
-        <span><i style="background:var(--away)"></i>Away</span>
+        <span><i style="background:var(--m-comfort)"></i>Comfort</span>
+        <span><i style="background:var(--m-eco)"></i>Eco</span>
+        <span><i style="background:var(--m-away)"></i>Away · ${AWAY_TEMP_LABEL()}</span>
         <span><i style="background:var(--off)"></i>Off</span>
       </div>
+      <p class="zd-sub sched-away-note">${AWAY_EXPLAINER()}</p>
       ${sharedNote}`;
   }
 
@@ -853,6 +867,8 @@
       <div class="sched-bar sched-preview" id="weekPreview"></div>
 
       <div id="weekRows" class="week-rows"></div>
+
+      <p class="zd-sub away-hint" id="weekAwayHint" hidden>${AWAY_EXPLAINER()}</p>
 
       <div class="week-tools">
         <button class="btn" type="button" data-act="add">Add a change</button>
@@ -925,6 +941,10 @@
         rowsEl.querySelectorAll('[data-mode]').forEach(sel => {
           sel.onchange = () => { draft[day][Number(sel.dataset.mode)].mode = sel.value; paint(); };
         });
+
+        // The 7 C explanation only earns its space once Away is actually in use.
+        const hint = root.querySelector('#weekAwayHint');
+        if (hint) hint.hidden = !pts.some(p => p.mode === 'away');
         rowsEl.querySelectorAll('[data-del]').forEach(b => {
           b.onclick = () => { draft[day].splice(Number(b.dataset.del), 1); paint(); };
         });
@@ -1181,6 +1201,21 @@
       </section>
 
       <section class="card">
+        <h2>Rooms that must not get cold</h2>
+        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the rooms that should hold their
+        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever the cabin
+        goes Away — a bathroom with pipes, a workshop, a wine store.</p>
+        <div id="awayExc" class="exc-list">
+          <p class="zd-sub">Loading rooms…</p>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
+        </div>
+        <small class="field-hint">This applies both when you press Away and when a
+        planned away period starts while nobody is looking at the app.</small>
+      </section>
+
+      <section class="card">
         <h2>Your account</h2>
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
@@ -1206,6 +1241,66 @@
       window.location.href = '/login';
     };
     root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/#settings'; };
+    root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
+    loadAwayExceptions();
+  }
+
+  /* ------------------------------------------------------------------
+   * Away exceptions
+   *
+   * Nobø's Away is a fixed 7 C and cannot be raised, which is a real problem
+   * for a room that must stay warmer. The only warmer setting the hub offers
+   * is the room's own Eco temperature, so an exception simply means "put this
+   * room on Eco while everywhere else goes Away".
+   *
+   * The list is stored and applied on the server on purpose: an away period
+   * starts in a background loop, typically with no browser open, so a purely
+   * client-side version would silently do nothing on exactly the trips it was
+   * bought for.
+   * ---------------------------------------------------------------- */
+
+  async function loadAwayExceptions() {
+    const box = $('#awayExc');
+    if (!box) return;
+    try {
+      const data = await Nobo.api.awayExceptions();
+      if (typeof data.away_temperature === 'number') AWAY_TEMP = data.away_temperature;
+      const chosen = new Set((data.zone_ids || []).map(String));
+      const zones = state.zones.length ? state.zones : (await Nobo.api.zones() || []);
+      if (!zones.length) {
+        box.innerHTML = `<p class="zd-sub">No rooms to choose from yet.</p>`;
+        return;
+      }
+      box.innerHTML = zones.map(z => `
+        <label class="exc-row">
+          <input type="checkbox" data-exc="${esc(String(z.zone_id))}"
+                 ${chosen.has(String(z.zone_id)) ? 'checked' : ''}>
+          <span class="exc-name">${esc(z.name)}</span>
+          <span class="exc-note">${z.eco_temperature != null
+            ? `Eco ${esc(String(z.eco_temperature))}°C`
+            : 'Eco temperature'}</span>
+        </label>`).join('');
+    } catch (e) {
+      box.innerHTML = `<p class="zd-sub">Could not load the rooms: ${esc(e.message)}</p>`;
+    }
+  }
+
+  async function saveAwayExceptions() {
+    const box = $('#awayExc');
+    if (!box) return;
+    const zone_ids = Array.from(box.querySelectorAll('[data-exc]'))
+      .filter(cb => cb.checked)
+      .map(cb => cb.dataset.exc);
+    try {
+      const res = await Nobo.api.setAwayExceptions(zone_ids);
+      Nobo.toast(zone_ids.length
+        ? `${zone_ids.length} room${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
+        : 'Every room will follow Away');
+      if (res && res.applied_now && res.applied_now.length) {
+        Nobo.toast('Applied now, because the cabin is away');
+      }
+      refresh();
+    } catch (e) { Nobo.toast(e.message, 'error'); }
   }
 
   function toggleDemo(next) {

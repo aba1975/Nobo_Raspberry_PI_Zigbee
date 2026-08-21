@@ -60,6 +60,12 @@ const Nobo = (() => {
                                   method: 'PUT', body: JSON.stringify(body) }),
     clearAwaySchedule: ()     => req('/api/global-mode/away-schedule', { method: 'DELETE' }),
 
+    // Rooms held on Eco while the rest of the house is Away, because Nobø's
+    // Away is a fixed 7 C anti-frost temperature that cannot be raised.
+    awayExceptions:    ()     => req('/api/global-mode/away-exceptions'),
+    setAwayExceptions: (ids)  => req('/api/global-mode/away-exceptions', {
+                                  method: 'PUT', body: JSON.stringify({ zone_ids: ids }) }),
+
     hubConfig:    ()     => req('/api/hub/config'),
     setHubConfig: (body) => req('/api/hub/config', { method: 'POST', body: JSON.stringify(body) }),
 

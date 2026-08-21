@@ -2225,7 +2225,9 @@ async def set_global_override(mode: str):
             global_mode_source = "manual"
             config_persistence.save_demo_zones(DEMO_ZONES)
             config_persistence.save_server_state({"global_mode_source": global_mode_source})
-            return {"status": "success", "mode": mode, "source": "manual"}
+            exceptions = await _apply_away_exceptions() if mode == 'away' else []
+            return {"status": "success", "mode": mode, "source": "manual",
+                    "away_exceptions_applied": exceptions}
         
         # Real hub mode — use a single global override command instead of per-zone
         if not current_hub:
@@ -2261,7 +2263,9 @@ async def set_global_override(mode: str):
         
         global_mode_source = "manual"
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
-        return {"status": "success", "mode": mode, "source": "manual"}
+        exceptions = await _apply_away_exceptions() if mode == 'away' else []
+        return {"status": "success", "mode": mode, "source": "manual",
+                "away_exceptions_applied": exceptions}
     except HTTPException:
         raise
     except Exception as e:
@@ -2273,7 +2277,6 @@ async def set_global_override(mode: str):
 
 @app.get("/api/global-mode/away-schedule")
 async def get_away_schedule():
-    """Return the current away schedule configuration."""
     schedule = away_schedule.load_schedule()
     now = datetime.now(timezone.utc)
     currently_active = away_schedule.is_schedule_active(schedule, now)
@@ -2289,6 +2292,82 @@ class AwayScheduleUpdate(BaseModel):
     enabled: bool
     start_at: Optional[str] = None
     end_at: Optional[str] = None
+
+
+class AwayExceptionsUpdate(BaseModel):
+    zone_ids: List[str] = []
+
+
+@app.get("/api/global-mode/away-exceptions")
+async def get_away_exceptions():
+    """
+    Zones kept on Eco while the rest of the house is Away.
+
+    Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be changed,
+    so ``away_temperature`` is returned alongside the list to make it clear what
+    the exception is protecting the room from.
+    """
+    zone_ids = config_persistence.load_away_exceptions()
+    try:
+        zones = await get_zones()
+    except HTTPException:
+        # No hub, so no zone names. The stored list is still the truth.
+        return {
+            "zone_ids": zone_ids,
+            "zone_names": [],
+            "away_temperature": AWAY_TEMPERATURE,
+            "unknown_zone_ids": [],
+        }
+    known = {str(z['zone_id']): z['name'] for z in zones.get('zones', [])}
+    return {
+        "zone_ids": [z for z in zone_ids if z in known],
+        "zone_names": [known[z] for z in zone_ids if z in known],
+        "away_temperature": AWAY_TEMPERATURE,
+        # Stale ids are reported rather than silently dropped, so a room that
+        # was deleted while listed does not quietly stop being protected.
+        "unknown_zone_ids": [z for z in zone_ids if z not in known],
+    }
+
+
+@app.put("/api/global-mode/away-exceptions")
+async def update_away_exceptions(body: AwayExceptionsUpdate):
+    """
+    Replace the list of zones kept on Eco during Away.
+
+    Applies immediately when the house is already Away, so the setting does not
+    appear to do nothing until the next trip.
+    """
+    zones = await get_zones()
+    known = {str(z['zone_id']) for z in zones.get('zones', [])}
+    requested = [str(z) for z in body.zone_ids]
+
+    unknown = [z for z in requested if z not in known]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown zone ids: {', '.join(unknown)}")
+
+    # De-duplicate but keep the order the user chose.
+    seen = set()
+    zone_ids = [z for z in requested if not (z in seen or seen.add(z))]
+
+    config_persistence.save_away_exceptions(zone_ids)
+    add_log_entry(
+        "sent",
+        f"Away exceptions set to {', '.join(zone_ids) if zone_ids else 'none'}",
+        command=f"away_exceptions {','.join(zone_ids)}",
+        source="api",
+    )
+
+    applied: List[str] = []
+    schedule = away_schedule.load_schedule()
+    now = datetime.now(timezone.utc)
+    house_is_away = (
+        away_schedule.is_schedule_active(schedule, now)
+        or any(z.get('current_mode') == 'away' for z in zones.get('zones', []))
+    )
+    if house_is_away and zone_ids:
+        applied = await _apply_away_exceptions()
+
+    return {"status": "success", "zone_ids": zone_ids, "applied_now": applied}
 
 
 @app.put("/api/global-mode/away-schedule")
@@ -2360,6 +2439,75 @@ async def delete_away_schedule():
     return {"status": "cleared"}
 
 
+async def _apply_away_exceptions(source: str = "api") -> List[str]:
+    """
+    Put every configured exception zone on Eco, right after the house went Away.
+
+    Nobø's Away is a fixed 7 °C that cannot be changed (AWAY_TEMPERATURE). A
+    room that must not go that cold has exactly one warmer setting available to
+    it — its own Eco temperature — so an exception zone is overridden to Eco
+    while the rest of the house holds Away.
+
+    A zone override beats the global override on the hub, and the away schedule
+    loop deliberately does not re-assert Away while a window is open, so the Eco
+    override stands for the whole away period.
+
+    Returns the zone ids that were actually changed.
+    """
+    zone_ids = config_persistence.load_away_exceptions()
+    if not zone_ids:
+        return []
+
+    with connection_lock:
+        current_hub = hub
+
+    applied: List[str] = []
+
+    if DEMO_MODE:
+        for demo_zone in DEMO_ZONES:
+            if str(demo_zone.get('zone_id')) in zone_ids:
+                demo_zone['mode'] = 'eco'
+                applied.append(str(demo_zone.get('zone_id')))
+        if applied:
+            config_persistence.save_demo_zones(DEMO_ZONES)
+            add_log_entry(
+                "sent",
+                f"[DEMO] Away exceptions kept on Eco: {', '.join(applied)}",
+                command=f"create_override now 0 eco {','.join(applied)}",
+                source=source,
+            )
+        return applied
+
+    if not current_hub:
+        return []
+
+    for zone_id in zone_ids:
+        if zone_id not in current_hub.zones:
+            # A room that has since been deleted. Skip it rather than fail the
+            # whole away transition.
+            logger.warning("Away exception zone %s no longer exists — skipping", zone_id)
+            continue
+        try:
+            await hub_command(current_hub.async_create_override(
+                pynobo.nobo.API.OVERRIDE_MODE_ECO,
+                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
+                zone_id,
+            ))
+            applied.append(zone_id)
+            add_log_entry(
+                "sent",
+                f"create_override(ECO, NOW, ZONE, zone_{zone_id}) — away exception",
+                command=f"create_override eco NOW ZONE {zone_id}",
+                source=source,
+            )
+        except Exception as exc:
+            # One unreachable zone must not leave the rest of the house un-Away.
+            logger.error("Could not apply away exception to zone %s: %s", zone_id, exc)
+
+    return applied
+
+
 async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> None:
     """
     Internal helper to apply a global mode without going through the HTTP endpoint.
@@ -2386,6 +2534,8 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         global_mode_source = source
         config_persistence.save_demo_zones(DEMO_ZONES)
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
+        if mode == 'away':
+            await _apply_away_exceptions(source=source)
         return
 
     if not current_hub:
@@ -2413,6 +2563,8 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     global_mode_source = source
     config_persistence.save_server_state({"global_mode_source": global_mode_source})
     await asyncio.sleep(0.5)
+    if mode == 'away':
+        await _apply_away_exceptions(source=source)
 
 
 async def away_schedule_loop():

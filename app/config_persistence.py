@@ -34,6 +34,7 @@ DEMO_SCHEDULES_FILE = DATA_DIR / "demo_schedules.json"
 SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
+AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
 
 # Default server state values
 _DEFAULT_SERVER_STATE: dict = {"global_mode_source": "manual"}
@@ -266,3 +267,57 @@ def load_hub_config() -> Optional[dict]:
         logger.warning("hub_config.json is corrupt: %s — backing up and using environment", exc)
         _backup_corrupt(HUB_CONFIG_FILE)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Away exceptions  (zones kept on Eco while the rest of the house is Away)
+# ---------------------------------------------------------------------------
+#
+# Nobø's Away state is a fixed 7 °C anti-frost temperature that cannot be
+# configured — see AWAY_TEMPERATURE in server.py. That is too cold for some
+# rooms: a cellar with water pipes, a room with an instrument or a plant, or a
+# workshop. The only warmer setting a zone can hold is its own Eco temperature,
+# which IS configurable per zone.
+#
+# So a zone can be listed here as an exception, and whenever the house goes
+# Away — manually or because an away period started — those zones are put on
+# Eco instead. This has to live on the server because the away period is
+# applied by a background loop that runs whether or not a browser is open.
+
+def save_away_exceptions(zone_ids: list) -> None:
+    """Persist the list of zone ids kept on Eco during Away, atomically."""
+    try:
+        _atomic_write(AWAY_EXCEPTIONS_FILE, {"zone_ids": [str(z) for z in zone_ids]})
+    except Exception as exc:
+        logger.error("Failed to save away exceptions: %s", exc)
+        raise
+
+
+def load_away_exceptions() -> list:
+    """
+    Load the away exception zone ids from ``data/away_exceptions.json``.
+
+    Returns an empty list when the file is missing or corrupt: no exception is
+    always the safe reading, because it means the house behaves exactly the way
+    Nobø's own Away does.
+    """
+    try:
+        with AWAY_EXCEPTIONS_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "away_exceptions.json has unexpected format (expected dict, got %s) — using none",
+                type(data).__name__,
+            )
+            return []
+        ids = data.get("zone_ids", [])
+        if not isinstance(ids, list):
+            logger.warning("away_exceptions.json has a non-list zone_ids — using none")
+            return []
+        return [str(z) for z in ids]
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as exc:
+        logger.warning("away_exceptions.json is corrupt: %s — backing up and using none", exc)
+        _backup_corrupt(AWAY_EXCEPTIONS_FILE)
+        return []
