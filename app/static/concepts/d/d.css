@@ -208,6 +208,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .zone-list { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .6rem; }
 
 .zone {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto auto;
   grid-template-areas:
@@ -230,7 +231,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   font: inherit; font-size: 1.06rem; font-weight: 640; color: var(--ink);
   text-align: left; cursor: pointer; min-width: 0;
 }
+/* The room name is a small target on its own, so its hit area is stretched
+   across the whole card. The stepper sits above it and stays independent. */
+.zone-open::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
 .zone-open:hover { color: var(--pine); }
+.zone-open:focus-visible::after { outline: 3px solid var(--amber); outline-offset: -3px; }
 .zone-open .chev { color: var(--ink-faint); font-size: 1.1rem; }
 
 .zone-meta {
@@ -259,7 +264,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .set-mode { font-size: clamp(1.25rem, 4vw, 1.5rem); font-weight: 640; letter-spacing: -.01em; }
 .zd-mode { font-size: clamp(2rem, 9vw, 2.8rem); font-weight: 650; letter-spacing: -.02em; }
 
-.stepper { grid-area: step; display: flex; flex-direction: column; gap: .3rem; }
+.stepper { grid-area: step; position: relative; z-index: 1; display: flex; flex-direction: column; gap: .3rem; }
 .step-btn {
   width: 40px; height: 34px; border-radius: 10px;
   border: 1px solid var(--rule); background: var(--card); color: var(--ink);
