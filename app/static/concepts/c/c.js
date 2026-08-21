@@ -147,7 +147,7 @@
           </div>
           <div class="row-devices" aria-hidden="true">${thumbs}${more}</div>
           <div class="row-temp">
-            <span class="row-now">${Nobo.fmtTemp(zone.current_temperature)}<span class="deg">\u00B0C</span></span>
+            <span class="row-now">${Nobo.bigTemp(zone.current_temperature)}</span>
             <span class="row-state">${Nobo.HEAT_STATE[heat].label}</span>
           </div>
           ${setter}

@@ -128,7 +128,7 @@
             </span>
           </div>
           <div class="tile-temp">
-            <span class="temp-now">${Nobo.fmtTemp(zone.current_temperature)}<span class="deg">\u00B0C</span></span>
+            <span class="temp-now">${Nobo.bigTemp(zone.current_temperature)}</span>
             <span class="temp-target">Target <b>${target == null ? '\u2014' : Nobo.fmtTemp(target) + '\u00B0'}</b></span>
           </div>
           <div class="gauge" aria-hidden="true"><div class="gauge-fill" style="width:${gaugeWidth(zone)}%"></div></div>
@@ -271,7 +271,7 @@
       ${hero}
 
       <div class="readout">
-        <span class="readout-now">${Nobo.fmtTemp(zone.current_temperature)}<span class="deg">\u00B0C</span></span>
+        <span class="readout-now">${Nobo.bigTemp(zone.current_temperature)}</span>
         <span class="chip" data-heat="${heat}" title="${esc(heatInfo.hint)}">
           <span class="chip-glyph" aria-hidden="true">${heat === 'heating' ? '\u25B2' : heat === 'holding' ? '\u25CF' : '\u2014'}</span>
           ${heatInfo.label}

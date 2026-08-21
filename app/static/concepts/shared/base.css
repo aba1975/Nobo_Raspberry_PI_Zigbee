@@ -103,6 +103,10 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
  * plinth themselves; only the mechanics live here.
  */
 
+/* A zone with no sensor prints no number at all (see Nobo.bigTemp); this keeps
+   the slot from collapsing so the state label stays on the same baseline. */
+.temp-none { display: inline-block; min-width: 1px; }
+
 .np-device {
   display: flex;
   align-items: center;

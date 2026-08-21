@@ -320,6 +320,20 @@ const Nobo = (() => {
     return value == null ? '\u2014' : value.toFixed(digits);
   }
 
+  /**
+   * Markup for a temperature shown at display size.
+   *
+   * An em dash set at 44-64px in a heavy weight renders as a solid black bar,
+   * which reads as a redaction rather than as "no data". Every concept already
+   * prints an explicit "No sensor" state beside the number, so a zone without a
+   * reading shows nothing here instead of a placeholder that would either shout
+   * or repeat the label next to it.
+   */
+  function bigTemp(value, unit = '\u00B0C') {
+    if (value == null) return '';
+    return `${value.toFixed(1)}<span class="deg">${unit}</span>`;
+  }
+
   /** Debounce with a flush, so a slider can commit immediately on release. */
   function debounce(fn, wait) {
     let timer = null;
@@ -365,7 +379,7 @@ const Nobo = (() => {
     api, DEVICE_MODELS, deviceModel, deviceName, deviceImg,
     MODES, effectiveMode, targetTemp, heatState, HEAT_STATE,
     houseMode, houseSummary, todaySchedule, DAY_KEYS, minutesOf, fmtClock,
-    subscribe, escapeHtml, fmtTemp, debounce, toast,
+    subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
   };
 })();
