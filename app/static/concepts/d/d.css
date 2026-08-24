@@ -401,6 +401,35 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .dev-name { font-weight: 620; }
 .dev-meta { font-size: .78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .dev-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
+.dev-actions { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: flex-end; }
+
+/* ------------------------------------------------------- adding a heater
+   Two ways in, and they are not equivalent: typing the serial always works,
+   the hub's radio search does not work on every model and not at all in demo
+   mode. The manual form therefore comes first and is separated from the
+   search by a rule rather than a tab, so neither can be mistaken for the
+   only option. */
+
+.add-dev-section + .add-dev-section {
+  margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+}
+.add-dev-h {
+  margin: 0 0 .35rem; font-size: .8rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint);
+}
+
+/* The first three digits name the model, so the picture appears as the serial
+   is typed. It confirms the right box is being registered before the hub is
+   asked to pair with it. */
+.dev-detect:empty { display: none; }
+.dev-detect {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .6rem .75rem; margin: -.3rem 0 .8rem;
+  border-radius: var(--radius-sm); font-size: .84rem; line-height: 1.35;
+}
+.dev-detect .np-device { width: 96px; height: 50px; flex: none; }
+.dev-detect.is-known   { background: var(--frost-wash); color: var(--ink-soft); }
+.dev-detect.is-unknown { background: var(--amber-wash); color: var(--ink-soft); }
 
 .sched { display: grid; gap: .35rem; }
 .sched-day { display: grid; grid-template-columns: 3.2rem 1fr; align-items: center; gap: .7rem; }

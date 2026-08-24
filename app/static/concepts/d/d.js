@@ -67,6 +67,15 @@
   const sheetBody = $('#sheetBody');
   let lastFocus = null;
 
+  /**
+   * A sheet may leave something running behind it - the device search polls
+   * the hub every two seconds. Whatever opened the sheet registers a cleanup
+   * here and closeSheet() runs it, so nothing keeps polling once the sheet is
+   * dismissed by the scrim, by Escape, or by a button.
+   */
+  let sheetCleanup = null;
+  const onSheetClose = (fn) => { sheetCleanup = fn; };
+
   function openSheet(title, html, wire) {
     lastFocus = document.activeElement;
     $('#sheetTitle').textContent = title;
@@ -80,6 +89,7 @@
   }
 
   function closeSheet() {
+    if (sheetCleanup) { const fn = sheetCleanup; sheetCleanup = null; fn(); }
     sheetEl.hidden = true;
     scrimEl.hidden = true;
     sheetBody.innerHTML = '';
@@ -694,7 +704,8 @@
       <section class="card">
         <h2>Heaters in this room (${devices.length})</h2>
         ${devices.length ? `<ul class="dev-list">${devices.map(devRow).join('')}</ul>`
-          : `<p class="zd-sub">No heaters are assigned to this room.</p>`}
+          : `<p class="zd-sub">No heaters are assigned to this room. Add one by typing the
+             12-digit serial printed on it.</p>`}
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="add-device">Add a heater</button>
         </div>
@@ -734,6 +745,9 @@
     root.querySelectorAll('[data-move-device]').forEach(b => {
       b.onclick = () => moveDevice(b.dataset.moveDevice);
     });
+    root.querySelectorAll('[data-replace-device]').forEach(b => {
+      b.onclick = () => replaceDevice(b.dataset.replaceDevice);
+    });
     const addBtn = root.querySelector('[data-act="add-device"]');
     if (addBtn) addBtn.onclick = () => addDeviceSheet(zone);
     root.querySelector('[data-act="rename-zone"]').onclick = () => renameZone(zone);
@@ -764,6 +778,7 @@
         </div>
         <div class="dev-actions">
           <button class="btn" type="button" data-move-device="${esc(d.serial)}">Move</button>
+          <button class="btn" type="button" data-replace-device="${esc(d.serial)}">Replace</button>
           <button class="btn btn-danger" type="button" data-remove-device="${esc(d.serial)}">Remove</button>
         </div>
       </li>`;
@@ -1060,55 +1075,289 @@
   }
 
   /**
-   * Adding a heater needs the hub's radio to find nearby devices, which is
-   * not available in demo mode. Rather than offering a button that fails,
-   * the capability is checked and the hub's own reason is shown.
+   * Adding a heater.
+   *
+   * There are two ways in, and an earlier draft of this concept confused them.
+   *
+   *   - **Manual registration** types the 12-digit serial printed on the
+   *     heater. It is `POST /api/devices` and it needs no radio, so it works
+   *     in every mode. This is the only way in for the many Nobø devices that
+   *     do not answer an automatic search at all (see Manual_Nobo.pdf), and it
+   *     is how the original app and the Nobø app both do it.
+   *   - **Automatic search** asks the hub to listen for devices in pairing
+   *     mode. That needs the hub's radio, so `/api/capabilities` reports it as
+   *     unavailable in demo mode.
+   *
+   * Only the second is ever gated. The manual form is always present and
+   * always enabled; when search is unavailable the sheet says so in one line
+   * and leaves the form alone.
+   *
+   * The first three digits of the serial identify the model, so the model name
+   * and its picture are shown as soon as they are typed - the same
+   * confirmation the original app gives, and a check on the digits before the
+   * hub is asked to pair.
    */
   function addDeviceSheet(zone) {
     const feat = state.caps && state.caps.features && state.caps.features.discover_devices;
-    const supported = !feat || feat.supported;
-
-    if (!supported) {
-      openSheet('Add a heater', `
-        <div class="note note-warn">${esc(feat.reason || 'Searching for nearby heaters needs a connected hub.')}</div>
-        <p class="zd-sub">Connect the system to a real hub in Settings, then try again.</p>
-        <div class="sheet-actions">
-          <button class="btn" data-act="cancel" type="button">Close</button>
-          <button class="btn btn-primary" data-act="settings" type="button">Open settings</button>
-        </div>`, (root) => {
-        root.querySelector('[data-act="cancel"]').onclick = closeSheet;
-        root.querySelector('[data-act="settings"]').onclick = () => { closeSheet(); showSettings(); };
-      });
-      return;
-    }
+    const canSearch = !feat || feat.supported;
 
     openSheet('Add a heater', `
-      <p class="zd-sub">Enter the 12-digit serial printed on the heater, and it will be
-      added to <strong>${esc(zone.name)}</strong>.</p>
-      <label class="field">
-        <span>Serial number</span>
-        <input type="text" id="adSerial" inputmode="numeric" autocomplete="off" placeholder="210 000 016 247">
-        <small class="field-hint">Spaces are fine.</small>
-      </label>
-      <label class="field">
-        <span>Name (optional)</span>
-        <input type="text" id="adName" autocomplete="off" placeholder="e.g. Window heater">
-      </label>
-      <div class="sheet-actions">
-        <button class="btn" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-primary" data-act="ok" type="button">Add heater</button>
+      <p class="zd-sub">The heater is added to <strong>${esc(zone.name)}</strong>.</p>
+
+      <div class="add-dev-section">
+        <h3 class="add-dev-h">Type the serial number</h3>
+        <p class="zd-sub">Every Nobø heater has a 12-digit serial printed on a label on
+        the device. Not all models answer an automatic search, so this always works.</p>
+        <label class="field">
+          <span>Serial number</span>
+          <input type="text" id="adSerial" inputmode="numeric" autocomplete="off"
+            maxlength="16" placeholder="210 000 016 247">
+          <small class="field-hint">Spaces are fine.</small>
+        </label>
+        <div class="dev-detect" id="adDetect" aria-live="polite"></div>
+        <label class="field">
+          <span>Name (optional)</span>
+          <input type="text" id="adName" autocomplete="off" placeholder="e.g. Window heater">
+        </label>
+        <div class="sheet-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" data-act="ok" type="button" disabled>Add heater</button>
+        </div>
+      </div>
+
+      <div class="add-dev-section">
+        <h3 class="add-dev-h">Or let the hub find it</h3>
+        ${canSearch
+          ? `<p class="zd-sub">Put the heater into pairing mode, then start the search.
+             Devices that do not support pairing will not appear - type the serial above
+             instead.</p>
+             <div class="sheet-actions">
+               <button class="btn" id="adSearch" type="button">Search for heaters</button>
+               <button class="btn" id="adSearchStop" type="button" hidden>Stop</button>
+             </div>
+             <p class="zd-sub" id="adSearchStatus"></p>
+             <ul class="dev-list" id="adSearchResults"></ul>`
+          : `<div class="note note-warn">${esc(feat.reason ||
+             'Searching for nearby heaters needs the hub\u2019s radio.')}</div>
+             <p class="zd-sub">Typing the serial above still works.</p>`}
       </div>`, (root) => {
+
+      const serialEl = root.querySelector('#adSerial');
+      const detectEl = root.querySelector('#adDetect');
+      const okBtn    = root.querySelector('[data-act="ok"]');
+
+      /** Recognise the model from the serial prefix and show its picture. */
+      function detect() {
+        const serial = serialEl.value.replace(/\s/g, '');
+        const model = serial.length >= 3 ? Nobo.deviceModel(serial) : null;
+
+        if (serial.length < 3) {
+          detectEl.className = 'dev-detect';
+          detectEl.innerHTML = '';
+        } else if (model) {
+          detectEl.className = 'dev-detect is-known';
+          detectEl.innerHTML =
+            `<span class="np-device">${Nobo.deviceImg(serial, '', model.name + ' heating device')}</span>` +
+            `<span><strong>${esc(model.name)}</strong><br>Recognised from the first three digits</span>`;
+        } else {
+          detectEl.className = 'dev-detect is-unknown';
+          detectEl.innerHTML =
+            `<span>No Nobø model uses the prefix <strong>${esc(serial.slice(0, 3))}</strong>. ` +
+            `Check the label - the hub will refuse a serial it does not recognise.</span>`;
+        }
+
+        okBtn.disabled = !(serial.length === 12 && model);
+      }
+
+      serialEl.oninput = detect;
+      detect();
+
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
-      root.querySelector('[data-act="ok"]').onclick = async () => {
-        const serial = root.querySelector('#adSerial').value.replace(/\s/g, '');
+      okBtn.onclick = async () => {
+        const serial = serialEl.value.replace(/\s/g, '');
         const name = root.querySelector('#adName').value.trim();
         if (serial.length !== 12) { Nobo.toast('A serial number is 12 digits', 'error'); return; }
+        okBtn.disabled = true;
         try {
           await Nobo.api.addDevice({ serial, zone_id: zone.zone_id, name: name || undefined });
           closeSheet();
           Nobo.toast('Heater added');
           await refresh(true);
-        } catch (e) { Nobo.toast(e.message, 'error'); }
+        } catch (e) {
+          okBtn.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+
+      if (canSearch) wireDeviceSearch(root, zone);
+    });
+  }
+
+  /**
+   * The hub listens for devices in pairing mode and reports what it hears.
+   * It is a poll, not a push, so it has to be stopped again - both when the
+   * search ends by itself and when the sheet closes underneath it.
+   */
+  function wireDeviceSearch(root, zone) {
+    const startBtn  = root.querySelector('#adSearch');
+    const stopBtn   = root.querySelector('#adSearchStop');
+    const statusEl  = root.querySelector('#adSearchStatus');
+    const resultsEl = root.querySelector('#adSearchResults');
+    let timer = null;
+
+    const stopPolling = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+    const running = (on) => {
+      startBtn.hidden = on;
+      stopBtn.hidden = !on;
+    };
+
+    onSheetClose(() => {
+      stopPolling();
+      // Leave the hub's radio off if the sheet is dismissed mid-search.
+      Nobo.api.stopDeviceSearch().catch(() => {});
+    });
+
+    async function poll() {
+      let data;
+      try {
+        data = await Nobo.api.deviceSearch();
+      } catch (e) {
+        stopPolling();
+        running(false);
+        statusEl.textContent = e.message;
+        return;
+      }
+
+      const found = data.devices || [];
+      resultsEl.innerHTML = found.map(d => `
+        <li class="dev">
+          <span class="np-device">${Nobo.deviceImg(d.serial, '', (d.device_type || 'Heating device'))}</span>
+          <div>
+            <div class="dev-name">${esc(d.device_type || Nobo.deviceName(d.serial))}</div>
+            <div class="dev-meta">${esc(d.serial_display || d.serial)}</div>
+          </div>
+          <div class="dev-actions">
+            ${d.already_registered
+              ? '<span class="badge badge-manual">Already added</span>'
+              : `<button class="btn btn-primary" type="button" data-found="${esc(d.serial)}">Add</button>`}
+          </div>
+        </li>`).join('');
+
+      resultsEl.querySelectorAll('[data-found]').forEach(b => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            await Nobo.api.addDevice({ serial: b.dataset.found, zone_id: zone.zone_id });
+            closeSheet();
+            Nobo.toast('Heater added');
+            await refresh(true);
+          } catch (e) { b.disabled = false; Nobo.toast(e.message, 'error'); }
+        };
+      });
+
+      if (!data.searching) {
+        stopPolling();
+        running(false);
+        statusEl.textContent = found.length
+          ? 'Search finished. Pick a heater above.'
+          : 'Search finished. Nothing answered \u2014 check the heater is in pairing mode, or type its serial above.';
+      } else {
+        statusEl.textContent = `Searching\u2026 found ${found.length}.`;
+      }
+    }
+
+    startBtn.onclick = async () => {
+      statusEl.textContent = 'Starting the search\u2026';
+      resultsEl.innerHTML = '';
+      try {
+        await Nobo.api.startDeviceSearch();
+      } catch (e) { statusEl.textContent = e.message; return; }
+      running(true);
+      statusEl.textContent = 'Searching. Put each heater into pairing mode now.';
+      await poll();
+      stopPolling();
+      timer = setInterval(poll, 2000);
+    };
+
+    stopBtn.onclick = async () => {
+      stopPolling();
+      running(false);
+      statusEl.textContent = 'Search stopped.';
+      try { await Nobo.api.stopDeviceSearch(); } catch (e) { /* already stopped */ }
+    };
+  }
+
+  /**
+   * Replace a broken heater with a new one.
+   *
+   * A device's serial cannot be changed, so the server pairs the new one first
+   * and only removes the old one once that has succeeded - a failed
+   * replacement leaves the room as it was. Removing the old one and adding a
+   * new one separately is the safer habit, and the sheet says so.
+   */
+  function replaceDevice(serial) {
+    const d = state.devices.find(x => x.serial === serial);
+    const label = (d && (d.display_name || d.name)) || (d && d.serial_display) || serial;
+
+    openSheet('Replace this heater', `
+      <p class="zd-sub">The new heater takes over everything <strong>${esc(label)}</strong>
+      had - the same room, the same schedule and the same temperatures.</p>
+      <label class="field">
+        <span>Serial number of the new heater</span>
+        <input type="text" id="rpSerial" inputmode="numeric" autocomplete="off"
+          maxlength="16" placeholder="210 000 016 247">
+        <small class="field-hint">Spaces are fine.</small>
+      </label>
+      <div class="dev-detect" id="rpDetect" aria-live="polite"></div>
+      <div class="note">The old heater is only removed once the new one has paired,
+      so a failed replacement changes nothing.</div>
+      <div class="sheet-actions">
+        <button class="btn" data-act="cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" data-act="ok" type="button" disabled>Replace</button>
+      </div>`, (root) => {
+
+      const serialEl = root.querySelector('#rpSerial');
+      const detectEl = root.querySelector('#rpDetect');
+      const okBtn    = root.querySelector('[data-act="ok"]');
+
+      function detect() {
+        const next = serialEl.value.replace(/\s/g, '');
+        const model = next.length >= 3 ? Nobo.deviceModel(next) : null;
+
+        if (next.length < 3) {
+          detectEl.className = 'dev-detect';
+          detectEl.innerHTML = '';
+        } else if (model) {
+          detectEl.className = 'dev-detect is-known';
+          detectEl.innerHTML =
+            `<span class="np-device">${Nobo.deviceImg(next, '', model.name + ' heating device')}</span>` +
+            `<span><strong>${esc(model.name)}</strong><br>Recognised from the first three digits</span>`;
+        } else {
+          detectEl.className = 'dev-detect is-unknown';
+          detectEl.innerHTML =
+            `<span>No Nobø model uses the prefix <strong>${esc(next.slice(0, 3))}</strong>.</span>`;
+        }
+
+        okBtn.disabled = !(next.length === 12 && model && next !== serial);
+      }
+
+      serialEl.oninput = detect;
+      detect();
+
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      okBtn.onclick = async () => {
+        const next = serialEl.value.replace(/\s/g, '');
+        okBtn.disabled = true;
+        try {
+          await Nobo.api.updateDevice(serial, { new_serial: next });
+          closeSheet();
+          Nobo.toast('Heater replaced');
+          await refresh(true);
+        } catch (e) {
+          okBtn.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
       };
     });
   }

@@ -143,12 +143,40 @@ Datetimes are sent as absolute ISO instants. The server treats a naive datetime 
 wall-clock string sent unqualified would silently shift the schedule by the UTC offset. The
 `Nobo.toIsoInstant()` helper converts the local date and time inputs to an absolute instant first.
 
-### Honest capability handling
+### Adding a heater: manual registration first
 
-Adding a heater needs the hub's radio to find nearby devices, which is unavailable in demo mode.
-Rather than offering a control that fails, the flow reads `GET /api/capabilities` and, when
-`features.discover_devices.supported` is false, shows the hub's own stated reason and a route into
-settings. The serial-entry path is still offered when discovery is supported.
+There are two ways to add a heater, and an earlier draft of Concept D conflated them.
+
+| | What it is | Availability |
+| --- | --- | --- |
+| **Manual registration** | Type the 12-digit serial printed on the heater. `POST /api/devices`. | Always. It needs no radio. |
+| **Automatic search** | The hub listens for heaters in pairing mode and reports what it hears. `POST/GET/DELETE /api/devices/search`. | Real hub only — `features.discover_devices`. |
+
+Only the second is gated. This matters more than it first appears: **not every Nobø device answers
+an automatic search** (see `Manual_Nobo.pdf`), so manual registration is not a fallback for the
+impatient — for some models it is the only way in, and it is how the original app and Nobø's own
+app both work.
+
+The earlier draft checked `features.discover_devices` before showing the sheet at all, so in demo
+mode the whole *Add a heater* flow was replaced by a "connect a real hub" message and no heater
+could be added by serial. That was wrong on both counts: the capability it checked is not the
+capability the manual path uses, and the manual path is the primary one.
+
+The sheet now leads with the serial field, always enabled, and offers the search underneath. When
+search is unavailable the hub's own stated reason appears in one line and the form above it is
+untouched.
+
+The first three digits of a serial identify the model, so as they are typed the model name and its
+picture appear — the same confirmation the original app gives, and a check on the digits before the
+hub is asked to pair with them. An unrecognised prefix is called out immediately rather than
+becoming a 400 from the server, and *Add heater* stays disabled until the serial is 12 digits and
+the prefix is known.
+
+Each heater also gets **Replace**, for the case the whole feature exists to serve: a heater breaks
+and a new one takes its place. A serial cannot be changed, so `PUT /api/devices/{serial}` with
+`new_serial` pairs the new one first and only removes the old one once that has succeeded — a
+failed replacement leaves the room as it was. Removing the old one and adding a new one separately
+remains the safer habit and the sheet says so.
 
 ### Leaving: the two kinds of away
 
