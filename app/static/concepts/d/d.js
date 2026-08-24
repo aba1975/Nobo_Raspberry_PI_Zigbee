@@ -764,7 +764,7 @@
     const tags = [
       manual
         ? `<span class="badge badge-manual" title="This heater has no remote temperature control. Turn the dial on the heater to change its temperature.">Dial on heater</span>`
-        : `<span class="badge badge-mode-normal">Adjustable</span>`,
+        : `<span class="badge badge-ok">Adjustable</span>`,
       d.current_mode ? `<span class="badge badge-mode-${esc(d.current_mode)}">${esc((Nobo.MODES[d.current_mode] || {}).label || d.current_mode)}</span>` : '',
     ].join('');
 

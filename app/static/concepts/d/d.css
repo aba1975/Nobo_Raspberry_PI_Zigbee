@@ -226,15 +226,30 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .mode-glyph { font-size: 1.15rem; line-height: 1; }
 .mode-btn:hover { border-color: var(--pine); color: var(--ink); }
+
+/* A selected mode button wears that mode's own colour, so the room screen, the
+   house row and the badge on the room card all say the same thing in the same
+   hue. Both attributes are listed on every rule because the house row is
+   markup in index.html (data-global) while the room row is built in d.js
+   (data-zmode) - an earlier version coloured only the house row, which left
+   all four buttons inside a room looking identical.
+
+   The plain [aria-pressed] rule below stays as the fallback for any mode
+   without a colour of its own. */
 .mode-btn[aria-pressed="true"] { background: var(--pine-wash); border-color: var(--pine); color: var(--pine); }
-/* "Schedule"/"Home" means following the week, so it takes the schedule violet -
-   otherwise a selected Schedule button reads as Eco now that Eco is green. */
+
+.mode-btn[data-zmode="comfort"][aria-pressed="true"],
+.mode-btn[data-global="comfort"][aria-pressed="true"] { background: var(--m-comfort-wash); border-color: var(--m-comfort); color: var(--m-comfort); }
+.mode-btn[data-zmode="eco"][aria-pressed="true"],
+.mode-btn[data-global="eco"][aria-pressed="true"] { background: var(--m-eco-wash); border-color: var(--m-eco); color: var(--m-eco); }
+.mode-btn[data-zmode="away"][aria-pressed="true"],
+.mode-btn[data-global="away"][aria-pressed="true"] { background: var(--m-away-wash); border-color: var(--m-away); color: var(--m-away); }
+/* "Schedule" and "Home" are the same instruction - follow the week - so they
+   share the schedule violet. Without it a selected Schedule button reads as
+   Eco now that Eco is green. */
 .mode-btn[data-zmode="normal"][aria-pressed="true"],
 .mode-btn[data-global="home"][aria-pressed="true"],
 .mode-btn[data-global="normal"][aria-pressed="true"] { background: var(--m-sched-wash); border-color: var(--m-sched); color: var(--m-sched); }
-.mode-btn[data-global="comfort"][aria-pressed="true"] { background: var(--m-comfort-wash); border-color: var(--m-comfort); color: var(--m-comfort); }
-.mode-btn[data-global="eco"][aria-pressed="true"] { background: var(--m-eco-wash); border-color: var(--m-eco); color: var(--m-eco); }
-.mode-btn[data-global="away"][aria-pressed="true"] { background: var(--m-away-wash); border-color: var(--m-away); color: var(--m-away); }
 
 /* -------------------------------------------------------------- rooms */
 
@@ -343,7 +358,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .badge-mode-eco     { background: var(--m-eco-wash); color: var(--m-eco); border-color: color-mix(in srgb, var(--m-eco) 35%, transparent); }
 .badge-mode-away    { background: var(--m-away-wash); color: var(--m-away); border-color: color-mix(in srgb, var(--m-away) 35%, transparent); }
 .badge-mode-normal  { background: var(--m-sched-wash); color: var(--m-sched); border-color: color-mix(in srgb, var(--m-sched) 35%, transparent); }
-.badge-mode-normal  { background: var(--pine-wash);  color: var(--pine);  border-color: color-mix(in srgb, var(--pine) 30%, transparent); }
+/* Not a mode. "Adjustable" is a property of the hardware, so it gets the
+   neutral pine rather than borrowing a mode colour - it used to reuse
+   .badge-mode-normal and overwrote the schedule violet for everyone. */
+.badge-ok { background: var(--pine-wash); color: var(--pine); border-color: color-mix(in srgb, var(--pine) 30%, transparent); }
 /* A dial you can only turn by hand is a real constraint, so it is called out
    in words, not by a colour alone. */
 .badge-manual { background: transparent; color: var(--ink-soft); border-color: var(--rule); border-style: dashed; }

@@ -277,6 +277,23 @@ toast — rather than by colour alone. Every colour has a dark-mode counterpart,
 the *only* signal: each segment carries a title attribute and every badge carries its label in
 words.
 
+**These colours apply everywhere a mode appears, including the mode buttons inside a room.** That
+had to be fixed: the house row in `index.html` uses `data-global` and the room row is built in
+`d.js` with `data-zmode`, and only the first had colour rules. Everything else fell through to a
+generic pine "selected" state, so Comfort, Eco, Away and Schedule inside a room were all the same
+green and the selected one was distinguishable only by its label. Each rule now lists both
+attributes.
+
+Note that the room's mode buttons show which *instruction* the room is under, not what the
+schedule happens to be doing this minute. A room following its week shows **Schedule** in violet
+even while the card on the home screen reads "Schedule · Comfort" in red — the card reports the
+mode in force now, the button reports the standing instruction. Colouring the Schedule button by
+the current block would make it change hue through the day.
+
+One collision was cleaned up at the same time: the "Adjustable" tag on a heater reused
+`.badge-mode-normal` and redefined it to pine, which silently overwrote the schedule violet for
+every other user of that class. It now has its own `.badge-ok`.
+
 It is deliberately not modelled on Netatmo or Mill. Both were looked at as competent examples of
 the category and then set aside; the trip-led structure, the paper-and-pine palette and the roof
 mark are this product's own.
