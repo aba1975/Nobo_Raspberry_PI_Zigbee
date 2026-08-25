@@ -74,7 +74,11 @@ note the standing caveat: no real-hub code has ever run against real hardware.
 
 ## Important Design Notes
 
-- The Nobo Hub allows only ONE TCP connection at a time — the app includes reconnect logic with exponential backoff
+- The hub accepts **two** LAN connections at once, plus up to ten via the Internet
+  (`API_Nobo.pdf` §5.8). The Pi holds one permanently, so the official app can stay
+  connected too and the hub pushes every change to both. The reconnect logic with
+  exponential backoff exists for dropped connections and the hub's ~18-hourly
+  reboot, **not** because only one client is allowed
 - `network_mode: host` is intentional and required — bridge networking breaks hub discovery
 - Demo mode activates when `NOBO_DEMO=true` or `NOBO_SERIAL=111111111111`
 - Everything is behind session auth. Only `/login`, `/auth/login`, `/favicon.ico`
@@ -114,7 +118,7 @@ Also worth knowing:
 - Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
   not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.
 - Week profile states are `0=Comfort, 1=Eco, 2=Away, 4=Off`. `API_Nobo.pdf`
-  page 6 says "3: Off" and is wrong � pynobo's `validate_week_profile` accepts
+  page 6 says "3: Off" and is wrong � pynobo's `validate_week_profile` accepts
   only `0124`, and it is pynobo that talks to the hub.
 - Ids for new zones and week profiles are assigned by the hub, not the client.
   Send a placeholder and find the real one by diffing state before and after.
