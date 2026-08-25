@@ -850,6 +850,16 @@ async def hub_command(coro, timeout: float = HUB_COMMAND_TIMEOUT):
     return await asyncio.to_thread(hub_loop.run, coro, timeout)
 
 
+# Serialises connection attempts. A configuration change and the reconnect loop
+# can otherwise start one each at the same moment: both succeed, the second
+# overwrites the first, and the first is left holding an open socket and a
+# running keep-alive task for ever. Nothing ever closes it, and because the
+# keep-alive keeps answering, the hub never times it out either. The hub accepts
+# only two LAN connections, so a couple of leaked clients lock the user out of
+# their own heating until the server is restarted.
+hub_connect_lock = threading.Lock()
+
+
 def stop_hub_client(client: "pynobo.nobo") -> None:
     """Shut a pynobo client down properly.
 
@@ -972,53 +982,74 @@ def connect_to_hub_sync():
     """Connect to the Nobø Hub (synchronous, runs in thread)"""
     global hub, hub_connected, hub_tap
 
-    with connection_lock:
-        generation = hub_config_generation
-
-    try:
-        logger.info(f"Connecting to Nobø Hub at {NOBO_IP} with serial {NOBO_SERIAL}...")
-        hub_loop.start()
-        new_hub = pynobo.nobo(NOBO_SERIAL, NOBO_IP, discover=False, synchronous=False)
-        # Attach before connecting, so the initial data dump is captured too.
-        tap = HubProtocolTap()
-        tap.attach(new_hub)
-        hub_loop.run(new_hub.start(), timeout=30)
+    # One attempt at a time. See hub_connect_lock for why this matters.
+    with hub_connect_lock:
         with connection_lock:
-            if generation != hub_config_generation:
-                stale = True
-            else:
-                stale = False
-                hub = new_hub
-                hub_tap = tap
-                hub_connected = True
+            generation = hub_config_generation
+            if hub is not None and hub_connected:
+                # Another attempt won the race while this one was queued.
+                # Connecting again would take a second slot on the hub for a
+                # client nobody would ever use.
+                logger.info("Hub is already connected — skipping duplicate attempt")
+                return
 
-        if stale:
-            # The user changed the configuration while we were connecting. This
-            # hub is not the one they asked for, so drop it silently.
-            logger.info("Discarding hub connection from a superseded configuration")
-            try:
-                stop_hub_client(new_hub)
-            except Exception as exc:
-                logger.warning("Error while stopping superseded hub connection: %s", exc)
-            return
+        try:
+            logger.info(f"Connecting to Nobø Hub at {NOBO_IP} with serial {NOBO_SERIAL}...")
+            hub_loop.start()
+            new_hub = pynobo.nobo(NOBO_SERIAL, NOBO_IP, discover=False, synchronous=False)
+            # Attach before connecting, so the initial data dump is captured too.
+            tap = HubProtocolTap()
+            tap.attach(new_hub)
+            hub_loop.run(new_hub.start(), timeout=30)
+            with connection_lock:
+                if generation != hub_config_generation:
+                    stale = True
+                    displaced = None
+                else:
+                    stale = False
+                    # Whatever was here before is being replaced. Hold on to it
+                    # so it can be shut down rather than abandoned.
+                    displaced = hub if hub is not new_hub else None
+                    hub = new_hub
+                    hub_tap = tap
+                    hub_connected = True
 
-        logger.info("Successfully connected to Nobø Hub")
+            if stale:
+                # The user changed the configuration while we were connecting. This
+                # hub is not the one they asked for, so drop it silently.
+                logger.info("Discarding hub connection from a superseded configuration")
+                try:
+                    stop_hub_client(new_hub)
+                except Exception as exc:
+                    logger.warning("Error while stopping superseded hub connection: %s", exc)
+                return
 
-        # Register callback for hub updates
-        new_hub.register_callback(hub_update_callback)
-        
-    except Exception as e:
-        logger.error(f"Failed to connect to Nobø Hub: {e}")
-        with connection_lock:
-            # Only report the failure if it still refers to the current
-            # configuration. Without this, a doomed attempt against an old
-            # address could mark demo mode as disconnected seconds after the
-            # user switched to it, leaving the UI stuck on "Hub not connected".
-            if generation == hub_config_generation:
-                hub_connected = False
-                hub = None
-                hub_tap = None
-        raise
+            if displaced is not None:
+                # A previous client was still installed — usually one whose
+                # socket died without us noticing. Closing it frees its slot.
+                logger.info("Closing the hub connection this one replaces")
+                try:
+                    stop_hub_client(displaced)
+                except Exception as exc:
+                    logger.warning("Error while stopping the replaced hub connection: %s", exc)
+
+            logger.info("Successfully connected to Nobø Hub")
+
+            # Register callback for hub updates
+            new_hub.register_callback(hub_update_callback)
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Nobø Hub: {e}")
+            with connection_lock:
+                # Only report the failure if it still refers to the current
+                # configuration. Without this, a doomed attempt against an old
+                # address could mark demo mode as disconnected seconds after the
+                # user switched to it, leaving the UI stuck on "Hub not connected".
+                if generation == hub_config_generation:
+                    hub_connected = False
+                    hub = None
+                    hub_tap = None
+            raise
 
 
 async def connect_to_hub():
