@@ -1663,6 +1663,16 @@
       </section>
 
       <section class="card">
+        <h2>Diagnostics</h2>
+        <p class="zd-sub">A record of every change made through this app, everything
+        the away schedule did on its own, and the state of the connection to the hub.
+        Worth opening when something has not behaved.</p>
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="open-log">Open the activity log</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>About this screen</h2>
         <p class="zd-sub">This is design concept D, an exploration. The live system is at
         <a href="/">the main app</a>.</p>
@@ -1671,6 +1681,7 @@
     const root = $('#viewSettings');
     root.querySelector('[data-act="toggle-demo"]').onclick = () => toggleDemo(!hub.demo_mode);
     root.querySelector('[data-act="save-hub"]').onclick = saveHub;
+    root.querySelector('[data-act="open-log"]').onclick = showLog;
     root.querySelector('[data-act="signout"]').onclick = async () => {
       try { await Nobo.api.logout(); } catch (_) {}
       window.location.href = '/login';
@@ -1789,12 +1800,14 @@
     renderHome();
   }
 
-  $('#btnBack').addEventListener('click', showHome);
+  $('#btnBack').addEventListener('click', () => {
+    // The log is only reachable from Settings, so Back belongs there, not Home.
+    if (state.view === 'log') showSettings(); else showHome();
+  });
   $('#btnSettings').addEventListener('click', () => {
     if (state.view === 'settings') showHome(); else showSettings();
   });
   $('#btnAddZone').addEventListener('click', addZoneSheet);
-  $('#btnLog').addEventListener('click', showLog);
 
   function renderHome() {
     renderTrip();

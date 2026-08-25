@@ -261,12 +261,12 @@ reads "1 rooms".
 
 There is a record of what the system did: every change made through the app, every action the away
 schedule took on its own, and the state of the connection to the hub. It is genuinely useful when
-something has misbehaved and close to useless the rest of the time, so it is placed accordingly —
-inside the **System status** box, which is collapsed by default and deliberately the last thing on
-the home screen. You reach it in two taps, and only when you go looking.
+something has misbehaved and close to useless the rest of the time, so it lives under **Settings**,
+in a Diagnostics card — off the main flow entirely, found when you go looking for it.
 
 This is a direct answer to problem 8 below: the current app puts **Log** in the top-level
 navigation, giving a diagnostics buffer the same prominence as the rooms you actually came for.
+Back from the log returns to Settings rather than Home, because that is where you came from.
 
 The log view filters on the entry's own fields rather than on the wording of its message:
 
@@ -291,6 +291,25 @@ from the home screen, and never while a sheet is open, which would move the list
 confirmation. **Clear the log** sits behind a confirmation that says plainly that it discards the
 record and changes no setting and no room. The buffer is in memory, so it starts again empty when
 the system restarts; the view says so rather than letting an empty log look like a fault.
+
+### Static assets must be revalidated
+
+The first build of the two features above appeared to ship correctly and was useless in the
+browser: the new buttons were visible, and clicking them did nothing. Nothing was wrong with the
+code. `StaticFiles` sent an ETag and a `Last-Modified` but no `Cache-Control`, and a browser given
+no caching instruction is free to invent one — it typically holds a file for a fraction of its age
+without revalidating. The freshly deployed `index.html` was fetched, so the buttons appeared, while
+`d.js` came from cache, so nothing was listening for their clicks.
+
+Static files are now served with `Cache-Control: no-cache`, which does not mean "do not store" but
+"revalidate before use". The ETag was already there, so revalidation is a conditional request that
+almost always returns 304 with no body. One small round trip per asset buys the guarantee that what
+is running is what was deployed — which matters a great deal on a prototype being iterated on a Pi.
+
+A dead button is invisible to the rest of the test suite, because the server is perfectly happy, so
+`tests/test_concept_wiring.py` now asserts that every `<button id="…">` in a concept's markup is
+mentioned by that concept's script, and that every `<section class="view">` is handled by its
+`switchView()`.
 
 ### Install on a phone home screen
 

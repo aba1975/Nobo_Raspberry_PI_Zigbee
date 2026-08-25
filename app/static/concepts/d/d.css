@@ -389,7 +389,6 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .sysgrid dt { color: var(--ink-faint); }
 .sysgrid dd { margin: 0; font-weight: 550; }
-.sysbox-foot { padding: 0 1rem 1rem; }
 
 /* ------------------------------------------------------------ activity log
    Diagnostics, reached from inside the collapsed System status box. It is a

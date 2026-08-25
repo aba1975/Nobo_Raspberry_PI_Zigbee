@@ -4105,7 +4105,31 @@ async def admin_delete_user(request: Request, username: str):
 # (QA defect D-03).
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Serve static files with `Cache-Control: no-cache`.
+
+    Without an explicit Cache-Control header a browser is free to apply
+    heuristic caching, and typically will: it holds the file for a fraction of
+    its age with no revalidation. That produced a genuinely confusing failure
+    after a deploy - the new index.html was fetched, so a new button appeared,
+    while the JavaScript that gave the button its behaviour came from cache, so
+    clicking it did nothing at all.
+
+    `no-cache` does not mean "do not store"; it means "revalidate before use".
+    StaticFiles already sends an ETag and Last-Modified, so the revalidation is
+    a conditional request that almost always comes back 304 with no body. The
+    cost is one small round trip per asset; the benefit is that what the user
+    is running is always what was deployed.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
+app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
