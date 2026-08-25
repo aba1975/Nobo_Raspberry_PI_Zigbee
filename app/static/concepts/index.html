@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#F4F5F7">
 <title>UI design concepts | Nob&oslash; Control</title>
-<link rel="stylesheet" href="/static/concepts/shared/base.css?v=1">
+<link rel="stylesheet" href="/static/ui/shared/base.css?v=1">
 <style>
 :root {
   --bg: #F4F5F7; --surface: #FFF; --line: #E3E6EA;
@@ -62,11 +62,12 @@ h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 660; letter-spacing: -0.025
   </p>
 
   <div class="warn">
-    <b>These are prototypes for you to compare.</b> They live on the branch
-    <code>ui-redesign-exploration</code>, they do not replace the current app, and nothing has been
-    merged. The current app is untouched at <a href="/">the usual address</a>. Each concept covers
-    everyday control; hub setup, users, device management, weekly schedule editing and the command
-    log stay in the current app.
+    <b>Concept D was adopted.</b> It is now the production interface, served at
+    <a href="/">the usual address</a>, and it has moved to <code>app/static/ui/cabin/</code>.
+    A, B and C are kept here as the record of the exploration &mdash; they still run against your
+    real hub, but they are no longer being developed. The original interface has not been removed:
+    it is always at <a href="/classic">/classic</a>, and setting <code>NOBO_UI=classic</code> in
+    the server's <code>.env</code> makes it the default again.
   </div>
 
   <div class="cards">
@@ -120,7 +121,7 @@ h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 660; letter-spacing: -0.025
     </article>
 
     <article class="card">
-      <span class="tag">Concept D &middot; latest</span>
+      <span class="tag">Concept D &middot; adopted</span>
       <h2>Cabin</h2>
       <p>
         Built for a place that stands empty most of the year. The away period is the hero:
@@ -135,7 +136,7 @@ h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 660; letter-spacing: -0.025
         <li>Drill into a room for its devices, its week and its settings</li>
         <li>Add to Home Screen on iPhone, standalone window</li>
       </ul>
-      <a class="go" href="/static/concepts/d/index.html">Open concept D</a>
+      <a class="go" href="/">Open Cabin (now the production interface)</a>
     </article>
 
   </div>

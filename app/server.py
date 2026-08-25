@@ -3792,7 +3792,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # ===== Authentication Endpoints =====
 
 # Inline login-page HTML — served directly (not via /static) to avoid auth loop
-_LOGIN_HTML = """<!DOCTYPE html>
+_LOGIN_CLASSIC_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -3871,6 +3871,156 @@ document.getElementById('loginForm').addEventListener('submit', async e => {
 </html>"""
 
 
+# The Cabin sign-in page. It carries the same palette, radii and type as the
+# interface behind it, so the first screen of the app is not a different product
+# from the second. Self-contained on purpose: it is the one page that must
+# render before anything else is known to work, so it pulls in no stylesheet and
+# no script it does not own.
+_LOGIN_CABIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2F5D50" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141615" media="(prefers-color-scheme: dark)">
+<title>Nobø Control — Sign in</title>
+<link rel="icon" type="image/svg+xml" href="/static/ui/cabin/icon.svg">
+<link rel="apple-touch-icon" href="/static/ui/cabin/icon-180.png">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --paper: #F6F2EA; --card: #FFFDF9;
+    --ink: #211F1C; --ink-soft: #6B655C; --ink-faint: #948C80;
+    --rule: #E3DCCF;
+    --pine: #2F5D50; --pine-deep: #22453C; --pine-wash: #E7EFEB;
+    --danger: #C9453C; --danger-wash: #F8E7E5;
+    --radius: 18px; --radius-sm: 12px;
+    --shadow: 0 1px 2px rgba(33,31,28,.05), 0 8px 24px rgba(33,31,28,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #141615; --card: #1D211F;
+      --ink: #F0EDE7; --ink-soft: #A8A296; --ink-faint: #7C766B;
+      --rule: #2E3432;
+      --pine: #6FBBA3; --pine-deep: #8FD3BC; --pine-wash: #1B2A26;
+      --danger: #E4695F; --danger-wash: #2B1B19;
+      --shadow: none;
+    }
+  }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100svh; display: flex; align-items: center; justify-content: center;
+    padding: calc(1.5rem + env(safe-area-inset-top)) 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+    line-height: 1.5;
+  }
+  .wrap { width: 100%; max-width: 25rem; }
+
+  /* The same strong left rule the app uses on its hero, so the two screens
+     read as one product. */
+  .brand { border-left: 4px solid var(--pine); padding-left: .9rem; margin-bottom: 1.5rem; }
+  .brand h1 { font-size: 1.6rem; font-weight: 650; letter-spacing: -.015em; }
+  .brand p { color: var(--ink-soft); font-size: .93rem; margin-top: .15rem; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem;
+  }
+  .field { display: block; margin-bottom: 1rem; }
+  .field > span {
+    display: block; margin-bottom: .4rem;
+    font-size: .74rem; font-weight: 700; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  input {
+    width: 100%; padding: .7rem .85rem; min-height: 44px;
+    background: var(--paper); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: var(--radius-sm);
+    font: inherit; font-size: 1rem;
+  }
+  input:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; border-color: var(--pine); }
+  button {
+    width: 100%; margin-top: .35rem; padding: .8rem; min-height: 48px;
+    background: var(--pine); color: var(--card);
+    font: inherit; font-size: 1rem; font-weight: 650;
+    border: 1px solid var(--pine); border-radius: var(--radius-sm); cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) { button { color: #0F1614; } }
+  button:hover { background: var(--pine-deep); border-color: var(--pine-deep); }
+  button:disabled { opacity: .6; cursor: default; }
+
+  .error {
+    background: var(--danger-wash); border: 1px solid var(--danger); color: var(--danger);
+    border-radius: var(--radius-sm); padding: .65rem .8rem;
+    margin-bottom: 1rem; font-size: .88rem; font-weight: 550; display: none;
+  }
+  .error.show { display: block; }
+  .foot { margin-top: 1.1rem; font-size: .82rem; color: var(--ink-faint); text-align: center; }
+  .foot a { color: var(--ink-soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <h1>Nobø Control</h1>
+    <p>Sign in to set the heating.</p>
+  </div>
+  <div class="card">
+    <div class="error" id="errorMsg" role="alert"></div>
+    <form id="loginForm">
+      <label class="field">
+        <span>Username</span>
+        <input type="text" id="username" name="username" autocomplete="username"
+               autocapitalize="none" spellcheck="false" required autofocus>
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" id="submitBtn">Sign in</button>
+    </form>
+  </div>
+  <p class="foot">Heating control for the cabin.</p>
+</div>
+<script>
+const form = document.getElementById('loginForm');
+const btn = document.getElementById('submitBtn');
+const err = document.getElementById('errorMsg');
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  err.classList.remove('show');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  const body = new URLSearchParams({
+    username: document.getElementById('username').value,
+    password: document.getElementById('password').value,
+  });
+  try {
+    const r = await fetch('/auth/login', { method: 'POST', body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    if (r.ok) {
+      window.location.href = '/';
+      return;
+    }
+    const data = await r.json().catch(() => ({}));
+    err.textContent = data.detail || 'That username and password did not match.';
+    err.classList.add('show');
+  } catch {
+    err.textContent = 'Could not reach the server. Check the connection and try again.';
+    err.classList.add('show');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Sign in';
+  document.getElementById('password').select();
+});
+</script>
+</body>
+</html>"""
+
+_LOGIN_PAGES = {"cabin": _LOGIN_CABIN_HTML, "classic": _LOGIN_CLASSIC_HTML}
+
+
 def _get_session_or_401(request: Request) -> dict:
     """Return session dict or raise HTTP 401."""
     session_id = request.cookies.get("session_id")
@@ -3889,8 +4039,11 @@ def _require_admin(session: dict) -> None:
 
 @app.get("/login")
 async def login_page():
-    """Serve the login HTML page (exempt from auth middleware)."""
-    return HTMLResponse(content=_LOGIN_HTML)
+    """Serve the sign-in page matching the active interface."""
+    return HTMLResponse(
+        content=_LOGIN_PAGES[ACTIVE_UI],
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.post("/auth/login")
@@ -4132,15 +4285,69 @@ class RevalidatingStaticFiles(StaticFiles):
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
 
+# ===== Which interface to serve =====
+#
+# Two interfaces ship in every image: "cabin", the current one, and "classic",
+# the original. Which one answers "/" is decided at startup by NOBO_UI.
+#
+# This is deliberately a runtime switch rather than a branch or a separate
+# build. Rolling back a UI by redeploying an older revision would also roll back
+# every backend fix made since, and the revision you fall back to is the one
+# nobody has run for months. Here a rollback is one line in .env and a restart:
+# no rebuild, no network, and the server keeps every fix it has.
+#
+# Both interfaces are always reachable at /cabin and /classic whatever the
+# setting, so they can be compared without changing any configuration.
+
+UI_CHOICES = {
+    "cabin":   STATIC_DIR / "ui" / "cabin" / "index.html",
+    "classic": STATIC_DIR / "index.html",
+}
+DEFAULT_UI = "cabin"
+
+_requested_ui = os.environ.get("NOBO_UI", DEFAULT_UI).strip().lower()
+if _requested_ui not in UI_CHOICES:
+    logger.warning(
+        "NOBO_UI=%r is not one of %s; falling back to %r. An unreachable "
+        "interface is worse than the wrong one, so this does not stop startup.",
+        _requested_ui, ", ".join(sorted(UI_CHOICES)), DEFAULT_UI,
+    )
+    _requested_ui = DEFAULT_UI
+ACTIVE_UI = _requested_ui
+logger.info("Serving the %r interface at /. Both are always at /cabin and /classic.", ACTIVE_UI)
+
+
+def _serve_ui(name: str) -> HTMLResponse:
+    path = UI_CHOICES[name]
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logger.error("Interface %r is missing its entry point at %s", name, path)
+        return HTMLResponse(
+            content=f"<h1>The {name} interface is not installed</h1>",
+            status_code=404,
+        )
+    # Served inline rather than as a static file so the choice of interface is
+    # made per request and never cached by an intermediary.
+    return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/")
 async def read_root():
-    """Serve the main HTML page"""
-    try:
-        with open(STATIC_DIR / "index.html", "r", encoding="utf-8") as f:
-            content = f.read()
-        return HTMLResponse(content=content)
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1>Error: index.html not found</h1>", status_code=404)
+    """Serve whichever interface NOBO_UI selects."""
+    return _serve_ui(ACTIVE_UI)
+
+
+@app.get("/cabin")
+async def read_cabin():
+    """The Cabin interface, reachable whatever NOBO_UI says."""
+    return _serve_ui("cabin")
+
+
+@app.get("/classic")
+async def read_classic():
+    """The original interface, reachable whatever NOBO_UI says."""
+    return _serve_ui("classic")
 
 
 # ===== Main Entry Point =====

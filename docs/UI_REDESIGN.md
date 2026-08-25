@@ -1,26 +1,29 @@
 # UI/UX Redesign Exploration
 
-**Status: design exploration for review. Nothing here is merged, and `main` is untouched.**
+**Status: adopted. Concept D shipped as the production interface under the name "Cabin"; the
+original interface is still installed and can be brought back with one setting. See
+[J. Promotion to production](#j-promotion-to-production).**
 
 This document accompanies four working, interactive prototypes built against the real API and real
 zone data. It covers the analysis of the current interface, the problems found, the first three
-concepts, a comparison and a recommendation — and then **Concept D**, a fourth design that
+concepts, a comparison and a recommendation â€” and then **Concept D**, a fourth design that
 reorders the interface around how a cabin is actually used. Concept D is the current direction;
-sections A–H describe how it was arrived at.
+sections Aâ€“H describe how it was arrived at.
 
 ---
 
 ## Contents
 
-- [D. How to run the prototypes](#d-how-to-run-the-prototypes) — start here
+- [D. How to run the prototypes](#d-how-to-run-the-prototypes) â€” start here
 - [A. Analysis of the existing UI](#a-analysis-of-the-existing-ui)
 - [B. UX problems found](#b-ux-problems-found)
 - [C. The three concepts](#c-the-three-concepts)
-- [I. Concept D — Cabin](#i-concept-d--cabin) — the current direction
+- [I. Concept D â€” Cabin](#i-concept-d--cabin) â€” the current direction
 - [E. Comparison](#e-comparison)
 - [F. Recommendation](#f-recommendation)
 - [G. Implementation considerations](#g-implementation-considerations)
 - [H. Git safety](#h-git-safety)
+- [J. Promotion to production](#j-promotion-to-production) &mdash; how Cabin shipped, and how to undo it
 
 ---
 
@@ -43,10 +46,10 @@ Then log in as usual and open:
 | Page | URL |
 | --- | --- |
 | Chooser | `http://<pi>:8000/static/concepts/index.html` |
-| Concept A — At a Glance | `http://<pi>:8000/static/concepts/a/index.html` |
-| Concept B — Room First | `http://<pi>:8000/static/concepts/b/index.html` |
-| Concept C — Heating Board | `http://<pi>:8000/static/concepts/c/index.html` |
-| Concept D — Cabin | `http://<pi>:8000/static/concepts/d/index.html` |
+| Concept A â€” At a Glance | `http://<pi>:8000/static/concepts/a/index.html` |
+| Concept B â€” Room First | `http://<pi>:8000/static/concepts/b/index.html` |
+| Concept C â€” Heating Board | `http://<pi>:8000/static/concepts/c/index.html` |
+| Concept D â€” Cabin | `http://<pi>:8000/static/concepts/d/index.html` |
 
 The current application is unchanged and still lives at `/`.
 
@@ -79,15 +82,15 @@ management still link back to the current app.
 
 ---
 
-## I. Concept D — Cabin
+## I. Concept D â€” Cabin
 
 Concept D is a fourth design, made after reviewing A, B and C. It is not a refinement of them; it
 reorders the whole interface around a different premise.
 
 ### The premise
 
-A Nobø system in a cabin is not used like a system in a house. The cabin stands empty most of the
-year. The owner does not open the app to fine-tune the living room — they open it to say *I am
+A NobÃ¸ system in a cabin is not used like a system in a house. The cabin stands empty most of the
+year. The owner does not open the app to fine-tune the living room â€” they open it to say *I am
 leaving* or *I am coming back*, and they want the place warm when they arrive.
 
 So the interface is built around the **trip**, not the thermostat.
@@ -99,7 +102,7 @@ So the interface is built around the **trip**, not the thermostat.
 | The away period is the hero, above everything | It is the most frequent and highest-value action for a cabin. Previously it was buried in a collapsed panel in settings. |
 | Framed as "I'm leaving" / "I'm back now" rather than "away schedule" | People think in trips, not in schedule windows. The window is still what gets saved; only the language changed. |
 | **Set** temperature is the big number; measured temperature sits under it | What you control should be more prominent than what you observe. A, B and C had this the wrong way round. |
-| Rooms with dial-only heaters lead with the mode they are running, not a temperature | See below — this was a correctness fix, not a styling one. |
+| Rooms with dial-only heaters lead with the mode they are running, not a temperature | See below â€” this was a correctness fix, not a styling one. |
 | Whole-cabin modes are one row, directly under the trip | Still one tap, but clearly secondary to the trip. |
 | System status is collapsed at the bottom | Useful, occasionally. Never the reason you opened the app. |
 | Settings lead with hub connection and demo mode | Those are what actually get changed. Everything else is rare. |
@@ -109,19 +112,19 @@ So the interface is built around the **trip**, not the thermostat.
 
 The API reports two separate facts per zone:
 
-- `supports_temp_adjust` — **any** heater in the room can be set remotely
-- `has_manual_devices` — **at least one** heater cannot
+- `supports_temp_adjust` â€” **any** heater in the room can be set remotely
+- `has_manual_devices` â€” **at least one** heater cannot
 
 Both can be true at once, so a room can be mixed. Concept D distinguishes all three cases:
 
 | Room | Shown as |
 | --- | --- |
-| All heaters adjustable | `SET TO 21.0°C`, with a working `+` / `−` |
-| Some heaters dial-only | `SET TO 21.0°C`, plus a **Some dial-only** badge |
-| No heater adjustable | `RUNNING · Comfort` and *"Dial sets the temperature"*, with the stepper removed |
+| All heaters adjustable | `SET TO 21.0Â°C`, with a working `+` / `âˆ’` |
+| Some heaters dial-only | `SET TO 21.0Â°C`, plus a **Some dial-only** badge |
+| No heater adjustable | `RUNNING Â· Comfort` and *"Dial sets the temperature"*, with the stepper removed |
 
 The third case matters. Such a room still reports a `comfort_temperature` over the API, and every
-earlier design — including the production UI — displays it as though it were a setpoint. Nothing
+earlier design â€” including the production UI â€” displays it as though it were a setpoint. Nothing
 in the system can act on it. Concept D refuses to print a number the hardware cannot honour, and
 says where the temperature really comes from instead. Per device, the same distinction is repeated
 in the room's heater list as **Adjustable** or **Dial on heater**.
@@ -136,8 +139,8 @@ room resumes its own weekly schedule.
 
 That has a useful consequence: *warming up before you arrive* is not a separate feature. It is
 just ending the window a few hours earlier than you actually arrive. So the sheet asks when you
-are back, offers a head start of 0–24 hours, subtracts it, and then states the resulting time in
-plain words — "Heating resumes Sun 24 Aug, 14:00" — rather than leaving you to work it out.
+are back, offers a head start of 0â€“24 hours, subtracts it, and then states the resulting time in
+plain words â€” "Heating resumes Sun 24 Aug, 14:00" â€” rather than leaving you to work it out.
 
 Datetimes are sent as absolute ISO instants. The server treats a naive datetime as UTC, so a local
 wall-clock string sent unqualified would silently shift the schedule by the UTC offset. The
@@ -150,11 +153,11 @@ There are two ways to add a heater, and an earlier draft of Concept D conflated 
 | | What it is | Availability |
 | --- | --- | --- |
 | **Manual registration** | Type the 12-digit serial printed on the heater. `POST /api/devices`. | Always. It needs no radio. |
-| **Automatic search** | The hub listens for heaters in pairing mode and reports what it hears. `POST/GET/DELETE /api/devices/search`. | Real hub only — `features.discover_devices`. |
+| **Automatic search** | The hub listens for heaters in pairing mode and reports what it hears. `POST/GET/DELETE /api/devices/search`. | Real hub only â€” `features.discover_devices`. |
 
-Only the second is gated. This matters more than it first appears: **not every Nobø device answers
+Only the second is gated. This matters more than it first appears: **not every NobÃ¸ device answers
 an automatic search** (see `Manual_Nobo.pdf`), so manual registration is not a fallback for the
-impatient — for some models it is the only way in, and it is how the original app and Nobø's own
+impatient â€” for some models it is the only way in, and it is how the original app and NobÃ¸'s own
 app both work.
 
 The earlier draft checked `features.discover_devices` before showing the sheet at all, so in demo
@@ -167,14 +170,14 @@ search is unavailable the hub's own stated reason appears in one line and the fo
 untouched.
 
 The first three digits of a serial identify the model, so as they are typed the model name and its
-picture appear — the same confirmation the original app gives, and a check on the digits before the
+picture appear â€” the same confirmation the original app gives, and a check on the digits before the
 hub is asked to pair with them. An unrecognised prefix is called out immediately rather than
 becoming a 400 from the server, and *Add heater* stays disabled until the serial is 12 digits and
 the prefix is known.
 
 Each heater also gets **Replace**, for the case the whole feature exists to serve: a heater breaks
 and a new one takes its place. A serial cannot be changed, so `PUT /api/devices/{serial}` with
-`new_serial` pairs the new one first and only removes the old one once that has succeeded — a
+`new_serial` pairs the new one first and only removes the old one once that has succeeded â€” a
 failed replacement leaves the room as it was. Removing the old one and adding a new one separately
 remains the safer habit and the sheet says so.
 
@@ -192,7 +195,7 @@ The second is offered inside the leaving sheet as *"Stay away with no return dat
 sentence explaining the difference, so it is not something you reach only by guessing that the mode
 row does something subtly different from the trip card.
 
-When the cabin *is* on constant away, the trip card says so — "Away until you say otherwise" — and
+When the cabin *is* on constant away, the trip card says so â€” "Away until you say otherwise" â€” and
 carries **I'm back now** and **Set a return date**. Without that, a cabin left on constant away had
 no route back on the screen that claims to be about trips.
 
@@ -200,7 +203,7 @@ no route back on the screen that claims to be about trips.
 
 An away period can be deleted from the trip card and from inside the leaving sheet, in both cases
 behind a confirmation. This was a real defect in the first build: the only destructive control was
-labelled *"Cancel away period"* and it sat next to a sheet whose dismiss button said *"Cancel"* —
+labelled *"Cancel away period"* and it sat next to a sheet whose dismiss button said *"Cancel"* â€”
 two different meanings of the same word, one row apart. The destructive action is now **Delete away
 period** and is styled as destructive; dismissing a sheet is **Close**.
 
@@ -210,17 +213,17 @@ The hub stores a week as *switch points*: "from this moment, be in this state". 
 turn, insists that every day is covered from `00:00` to `24:00` with no gaps and no overlaps, that
 every time falls on a quarter hour, and that each day begins at midnight.
 
-Editing start-and-end blocks against those rules is a trap — nearly every intermediate edit is
+Editing start-and-end blocks against those rules is a trap â€” nearly every intermediate edit is
 invalid, and the user finds out only when saving fails. So the editor works the way the hub does:
 **a day is a list of "from HH:MM, run <mode>" rows, the first pinned to `00:00`.** A gap is then
 impossible by construction, and the `start`/`end` payload is derived on save.
 
-- Day tabs for Mon–Sun, with a live preview bar of the day being edited.
-- **Copy this day to** Monday–Friday, the weekend, or every day. Cabin weeks are usually uniform.
+- Day tabs for Monâ€“Sun, with a live preview bar of the day being edited.
+- **Copy this day to** Mondayâ€“Friday, the weekend, or every day. Cabin weeks are usually uniform.
 - Times snap to the nearest quarter hour, and say so when they move.
 - Duplicate times and a missing midnight are rejected in the client with a plain-language message,
   before the request is made.
-- Modes are `comfort`, `eco`, `away` and `off` — exactly what a hub week profile can hold.
+- Modes are `comfort`, `eco`, `away` and `off` â€” exactly what a hub week profile can hold.
 
 One warning matters: a week profile can be **shared by several rooms**. `GET /api/zones/{id}/schedule`
 returns `shared_with_zones`, and both the room view and the editor name those rooms and state that
@@ -228,7 +231,7 @@ saving changes them too.
 
 ### Rooms as boxes
 
-Rooms are a responsive grid — `repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr))` — so the same
+Rooms are a responsive grid â€” `repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr))` â€” so the same
 card is one column on a phone and as many as the window can hold on a desktop, with no viewport
 breakpoints to maintain. Cards in a row share a height, and the device pictures sit on the bottom
 edge so they line up across the row.
@@ -239,14 +242,14 @@ adjusting a temperature does not navigate.
 
 ### Adding a room
 
-The Rooms heading carries an **Add a room** button — the only action on the home screen that is not
+The Rooms heading carries an **Add a room** button â€” the only action on the home screen that is not
 about heat, and placed on the section it belongs to rather than in a global toolbar. Concept D
 previously had no way to create a room at all, which meant a first-run system, or anyone adding a
 loft, had to go back to the current app to do it. A prototype that cannot be used from empty is not
 a prototype of the product.
 
-The sheet asks for a name and, optionally, an icon. Concept D itself never draws the icon — one of
-the criticisms it makes of the current app is that emoji are load-bearing as an icon system — but
+The sheet asks for a name and, optionally, an icon. Concept D itself never draws the icon â€” one of
+the criticisms it makes of the current app is that emoji are load-bearing as an icon system â€” but
 the icon is stored per room by the server and *is* shown by the current app, so refusing to collect
 it would quietly degrade the room for anyone switching back. It is offered, explained, and ignored.
 
@@ -262,7 +265,7 @@ reads "1 rooms".
 There is a record of what the system did: every change made through the app, every action the away
 schedule took on its own, and the state of the connection to the hub. It is genuinely useful when
 something has misbehaved and close to useless the rest of the time, so it lives under **Settings**,
-in a Diagnostics card — off the main flow entirely, found when you go looking for it.
+in a Diagnostics card â€” off the main flow entirely, found when you go looking for it.
 
 This is a direct answer to problem 8 below: the current app puts **Log** in the top-level
 navigation, giving a diagnostics buffer the same prominence as the rooms you actually came for.
@@ -272,21 +275,21 @@ The log view filters on the entry's own fields rather than on the wording of its
 
 | Filter | Rule |
 | --- | --- |
-| Everything | — |
+| Everything | â€” |
 | Changes | `source` is `api` or `schedule` |
 | Hub | `source` is `hub` |
 | Problems | `direction` is `error` |
 
 Each chip carries its own count, so an empty Problems filter is visible without selecting it. Errors
 are tinted with the Comfort red and given weight; the raw protocol command, where there is one, is
-kept but demoted to small monospace on its own line — it means nothing to most people and everything
+kept but demoted to small monospace on its own line â€” it means nothing to most people and everything
 to the one person debugging a hub.
 
 The server writes timestamps in the Pi's own timezone with no offset, so they are parsed field by
 field rather than handed to `Date`, which would read them as UTC and shift every entry. Times from
 today show as `HH:MM:SS`; older entries gain the date.
 
-The log is fetched when the view opens and polled every ten seconds only while it is open — never
+The log is fetched when the view opens and polled every ten seconds only while it is open â€” never
 from the home screen, and never while a sheet is open, which would move the list out from under a
 confirmation. **Clear the log** sits behind a confirmation that says plainly that it discards the
 record and changes no setting and no room. The buffer is in memory, so it starts again empty when
@@ -297,17 +300,17 @@ the system restarts; the view says so rather than letting an empty log look like
 The first build of the two features above appeared to ship correctly and was useless in the
 browser: the new buttons were visible, and clicking them did nothing. Nothing was wrong with the
 code. `StaticFiles` sent an ETag and a `Last-Modified` but no `Cache-Control`, and a browser given
-no caching instruction is free to invent one — it typically holds a file for a fraction of its age
+no caching instruction is free to invent one â€” it typically holds a file for a fraction of its age
 without revalidating. The freshly deployed `index.html` was fetched, so the buttons appeared, while
 `d.js` came from cache, so nothing was listening for their clicks.
 
 Static files are now served with `Cache-Control: no-cache`, which does not mean "do not store" but
 "revalidate before use". The ETag was already there, so revalidation is a conditional request that
 almost always returns 304 with no body. One small round trip per asset buys the guarantee that what
-is running is what was deployed — which matters a great deal on a prototype being iterated on a Pi.
+is running is what was deployed â€” which matters a great deal on a prototype being iterated on a Pi.
 
 A dead button is invisible to the rest of the test suite, because the server is perfectly happy, so
-`tests/test_concept_wiring.py` now asserts that every `<button id="…">` in a concept's markup is
+`tests/test_concept_wiring.py` now asserts that every `<button id="â€¦">` in a concept's markup is
 mentioned by that concept's script, and that every `<section class="view">` is handled by its
 `switchView()`.
 
@@ -327,7 +330,7 @@ fetch a manifest inside an authenticated session. iOS reads `apple-touch-icon` f
 in the same authenticated context, so iPhone installs cleanly. If a future Android build ever fails
 to pick up the manifest icons, the fix is to add `/static/concepts/d/manifest.webmanifest` and the
 icon files to `PUBLIC_PATHS` in `app/server.py`. **That change has not been made**, because the
-brief rules out backend changes and iOS — the platform actually asked for — does not need it.
+brief rules out backend changes and iOS â€” the platform actually asked for â€” does not need it.
 
 ### Visual language
 
@@ -341,13 +344,13 @@ because they have to be legible next to each other inside a 20-pixel schedule ba
 |---|---|---|
 | Comfort | Red `#C0413A` | Heating hard. Asked for explicitly. |
 | Eco | Green `#2E8B57` | Saving. Asked for explicitly. |
-| Away | Blue `#2C6FB8` | Cold — a fixed 7 °C. Asked for explicitly. |
+| Away | Blue `#2C6FB8` | Cold â€” a fixed 7 Â°C. Asked for explicitly. |
 | Following the schedule | Violet `#7A57A8` | Distinct from all three, so "on schedule" never reads as one of the modes. |
 | Off | Neutral grey | No hue, because nothing is happening. |
 
 This overrides the earlier note that red was reserved for errors alone; the user's mental model
-(red = hot) won, and errors are distinguished by shape and wording — a warning note block or a
-toast — rather than by colour alone. Every colour has a dark-mode counterpart, and mode is never
+(red = hot) won, and errors are distinguished by shape and wording â€” a warning note block or a
+toast â€” rather than by colour alone. Every colour has a dark-mode counterpart, and mode is never
 the *only* signal: each segment carries a title attribute and every badge carries its label in
 words.
 
@@ -360,7 +363,7 @@ attributes.
 
 Note that the room's mode buttons show which *instruction* the room is under, not what the
 schedule happens to be doing this minute. A room following its week shows **Schedule** in violet
-even while the card on the home screen reads "Schedule · Comfort" in red — the card reports the
+even while the card on the home screen reads "Schedule Â· Comfort" in red â€” the card reports the
 mode in force now, the button reports the standing instruction. Colouring the Schedule button by
 the current block would make it change hue through the day.
 
@@ -372,15 +375,15 @@ It is deliberately not modelled on Netatmo or Mill. Both were looked at as compe
 the category and then set aside; the trip-led structure, the paper-and-pine palette and the roof
 mark are this product's own.
 
-### Away is 7 °C, and what to do about it
-Nobø's Away is a fixed 7 °C anti-frost temperature. It is set by the hub, it is not exposed as a
+### Away is 7 Â°C, and what to do about it
+NobÃ¸'s Away is a fixed 7 Â°C anti-frost temperature. It is set by the hub, it is not exposed as a
 setpoint, and there is no way to raise it. This is a real limitation of the platform, and the
-previous UI simply did not mention it — so a user who wanted a room to sit at 12 °C while away had
+previous UI simply did not mention it â€” so a user who wanted a room to sit at 12 Â°C while away had
 no way to discover that Away could not do that.
 
 Concept D says so wherever Away can be chosen: on the leaving sheet, on the room detail, in the
-week editor as soon as a row is set to Away, and in the schedule legend ("Away · 7 °C"). Each place
-points at the one thing that *does* work — Eco, which has a real per-room temperature.
+week editor as soon as a row is set to Away, and in the schedule legend ("Away Â· 7 Â°C"). Each place
+points at the one thing that *does* work â€” Eco, which has a real per-room temperature.
 
 **Rooms that must not get cold.** Settings now carries a list of rooms that hold their Eco
 temperature instead of dropping to Away, for the bathroom with pipes in the wall, the workshop, the
@@ -390,7 +393,7 @@ hub, so the room stays on Eco for the whole trip.
 
 **This one needed a backend change, and that was deliberate.** An away *period* is applied by
 `away_schedule_loop()` in `server.py`, a background loop that acts on the transition into the
-window — typically at 06:00 on a Friday with no browser open anywhere. A client-side exception list
+window â€” typically at 06:00 on a Friday with no browser open anywhere. A client-side exception list
 would have worked perfectly in every manual test and then silently done nothing on exactly the
 trips it was bought for. The change is additive: a new `away_exceptions.json` in the data volume,
 `_apply_away_exceptions()` called after Away is applied on both the manual and the scheduled path,
@@ -401,8 +404,8 @@ A, B, C and the production UI are unaffected. It is covered by 16 new tests in
 ### Device pictures
 
 Unchanged as a requirement and unchanged in practice. Each room row carries up to three device
-thumbnails at 58×30 and the room's heater list shows them at 112×58 — against the production UI's
-44×44 box, which letterboxes roughly 2:1 artwork down to about 44×22. They are never swapped for
+thumbnails at 58Ã—30 and the room's heater list shows them at 112Ã—58 â€” against the production UI's
+44Ã—44 box, which letterboxes roughly 2:1 artwork down to about 44Ã—22. They are never swapped for
 generic icons.
 
 ### What Concept D does not do
@@ -414,10 +417,10 @@ generic icons.
 - It cannot show whether an element is genuinely drawing power, because the API does not report it.
   Heating is inferred from measured versus target temperature and is labelled as an estimate.
 - The week editor writes whole profiles. It does not rename or reassign profiles, so a room sharing
-  a profile keeps sharing it — the editor warns rather than silently splitting them.
-- It cannot raise the 7 °C Away temperature. Nothing can; the away-exception list works around it
+  a profile keeps sharing it â€” the editor warns rather than silently splitting them.
+- It cannot raise the 7 Â°C Away temperature. Nothing can; the away-exception list works around it
   by using Eco, it does not fix it.
-- The away-exception list applies to *global* Away — pressing Away, or an away period starting. It
+- The away-exception list applies to *global* Away â€” pressing Away, or an away period starting. It
   does not intercept a single room that you set to Away by hand, because that is an explicit,
   deliberate choice about that one room.
 
@@ -428,7 +431,7 @@ generic icons.
 ### What the current app is
 
 A single-page app (`app/static/index.html`, `app.js`, `style.css`) with three top-level
-destinations — **Main**, **Devices**, **Log** — plus six modals. The Main page is a global mode
+destinations â€” **Main**, **Devices**, **Log** â€” plus six modals. The Main page is a global mode
 block followed by a vertical list of zones. Tapping a zone swaps the whole page for a zone detail
 view. Live updates arrive over `/ws`.
 
@@ -439,7 +442,7 @@ These are genuine strengths, and all three concepts keep them.
 - **The device images.** `app/static/images/` holds 19 real product drawings, resolved by model
   through a `DEVICE_MODELS` map with an SVG fallback and a placeholder. Showing the actual hardware
   is the single best idea in the product and it is not something most thermostat apps do.
-- **Honest mode vocabulary.** The app uses the hub's own words — Comfort, Eco, Away, Normal — and
+- **Honest mode vocabulary.** The app uses the hub's own words â€” Comfort, Eco, Away, Normal â€” and
   distinguishes "following the schedule" from "manually overridden". That distinction is real and
   worth keeping.
 - **Live updates.** The WebSocket means two phones stay in sync without a refresh.
@@ -468,23 +471,23 @@ Ordered by how much they cost the user. Each is evidence-backed against the code
 
 ### 1. The overview never shows the measured temperature
 
-This is the most serious problem. `createZoneListItem` (`app.js:668`) computes `setTemp` — the
-*target* — and renders `🎯 24.0°C`. The measured temperature is not in the zone list at all.
+This is the most serious problem. `createZoneListItem` (`app.js:668`) computes `setTemp` â€” the
+*target* â€” and renders `ðŸŽ¯ 24.0Â°C`. The measured temperature is not in the zone list at all.
 
 "Which rooms are cold?" is the main question a heating app exists to answer, and the home screen
 cannot answer it. You must open each room one at a time.
 
 ### 2. There is no heating-state indicator anywhere
 
-Nothing in the UI says whether heat is actually being produced. The user cannot tell "it is 18° and
-climbing" from "it is 18° and staying there".
+Nothing in the UI says whether heat is actually being produced. The user cannot tell "it is 18Â° and
+climbing" from "it is 18Â° and staying there".
 
-This one is not purely a UI problem — see [G](#g-implementation-considerations).
+This one is not purely a UI problem â€” see [G](#g-implementation-considerations).
 
 ### 3. Global mode is shown before any actual room
 
-`index.html` gives lines 69–116 to the Global Mode block — four large buttons and an explanatory
-paragraph — before the first zone appears at line 119. The least-used control gets the most
+`index.html` gives lines 69â€“116 to the Global Mode block â€” four large buttons and an explanatory
+paragraph â€” before the first zone appears at line 119. The least-used control gets the most
 valuable space, and on a phone the rooms start below the fold.
 
 ### 4. The displayed global mode is not true after a reload
@@ -495,22 +498,22 @@ concepts derive the house mode from the zones instead.
 
 ### 5. Changing a temperature is slow and buried
 
-The steppers live only in the zone detail view (`app.js:813–823`) at 0.5° per press. Raising a room
-by 3° is: tap the room, wait for the page swap, find the control, then six presses. That is the most
+The steppers live only in the zone detail view (`app.js:813â€“823`) at 0.5Â° per press. Raising a room
+by 3Â° is: tap the room, wait for the page swap, find the control, then six presses. That is the most
 common action in the whole product.
 
 ### 6. Red means Comfort
 
-`createZoneListItem` hard-codes `dotColor = '#E74C3C'` for Comfort — an alarm red — and
+`createZoneListItem` hard-codes `dotColor = '#E74C3C'` for Comfort â€” an alarm red â€” and
 `#27AE60` for Eco. A warm, comfortable, working room is painted in the colour every other interface
 reserves for faults, and the colours are hard-coded in JavaScript rather than themeable.
 
-### 7. The device images are shown at 44×44
+### 7. The device images are shown at 44Ã—44
 
-`.component-img` in `style.css:3345` is `44px × 44px`. The artwork is roughly 2:1 landscape, so
-`object-fit: contain` letterboxes it into about 44×22 of actual drawing. The best idea in the
+`.component-img` in `style.css:3345` is `44px Ã— 44px`. The artwork is roughly 2:1 landscape, so
+`object-fit: contain` letterboxes it into about 44Ã—22 of actual drawing. The best idea in the
 product is rendered at postage-stamp size, and only on the Devices page and inside the zone-detail
-component list — not where the user is actually making decisions.
+component list â€” not where the user is actually making decisions.
 
 ### 8. "Devices" and "Log" are top-level
 
@@ -524,7 +527,7 @@ different layouts, so the same concept looks like four different features.
 
 ### 10. Emoji as the icon system
 
-`🏠 ⚙️ 📋 🎯 🔥 🌿 🏖️` render differently on every platform, cannot be recoloured to carry state,
+`ðŸ  âš™ï¸ ðŸ“‹ ðŸŽ¯ ðŸ”¥ ðŸŒ¿ ðŸ–ï¸` render differently on every platform, cannot be recoloured to carry state,
 and set a casual tone at odds with the polish being asked for.
 
 ### 11. Destructive actions sit beside everyday ones
@@ -540,7 +543,7 @@ Schedules are only reachable through a modal. The home screen never says "this r
 ### 13. Long mobile scroll
 
 The zone list is one full-width row per zone with no density option. Eight zones plus the global
-mode block is a lot of scrolling to compare two rooms — and comparison is the main job.
+mode block is a lot of scrolling to compare two rooms â€” and comparison is the main job.
 
 ### 14. Thin empty, loading and error states
 
@@ -559,10 +562,10 @@ They also share a semantic palette (`shared/base.css`):
 
 | Meaning | Colour | Never used for |
 | --- | --- | --- |
-| Heating / Comfort | Amber `#E08A2E` | — |
-| At temperature | Slate blue | — |
-| Eco | Green | — |
-| Away | Blue | — |
+| Heating / Comfort | Amber `#E08A2E` | â€” |
+| At temperature | Slate blue | â€” |
+| Eco | Green | â€” |
+| Away | Blue | â€” |
 | Error | Red `#C9453C` | Anything that is merely warm |
 
 Colour is always paired with a word and a glyph, so the state survives greyscale and colour
@@ -570,25 +573,25 @@ blindness.
 
 **The device-image treatment** is shared too. The drawings are pale, low-contrast line art, so each
 concept mounts them on a tinted landscape "plinth" with increased contrast and multiply blending in
-light mode, inverted for dark mode. Every concept shows them at least 2× larger than production, in
+light mode, inverted for dark mode. Every concept shows them at least 2Ã— larger than production, in
 the place where the user is actually deciding something.
 
-### Concept A — At a Glance
+### Concept A â€” At a Glance
 
 **Philosophy: the house is a set of rooms you compare.**
 
 A responsive grid of room tiles. Each tile carries the room name, the measured temperature at
 display size, the target, a gauge showing the gap between them, a heating chip, and a device band
-with the product drawing at 84×44 and the model name. The house summary is one plain-English
+with the product drawing at 84Ã—44 and the model name. The house summary is one plain-English
 sentence plus three stats, and the four large global-mode buttons collapse into one compact
 segmented control.
 
 Selecting a room opens a right-hand drawer on desktop and a bottom sheet on mobile, with the device
-at 132×68 and a **slider** as the primary temperature control, backed by ± steppers.
+at 132Ã—68 and a **slider** as the primary temperature control, backed by Â± steppers.
 
 Comparison first, control second.
 
-### Concept B — Room First
+### Concept B â€” Room First
 
 **Philosophy: the app should behave like the thermostat on the wall.**
 
@@ -602,7 +605,7 @@ standing in the room.
 
 Breadth is available on demand through "All rooms" and "House" sheets in the dock.
 
-### Concept C — Heating Board
+### Concept C â€” Heating Board
 
 **Philosophy: everything on one surface, nothing hidden.**
 
@@ -611,10 +614,10 @@ next scheduled change anywhere in the house. A toolbar offers house mode, sortin
 or largest gap, and an "only heating" filter.
 
 Each room is a compact row: a state stripe down the left, the room, inline device thumbnails, the
-measured temperature, the state in words, and an **inline ± stepper with press-and-hold
+measured temperature, the state in words, and an **inline Â± stepper with press-and-hold
 acceleration**. You can change a temperature without opening anything.
 
-Opening a room expands it in place on mobile; at ≥1100px it fills a sticky second pane. The detail
+Opening a room expands it in place on mobile; at â‰¥1100px it fills a sticky second pane. The detail
 adds a device gallery, direct numeric entry, mode buttons and today's strip.
 
 ---
@@ -623,18 +626,18 @@ adds a device gallery, direct numeric entry, mode buttons and today's strip.
 
 Scores are relative to each other, not absolute.
 
-| Category | Concept A — At a Glance | Concept B — Room First | Concept C — Heating Board |
+| Category | Concept A â€” At a Glance | Concept B â€” Room First | Concept C â€” Heating Board |
 | --- | --- | --- | --- |
 | Ease of use | High | High for one room, low across rooms | **Highest** |
-| Information clarity | High | Medium — one room at a time | **Highest** |
-| Temperature control | Good — slider | **Best feel** — dial | **Fastest** — inline ±, hold to repeat, numeric entry |
-| Room recognition | **Excellent** — icon, name, temp per tile | Good — rail chips | **Excellent** — one row each, sortable |
-| Device recognition | Very good — 84×44 in every tile | **Best** — full-width hero | Good — 56×30 inline, gallery on open |
-| Mobile usability | Good — tiles stack, sheet | **Excellent** — built for one hand | Very good — adjust without opening |
+| Information clarity | High | Medium â€” one room at a time | **Highest** |
+| Temperature control | Good â€” slider | **Best feel** â€” dial | **Fastest** â€” inline Â±, hold to repeat, numeric entry |
+| Room recognition | **Excellent** â€” icon, name, temp per tile | Good â€” rail chips | **Excellent** â€” one row each, sortable |
+| Device recognition | Very good â€” 84Ã—44 in every tile | **Best** â€” full-width hero | Good â€” 56Ã—30 inline, gallery on open |
+| Mobile usability | Good â€” tiles stack, sheet | **Excellent** â€” built for one hand | Very good â€” adjust without opening |
 | Visual quality | Calm, familiar | **Most striking** | Most utilitarian |
-| Implementation effort | Medium | **Highest** — dial, rail, dark theme | **Lowest** — closest to existing markup |
+| Implementation effort | Medium | **Highest** â€” dial, rail, dark theme | **Lowest** â€” closest to existing markup |
 
-### Concept A — At a Glance
+### Concept A â€” At a Glance
 
 - **Strengths.** Answers "which rooms are cold?" instantly. Device image is present at every
   decision point. The most conventional and therefore the most immediately learnable.
@@ -646,9 +649,9 @@ Scores are relative to each other, not absolute.
   to maintain.
 - **Effort.** Medium.
 
-### Concept B — Room First
+### Concept B â€” Room First
 
-- **Strengths.** By far the best treatment of the device images — the hardware becomes the subject
+- **Strengths.** By far the best treatment of the device images â€” the hardware becomes the subject
   rather than a decoration. The dial is the most satisfying control and reads well from a distance.
   No page hierarchy at all.
 - **Weaknesses.** Structurally poor at the main job. Answering "which rooms are cold?" means
@@ -657,30 +660,30 @@ Scores are relative to each other, not absolute.
 - **Why it fits.** It mirrors the mental model of walking up to a thermostat.
 - **Usability risks.** Dials are imprecise for half-degree steps and need careful keyboard and
   screen-reader support. The dark theme is a deliberate departure from the rest of the app.
-- **Effort.** Highest — custom SVG dial with pointer, keyboard and touch handling.
+- **Effort.** Highest â€” custom SVG dial with pointer, keyboard and touch handling.
 
-### Concept C — Heating Board
+### Concept C â€” Heating Board
 
-- **Strengths.** Best information density, and the only concept where the most common action —
-  changing a temperature — costs zero navigation. Sorting by coldest directly answers the main
+- **Strengths.** Best information density, and the only concept where the most common action â€”
+  changing a temperature â€” costs zero navigation. Sorting by coldest directly answers the main
   question. Scales to a large house.
 - **Weaknesses.** The most utilitarian. Rows are less charming than tiles, and the device images are
-  smallest here, though still nearly 2× production and always visible.
+  smallest here, though still nearly 2Ã— production and always visible.
 - **Best use case.** Everyday use on any screen, especially a house with many zones.
 - **Why it fits.** Heating is a comparison problem, and a sortable list is the honest shape.
 - **Usability risks.** Density can feel busy; press-and-hold needs a clear commit indication.
-- **Effort.** Lowest — closest to the existing list markup.
+- **Effort.** Lowest â€” closest to the existing list markup.
 
 ---
 
 ## F. Recommendation
 
-### Adopt Concept C — Heating Board, with Concept A's tile treatment for the device images.
+### Adopt Concept C â€” Heating Board, with Concept A's tile treatment for the device images.
 
 Concept B is the most impressive to look at and I would still build its device presentation
 eventually. But it is the wrong primary structure for this product: it is optimised for the room
-you are already standing in, while the questions in the brief — *what is happening with the
-heating, which rooms are cold, is it running* — are all **whole-house comparison** questions. A UI
+you are already standing in, while the questions in the brief â€” *what is happening with the
+heating, which rooms are cold, is it running* â€” are all **whole-house comparison** questions. A UI
 that shows one room at a time cannot answer them without navigation.
 
 Concept C wins because it is the only one where the two things the user does most often are free:
@@ -688,7 +691,7 @@ Concept C wins because it is the only one where the two things the user does mos
 - **Reading the house.** Every room, its measured temperature and its state, on one surface, with
   no scrolling on a laptop and one short scroll on a phone. Sorting by coldest turns problem 1 into
   a single glance.
-- **Changing a temperature.** Inline ± on the row. Zero navigation, against the current three
+- **Changing a temperature.** Inline Â± on the row. Zero navigation, against the current three
   interactions plus a page change.
 
 #### What makes it easiest to use
@@ -699,10 +702,10 @@ line and leaves still learns something true.
 
 #### How it uses the physical thermostat images
 
-Every row carries its device thumbnails at 56×30 on desktop and 60×32 on a phone, showing the whole
+Every row carries its device thumbnails at 56Ã—30 on desktop and 60Ã—32 on a phone, showing the whole
 2:1 drawing rather than a letterboxed square. Opening a room shows a proper gallery at 168px wide
-with model and serial. The images become a scanning aid — you can pick out the panel heater from
-the floor convectors down the list — rather than a settings-page illustration.
+with model and serial. The images become a scanning aid â€” you can pick out the panel heater from
+the floor convectors down the list â€” rather than a settings-page illustration.
 
 This is the one place I would borrow from Concept A immediately: A's tile device band, with the
 model name always beside the picture, is better than a bare thumbnail. That is a small change to C.
@@ -729,7 +732,7 @@ model name always beside the picture, is better than a bare thumbnail. That is a
 
 - Any endpoint, payload, data model, or authentication behaviour.
 - The hub communication and heating logic.
-- Zone and device naming — these come from the hub and renaming them in the UI would be a lie.
+- Zone and device naming â€” these come from the hub and renaming them in the UI would be a lie.
 - The "no build step" constraint. Plain HTML/CSS/JS is right for this device.
 - The Log page. It is genuinely useful for diagnosing a hub.
 
@@ -742,7 +745,7 @@ model name always beside the picture, is better than a bare thumbnail. That is a
 | A | Gap gauge between current and target | Communicates "how far off" faster than two numbers |
 | B | Full-width device hero in the detail view | The best use of the artwork anywhere in this exercise |
 | B | Room chips that already show temperature and state | Useful if C ever needs a compact mode |
-| B | Dial as an *optional* control in the detail pane | Pleasant for deliberate adjustment, once ± covers the common case |
+| B | Dial as an *optional* control in the detail pane | Pleasant for deliberate adjustment, once Â± covers the common case |
 
 ---
 
@@ -755,15 +758,15 @@ items below. Specifically: layout, hierarchy, typography, spacing, the colour sy
 presentation, sorting, filtering, inline temperature control, the house sentence, today's schedule
 strip, responsive behaviour, focus states and keyboard support. All of it runs on today's API.
 
-### Requires a functional change — flagged, not implemented
+### Requires a functional change â€” flagged, not implemented
 
-Per §1 of the brief, these are the two places where a UI improvement depends on something the
+Per Â§1 of the brief, these are the two places where a UI improvement depends on something the
 backend does not currently provide. **Neither has been implemented.**
 
 > **Update, third review pass.** A third case turned up that could not be left as a flag: holding a
-> room on Eco while the rest of the house goes Away. Unlike the two below, it is not cosmetic — an
+> room on Eco while the rest of the house goes Away. Unlike the two below, it is not cosmetic â€” an
 > away period is applied by a server-side loop with no browser open, so a UI-only version would
-> silently fail. It *was* implemented, additively, and is described under "Away is 7 °C, and what to
+> silently fail. It *was* implemented, additively, and is described under "Away is 7 Â°C, and what to
 > do about it" in section I.
 
 #### 1. A truthful heating indicator
@@ -771,9 +774,9 @@ backend does not currently provide. **Neither has been implemented.**
 There is no `heating_active` field on `/api/zones`, and the hub does not report element power in
 the data this app receives.
 
-The prototypes **infer** it: `current < target − 0.15` means "heating", otherwise "holding", and
+The prototypes **infer** it: `current < target âˆ’ 0.15` means "heating", otherwise "holding", and
 "unknown" when there is no sensor. This is a reasonable guess and it is right most of the time, but
-it is a guess — a room can be at target while actively heating to stay there.
+it is a guess â€” a room can be at target while actively heating to stay there.
 
 **Every concept labels it as an estimate on screen.** I am not willing to present an inference as a
 fact in a heating app.
@@ -786,8 +789,8 @@ or the API would need to return a stable derived field so that every client agre
 #### 2. Server-side global mode
 
 Today `globalMode` is a client-side variable (`app.js:9`), which is why the display resets to "Home"
-on reload. The prototypes fix the symptom by deriving house mode from the zones — all-same means
-that mode, all-normal means Home, otherwise "Mixed" — which is honest and needs no backend change.
+on reload. The prototypes fix the symptom by deriving house mode from the zones â€” all-same means
+that mode, all-normal means Home, otherwise "Mixed" â€” which is honest and needs no backend change.
 
 But "Mixed" is a derived answer, not a recorded intent. If you want the UI to remember *"I put the
 house in Away at 08:00"*, that intent has to be stored server-side. `/api/status` already returns
@@ -806,7 +809,7 @@ Roughly, and assuming the existing settings screens are left alone:
 | Detail pane and gallery | Largely done |
 | Replace emoji with a real icon set | Small, mechanical |
 | Move colours out of `app.js` into CSS custom properties | Small, and removes problem 6 at the source |
-| Reconcile with settings, users, devices, log, schedule editor | The real work — these keep their current design initially |
+| Reconcile with settings, users, devices, log, schedule editor | The real work â€” these keep their current design initially |
 | Accessibility pass and device testing | Contrast, focus order, screen reader, real phone |
 
 The prototype is a design artefact, not production code. It shares no code with `app.js` and would
@@ -820,9 +823,9 @@ be reimplemented against the existing rendering approach rather than pasted in.
 
 **`main` has not been modified.** It remains at `97ca60a`, the commit from the previous real-hub
 work. No commit on this branch has been merged into `main` and no pull request has been opened, per
-§17 of the brief.
+Â§17 of the brief.
 
-**Files added — all new, in a directory that did not previously exist:**
+**Files added â€” all new, in a directory that did not previously exist:**
 
 ```
 app/static/concepts/index.html          chooser page
@@ -843,7 +846,7 @@ docs/UI_REDESIGN.md                     this document
 ```
 
 **Files modified:** `app/static/concepts/index.html` (Concept D added to the chooser),
-`app/static/concepts/shared/core.js` (additive only — away-schedule, hub-config, device, zone and
+`app/static/concepts/shared/core.js` (additive only â€” away-schedule, hub-config, device, zone and
 week-profile calls, plus date and manual-device helpers; concepts A, B and C are unaffected), and a
 pointer added to `README.md`.
 
@@ -861,11 +864,11 @@ re-verified after deployment.
 ### Verification performed
 
 The three concepts were deployed to the Raspberry Pi and tested in a real browser (headless
-Chromium, desktop 1440×900 and mobile 390×844):
+Chromium, desktop 1440Ã—900 and mobile 390Ã—844):
 
 - All pages load with no JavaScript errors, no failed requests and no 4xx/5xx responses.
 - All device images resolve on both viewports in all three concepts, at sizes larger than the
-  production 44×44 letterbox.
+  production 44Ã—44 letterbox.
 - No element marked `hidden` is visible or able to intercept clicks.
 - The inline stepper in Concept C was confirmed to write to `/api/zones/{id}/temperature` and the
   change was read back from `/api/zones`, then restored.
@@ -889,7 +892,7 @@ and mobile. All pass. In addition to the checks above:
   `/api/zones`, then restored to its original value.
 - Rooms the API reports as having dial-only heaters were confirmed to be labelled as such in the
   UI, matched one for one against `has_manual_devices`.
-- The set temperature was measured as more than 1.8× the type size of the measured temperature.
+- The set temperature was measured as more than 1.8Ã— the type size of the measured temperature.
 - The manifest and all five icons return 200 inside an authenticated session, and the manifest is
   `standalone` with at least two icons.
 - Every heater in a room's list states whether it is adjustable or dial-only.
@@ -932,12 +935,97 @@ Four more points from using the device, and the first one that could not be solv
    bottom margin and wraps on narrow screens instead of squeezing.
 2. **Mode colours were too close together.** Comfort is now red, Eco green, Away blue, and
    following the schedule violet, in both light and dark mode. See "Visual language" above.
-3. **Away being 7 �C was invisible.** It is now stated on the leaving sheet, on the room detail, in
-   the schedule legend, and in the week editor as soon as a row uses Away � each time pointing at
+3. **Away being 7 ï¿½C was invisible.** It is now stated on the leaving sheet, on the room detail, in
+   the schedule legend, and in the week editor as soon as a row uses Away ï¿½ each time pointing at
    Eco as the way to hold a room warmer.
 4. **Rooms that must not get cold.** A new Settings list of zones held on Eco during Away, applied
    on the server so it works when an away period starts with no browser open. Backend rationale is
-   in "Away is 7 �C, and what to do about it" above.
+   in "Away is 7 ï¿½C, and what to do about it" above.
 
 Verified by 419 pytest tests (16 of them new, in `tests/test_away_exceptions.py`) plus the
 browser harness run against the live Pi.
+
+
+---
+
+## J. Promotion to production
+
+Concept D was adopted after being used on a real Pi against a real hub. This section records what
+changed when it shipped, and how to undo it.
+
+### What "shipped" meant in practice
+
+The concept was not rewritten; it was moved and renamed.
+
+| Before | After |
+|--------|-------|
+| `app/static/concepts/shared/` | `app/static/ui/shared/` |
+| `app/static/concepts/d/d.js` | `app/static/ui/cabin/cabin.js` |
+| `app/static/concepts/d/d.css` | `app/static/ui/cabin/cabin.css` |
+| `app/static/concepts/d/index.html` | `app/static/ui/cabin/index.html` |
+
+Concepts A, B and C stay where they are. They are the record of how the design was arrived at, and
+deleting them would make sections A to F of this document refer to things that no longer exist.
+
+Two things had to change rather than just move:
+
+- **The web app manifest.** `start_url` and `scope` were `/static/concepts/d/`. Left alone, the
+  home-screen icon would have opened a page inside a static directory, and the installed app's
+  scope would have excluded the rest of its own site. Both are now `/`.
+- **The sign-in page.** It is generated by the server as a Python string, not served from
+  `static/`, so it was untouched by the move and would have been the one screen still wearing the
+  old design — and the first screen anyone sees. There are now two, `_LOGIN_CABIN_HTML` and
+  `_LOGIN_CLASSIC_HTML`, and `/login` serves whichever matches the active interface.
+
+### The switch
+
+`NOBO_UI` selects which interface answers `/`. It is read once at startup:
+
+```
+NOBO_UI=cabin     # default
+NOBO_UI=classic   # the original interface
+```
+
+Both are always reachable at `/cabin` and `/classic` regardless of the setting, so the two can be
+compared without editing any configuration. An unrecognised value logs a warning and falls back to
+`cabin` rather than refusing to start: a typo in `.env` must not leave a cabin with no way to turn
+the heating on.
+
+### Why a setting and not a branch
+
+Three options were considered.
+
+**Keep the old interface on a branch, and roll back by redeploying it.** Rejected. Both interfaces
+sit on the same ~4,300-line server, so the branch would not just be an old interface — it would be
+an old *server*, missing every hub, scheduling and security fix since. Rolling back the interface
+would silently roll back all of them. And the branch you fall back to in an emergency is, by
+definition, the one nobody has run for months.
+
+**Fork the whole thing into a second repository.** Rejected for the same reason, more so: every
+future hub bug would have to be fixed twice, and a rollback would mean re-cloning and rebuilding on
+a Pi that may be on a cabin's phone hotspot.
+
+**Ship both and choose at runtime.** Chosen. The interface decision is separated from every other
+decision. Rolling back is one line in `.env` and `systemctl restart` — seconds, no rebuild, no
+network — and the server keeps every fix it has. The cost is that both interfaces stay in the
+image, which is a few hundred kilobytes of static files.
+
+As a last resort independent of all of this, the commit before the promotion is tagged
+`classic-ui-final`.
+
+### What is tested
+
+The interface is the part of the system least covered by ordinary tests, because a server is
+perfectly happy to serve a page whose buttons do nothing. Three kinds of check exist:
+
+- `tests/test_ui_switch.py` — the default is `cabin`, `classic` can be selected, an unknown value
+  falls back with a warning, `/` follows the setting, `/cabin` and `/classic` work whichever way it
+  is set, `/login` matches the active interface and stays public, and neither interface can be read
+  without signing in. The middle one is the rollback promise, so it is asserted rather than assumed.
+- `tests/test_concept_wiring.py` — for every interface, every `<button id="...">` is referred to by
+  its script, every `<section class="view">` is handled by `switchView()`, and every local `href`
+  or `src` resolves to a file that exists. The last of these is what catches a move like this one:
+  a renamed asset leaves a 404 that no server test would ever look at.
+- The manifest check — `start_url` and `scope` must be `/`, because a wrongly scoped manifest
+  produces a home-screen icon that opens a file instead of an app, and that is only discoverable by
+  installing it on a phone.

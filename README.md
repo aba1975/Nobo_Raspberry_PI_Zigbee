@@ -396,6 +396,8 @@ NOBO_DEMO=false
 - `NOBO_IP`: The IP address of your hub on your local network
 - `NOBO_DEMO`: Set to `true` to test without a real hub (uses simulated data)
 - `NOBO_ALLOW_ANON_API`: Leave this alone. It is explained under [Security Notes](#security-notes).
+- `NOBO_UI`: Which interface you get at the usual address — `cabin` (default) or `classic`.
+  See [Choosing the Interface](#choosing-the-interface).
 
 **Two things that catch people out:**
 
@@ -1024,25 +1026,63 @@ Nobo_Raspberry_PI/
 └── README.md                   # This file
 ```
 
-## Design Exploration (Not Part of `main`)
+## Choosing the Interface
 
-A UI/UX redesign exploration lives on the `ui-redesign-exploration` branch. It adds four working,
-interactive design concepts as extra pages under `/static/concepts/`, built against the real API so
-they can be compared side by side on a real device.
+There are two interfaces, and both are installed in every build.
 
-Concepts A, B and C explore three different ways to present the existing interface. **Concept D
-("Cabin")** is the current direction: it reorders the interface around the away period, because a
-cabin stands empty most of the year. It leads with "I'm leaving" and "I'm back", shows the
-temperature a room is *set* to as the headline with the measured temperature underneath, flags
-heaters whose temperature can only be turned by hand, and installs on an iPhone home screen.
+| Address | Interface | |
+|---------|-----------|--|
+| `/` | whichever `NOBO_UI` selects | what you normally open |
+| `/cabin` | Cabin | always reachable |
+| `/classic` | the original | always reachable |
 
-It is a **design exploration for review, not a proposed change.** It has not been merged, it does
-not alter the current interface, and it changes no backend, API, data-model or authentication
-behaviour.
+**Cabin** is the current interface. It is arranged around the away period, because a cabin stands
+empty most of the year: it leads with "I'm leaving" and "I'm back" rather than raw hub modes, shows
+the temperature a room is *set* to as the headline with the measured temperature underneath, flags
+heaters whose temperature can only be turned by hand, lets you add a room and register a heater by
+serial number, keeps an activity log under **Settings → Diagnostics**, and installs on an iPhone
+home screen.
 
-The write-up — analysis of the current UI, the usability problems found, the concepts, a
-comparison and a recommendation — is in [`docs/UI_REDESIGN.md`](docs/UI_REDESIGN.md) on that
-branch, along with instructions for trying the prototypes and switching back.
+**Classic** is the original interface, unchanged.
+
+### Switching, and switching back
+
+Edit `.env` on the Pi:
+
+```bash
+cd /opt/nobo-control
+nano .env          # NOBO_UI=classic   (or: cabin)
+sudo systemctl restart nobo-control
+```
+
+That takes a few seconds. It needs no rebuild and no internet, which matters if the Pi is in a
+cabin on a phone hotspot.
+
+Rolling back this way was a deliberate choice over keeping the old interface on an old branch or
+in a separate repository. Both interfaces sit on top of the same server code, so redeploying an
+older revision to change the interface would also undo every hub, scheduling and security fix made
+since — and the revision you would be falling back to is the one nobody has run for months. A
+setting keeps the two decisions separate: you change the interface without changing anything else.
+
+You do not need to change the setting just to look at the other one. `/cabin` and `/classic` both
+work whatever `NOBO_UI` says, so you can open them side by side.
+
+If `NOBO_UI` is set to something that is not recognised, the server logs a warning and starts with
+Cabin. A typo should not leave you with no way to turn the heating on.
+
+The last revision before Cabin became the default is tagged `classic-ui-final`, if you ever want
+the code exactly as it was.
+
+## Design Exploration
+
+Cabin began as one of four interactive design concepts, built against the real API so they could be
+compared on a real device. Concepts A, B and C are kept at `/static/concepts/` as the record of
+that exploration; they still work, but they are no longer being developed. Concept D was adopted
+and became Cabin.
+
+The write-up — analysis of the original UI, the usability problems found, the concepts, the
+comparison and the reasoning behind the promotion — is in
+[`docs/UI_REDESIGN.md`](docs/UI_REDESIGN.md).
 
 ## Ports
 

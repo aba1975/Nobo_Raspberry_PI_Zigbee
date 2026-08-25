@@ -1659,7 +1659,8 @@
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="open-users">Manage users</button>
         </div>
-        <small class="field-hint">User management opens the full settings page in the main app.</small>
+        <small class="field-hint">User management opens the classic interface, which
+        still has the full user administration screen.</small>
       </section>
 
       <section class="card">
@@ -1673,9 +1674,11 @@
       </section>
 
       <section class="card">
-        <h2>About this screen</h2>
-        <p class="zd-sub">This is design concept D, an exploration. The live system is at
-        <a href="/">the main app</a>.</p>
+        <h2>About this interface</h2>
+        <p class="zd-sub">This is the Cabin interface. The previous one is still
+        installed and is always reachable at <a href="/classic">/classic</a> — nothing
+        was removed. To make it the default again, set <code>NOBO_UI=classic</code> in
+        the server's <code>.env</code> file and restart.</p>
       </section>`;
 
     const root = $('#viewSettings');
@@ -1686,7 +1689,9 @@
       try { await Nobo.api.logout(); } catch (_) {}
       window.location.href = '/login';
     };
-    root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/#settings'; };
+    // The classic UI is no longer at "/", so this must name it explicitly or it
+    // would simply reload Cabin.
+    root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/classic#settings'; };
     root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
     loadAwayExceptions();
   }
