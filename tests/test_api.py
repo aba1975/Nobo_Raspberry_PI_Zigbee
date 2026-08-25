@@ -111,6 +111,37 @@ class TestZoneCRUD:
         assert r.status_code == 200
         assert len(DEMO_ZONES) == count_before + 1
 
+    def test_add_zone_rejects_an_empty_name(self, client):
+        """Demo mode has to refuse what the hub refuses, or it teaches the
+        wrong limits and lets a nameless room into the list."""
+        count_before = len(DEMO_ZONES)
+        for body in ({"name": ""}, {"name": "   "}):
+            r = client.post("/api/zones", json=body)
+            assert r.status_code == 400, body
+        assert len(DEMO_ZONES) == count_before
+
+    def test_add_zone_rejects_a_duplicate_name(self, client):
+        existing = DEMO_ZONES[0]["name"]
+        count_before = len(DEMO_ZONES)
+        r = client.post("/api/zones", json={"name": existing})
+        assert r.status_code == 400
+        assert existing in r.json()["detail"]
+        assert len(DEMO_ZONES) == count_before
+
+    def test_add_zone_rejects_an_over_long_name(self, client):
+        count_before = len(DEMO_ZONES)
+        r = client.post("/api/zones", json={"name": "x" * 101})
+        assert r.status_code == 400
+        assert len(DEMO_ZONES) == count_before
+
+    def test_add_zone_is_written_to_the_log(self, client):
+        """The activity log is the only record of what changed, so a creation
+        that leaves no entry is a hole in it."""
+        client.post("/api/log/clear")
+        assert client.post("/api/zones", json={"name": "Logged Zone"}).status_code == 200
+        entries = client.get("/api/log").json()["entries"]
+        assert any("Logged Zone" in e["description"] for e in entries), entries
+
     def test_rename_zone(self, client):
         zone_id = DEMO_ZONES[0]["zone_id"]
         r = client.put(f"/api/zones/{zone_id}", json={"name": "Renamed"})
