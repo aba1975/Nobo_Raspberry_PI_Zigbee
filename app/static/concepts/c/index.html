@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#FAFAF8">
+<title>Concept C &mdash; Heating Board | Nob&oslash; Control</title>
+<link rel="stylesheet" href="/static/ui/shared/base.css?v=1">
+<link rel="stylesheet" href="/static/concepts/c/c.css?v=1">
+</head>
+<body>
+
+<div class="np-banner">
+  <span><strong>Design concept C &mdash; Heating Board.</strong> A prototype, not the live app.</span>
+  <a href="/static/concepts/index.html">Compare concepts</a>
+  <a href="/">Back to the current app</a>
+</div>
+
+<header class="board-head">
+  <div class="wrap">
+    <div class="head-top">
+      <h1 class="head-title">Heating</h1>
+      <div class="head-right">
+        <p class="conn" id="conn"><span class="conn-dot" aria-hidden="true"></span><span id="connText">Connecting</span></p>
+        <button class="ghost-btn np-tap" id="systemBtn" type="button">System</button>
+      </div>
+    </div>
+
+    <!-- The system state as a sentence, before any control. -->
+    <p class="head-status" id="headStatus">Reading your home&hellip;</p>
+
+    <div class="toolbar">
+      <div class="seg-group" role="group" aria-label="House mode" id="houseMode">
+        <span class="seg-label" id="houseModeLabel">All rooms</span>
+        <button class="seg np-tap" type="button" data-mode="home">Schedule</button>
+        <button class="seg np-tap" type="button" data-mode="comfort">Comfort</button>
+        <button class="seg np-tap" type="button" data-mode="eco">Eco</button>
+        <button class="seg np-tap" type="button" data-mode="away">Away</button>
+      </div>
+
+      <div class="filters">
+        <label class="np-visually-hidden" for="sortBy">Sort rooms</label>
+        <select id="sortBy" class="select np-tap">
+          <option value="name">Sort: room name</option>
+          <option value="coldest">Sort: coldest first</option>
+          <option value="gap">Sort: furthest from target</option>
+        </select>
+        <button class="toggle-btn np-tap" id="onlyHeating" type="button" aria-pressed="false">Only heating</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap board" id="board">
+  <div class="list" id="list" aria-busy="true"></div>
+  <!-- On a wide screen the detail is a second pane, so nothing ever navigates. -->
+  <aside class="detail" id="detail" aria-live="polite"></aside>
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+  <div class="sheet-inner" id="sheetInner"></div>
+</section>
+
+<script src="/static/ui/shared/core.js?v=1"></script>
+<script src="/static/concepts/c/c.js?v=1"></script>
+</body>
+</html>

@@ -30,6 +30,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. The eco temperature must be lower than the comfort temperature, and values are rounded to whole degrees because that is all the hub stores. |
 | **Weekly schedule** | A per-zone plan of which mode applies at which time on each day of the week (see [Weekly schedule rules](#weekly-schedule-rules)). |
 | **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
+| **Rooms that must not get cold** | Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be raised. Nominate the zones that should hold their **Eco** temperature instead — a bathroom with pipes in the wall, a workshop — and they stay on Eco whenever the rest of the house goes Away, whether you pressed Away or an away period started on its own. See [Rooms that must not get cold](#rooms-that-must-not-get-cold). |
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
@@ -167,6 +168,37 @@ rejected.
 A partial update is rejected rather than merged, so that a saved schedule is
 never half old and half new. The editor in the web interface builds a valid
 week for you; these rules matter if you call the API yourself.
+
+### Rooms that must not get cold
+
+**Away is 7 °C, and that is fixed.** It is an anti-frost setting decided by the
+Nobø hub. It is not a set point, it is not exposed by the protocol, and no app —
+this one, Nobø's own, or any other — can raise it. If a room needs to stay
+warmer than 7 °C while you are away, Away is the wrong tool: **Eco** is the only
+mode with a temperature you control that is still below Comfort.
+
+So the app lets you nominate the rooms that should be held on Eco instead of
+Away. Under **Settings → Rooms that must not get cold**, tick the zones
+concerned. From then on:
+
+- pressing **Away**, or an **away period** starting, sets every zone to Away as
+  before, and then immediately puts the ticked zones back on **Eco**;
+- the ticked zones stay on Eco for the whole trip;
+- coming **Home** returns every zone, ticked or not, to its weekly schedule.
+
+This works because a per-zone override outranks the global override on the hub.
+
+Two things worth knowing:
+
+- The list is applied **on the Raspberry Pi, not in your browser.** An away
+  period starts in a background loop, which is usually running with nobody
+  logged in — so the exception has to live on the server to be worth anything.
+- It only affects **global** Away. Setting one room to Away by hand is treated
+  as a deliberate choice about that room and is left alone.
+
+The list is stored in `data/away_exceptions.json` and is included in a backup.
+If a zone in the list is deleted, it is ignored rather than causing an error,
+and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
 
 ## Prerequisites
 
@@ -364,6 +396,8 @@ NOBO_DEMO=false
 - `NOBO_IP`: The IP address of your hub on your local network
 - `NOBO_DEMO`: Set to `true` to test without a real hub (uses simulated data)
 - `NOBO_ALLOW_ANON_API`: Leave this alone. It is explained under [Security Notes](#security-notes).
+- `NOBO_UI`: Which interface you get at the usual address — `cabin` (default) or `classic`.
+  See [Choosing the Interface](#choosing-the-interface).
 
 **Two things that catch people out:**
 
@@ -992,6 +1026,64 @@ Nobo_Raspberry_PI/
 └── README.md                   # This file
 ```
 
+## Choosing the Interface
+
+There are two interfaces, and both are installed in every build.
+
+| Address | Interface | |
+|---------|-----------|--|
+| `/` | whichever `NOBO_UI` selects | what you normally open |
+| `/cabin` | Cabin | always reachable |
+| `/classic` | the original | always reachable |
+
+**Cabin** is the current interface. It is arranged around the away period, because a cabin stands
+empty most of the year: it leads with "I'm leaving" and "I'm back" rather than raw hub modes, shows
+the temperature a room is *set* to as the headline with the measured temperature underneath, flags
+heaters whose temperature can only be turned by hand, lets you add a room and register a heater by
+serial number, keeps an activity log under **Settings → Diagnostics**, and installs on an iPhone
+home screen.
+
+**Classic** is the original interface, unchanged.
+
+### Switching, and switching back
+
+Edit `.env` on the Pi:
+
+```bash
+cd /opt/nobo-control
+nano .env          # NOBO_UI=classic   (or: cabin)
+sudo systemctl restart nobo-control
+```
+
+That takes a few seconds. It needs no rebuild and no internet, which matters if the Pi is in a
+cabin on a phone hotspot.
+
+Rolling back this way was a deliberate choice over keeping the old interface on an old branch or
+in a separate repository. Both interfaces sit on top of the same server code, so redeploying an
+older revision to change the interface would also undo every hub, scheduling and security fix made
+since — and the revision you would be falling back to is the one nobody has run for months. A
+setting keeps the two decisions separate: you change the interface without changing anything else.
+
+You do not need to change the setting just to look at the other one. `/cabin` and `/classic` both
+work whatever `NOBO_UI` says, so you can open them side by side.
+
+If `NOBO_UI` is set to something that is not recognised, the server logs a warning and starts with
+Cabin. A typo should not leave you with no way to turn the heating on.
+
+The last revision before Cabin became the default is tagged `classic-ui-final`, if you ever want
+the code exactly as it was.
+
+## Design Exploration
+
+Cabin began as one of four interactive design concepts, built against the real API so they could be
+compared on a real device. Concepts A, B and C are kept at `/static/concepts/` as the record of
+that exploration; they still work, but they are no longer being developed. Concept D was adopted
+and became Cabin.
+
+The write-up — analysis of the original UI, the usability problems found, the concepts, the
+comparison and the reasoning behind the promotion — is in
+[`docs/UI_REDESIGN.md`](docs/UI_REDESIGN.md).
+
 ## Ports
 
 | Port | Protocol | Purpose |
@@ -1035,6 +1127,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/hub/config` | Current hub connection settings |
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
+| `GET /api/global-mode/away-exceptions` | Zones held on Eco during Away, plus the fixed away temperature |
 | `WS /ws` | Live updates. Pushes the current zones on connect, then again whenever anything changes. |
 
 ### Controlling
@@ -1047,6 +1140,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `PUT /api/zones/{zone_id}` | Rename a zone or change its icon |
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
+| `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
 
 ### Zones and devices

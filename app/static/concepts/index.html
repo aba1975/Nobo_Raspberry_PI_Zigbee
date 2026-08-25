@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#F4F5F7">
+<title>UI design concepts | Nob&oslash; Control</title>
+<link rel="stylesheet" href="/static/ui/shared/base.css?v=1">
+<style>
+:root {
+  --bg: #F4F5F7; --surface: #FFF; --line: #E3E6EA;
+  --ink: #1C2229; --ink-2: #5A646F; --ink-3: #8A939D;
+}
+body { background: var(--bg); color: var(--ink); line-height: 1.55; }
+.wrap { width: min(1080px, 100%); margin: 0 auto; padding: var(--sp-7) var(--sp-4) var(--sp-8); }
+h1 { font-size: clamp(26px, 4vw, 36px); font-weight: 660; letter-spacing: -0.025em; }
+.lede { font-size: 17px; color: var(--ink-2); max-width: 62ch; margin-top: var(--sp-3); }
+.warn {
+  margin-top: var(--sp-5); padding: var(--sp-4);
+  background: #FFF8E8; border: 1px solid #EBD9A8; border-radius: 12px;
+  font-size: 14px; color: #6B551C;
+}
+.warn b { color: #4E3D0F; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); margin-top: var(--sp-6); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.tag { font-size: 11px; font-weight: 680; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.card h2 { font-size: 21px; font-weight: 640; letter-spacing: -0.02em; }
+.card p { font-size: 14px; color: var(--ink-2); }
+.card ul { font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; gap: 5px; }
+.card li { padding-left: 16px; position: relative; }
+.card li::before { content: "\2014"; position: absolute; left: 0; color: var(--ink-3); }
+.go {
+  margin-top: auto; display: inline-block; text-align: center;
+  padding: 13px 18px; border-radius: 11px; background: #1C2229; color: #fff;
+  font-weight: 580; text-decoration: none; font-size: 15px;
+}
+.go:hover { background: #313A44; }
+.foot { margin-top: var(--sp-7); padding-top: var(--sp-5); border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+.foot a { color: inherit; }
+.foot h3 { font-size: 15px; font-weight: 640; color: var(--ink); margin-bottom: var(--sp-2); }
+.foot p { margin-bottom: var(--sp-3); max-width: 68ch; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14181C; --surface: #1C2126; --line: #2C333A; --ink: #ECEFF2; --ink-2: #A3AEB9; --ink-3: #7A848F; }
+  .go { background: #ECEFF2; color: #14181C; }
+  .go:hover { background: #FFF; }
+  .warn { background: #2A2413; border-color: #4E441F; color: #E5D3A0; }
+  .warn b { color: #F5E9C6; }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <h1>Three UI design concepts</h1>
+  <p class="lede">
+    Three genuinely different ways to organise the same heating system. Each one is a working
+    prototype running against your real zones and your real hub &mdash; not a mockup. Change a
+    temperature in any of them and it changes for real.
+  </p>
+
+  <div class="warn">
+    <b>Concept D was adopted.</b> It is now the production interface, served at
+    <a href="/">the usual address</a>, and it has moved to <code>app/static/ui/cabin/</code>.
+    A, B and C are kept here as the record of the exploration &mdash; they still run against your
+    real hub, but they are no longer being developed. The original interface has not been removed:
+    it is always at <a href="/classic">/classic</a>, and setting <code>NOBO_UI=classic</code> in
+    the server's <code>.env</code> makes it the default again.
+  </div>
+
+  <div class="cards">
+
+    <article class="card">
+      <span class="tag">Concept A</span>
+      <h2>At a Glance</h2>
+      <p>
+        The whole house on one screen as a grid of room tiles. Built to answer
+        &ldquo;which rooms are cold?&rdquo; in one look, then let you drop into a room to adjust it.
+      </p>
+      <ul>
+        <li>Room tiles with the measured temperature at display size</li>
+        <li>Device picture built into every tile</li>
+        <li>Temperature set with a slider in a side drawer</li>
+        <li>Comparison first, control second</li>
+      </ul>
+      <a class="go" href="/static/concepts/a/index.html">Open concept A</a>
+    </article>
+
+    <article class="card">
+      <span class="tag">Concept B</span>
+      <h2>Room First</h2>
+      <p>
+        The app behaves like the thermostat itself. One room fills the screen, the hardware is shown
+        as a real object, and the target is set on a dial.
+      </p>
+      <ul>
+        <li>Rooms switched from a rail, no page hierarchy at all</li>
+        <li>Largest, clearest presentation of the device images</li>
+        <li>Temperature set on a draggable dial</li>
+        <li>Best single-room experience, weakest overview</li>
+      </ul>
+      <a class="go" href="/static/concepts/b/index.html">Open concept B</a>
+    </article>
+
+    <article class="card">
+      <span class="tag">Concept C</span>
+      <h2>Heating Board</h2>
+      <p>
+        One surface, no navigation. Every room is a row you can read and adjust where it sits;
+        opening a room expands it in place or fills a second pane on a wide screen.
+      </p>
+      <ul>
+        <li>Change a temperature without opening anything</li>
+        <li>Device thumbnails inline in every row</li>
+        <li>Sort by coldest, filter to what is heating</li>
+        <li>Scales best to a house with many zones</li>
+      </ul>
+      <a class="go" href="/static/concepts/c/index.html">Open concept C</a>
+    </article>
+
+    <article class="card">
+      <span class="tag">Concept D &middot; adopted</span>
+      <h2>Cabin</h2>
+      <p>
+        Built for a place that stands empty most of the year. The away period is the hero:
+        say when you are back and the cabin warms itself before you arrive. Rooms lead with
+        the temperature they are <em>set</em> to, and heaters you can only adjust by hand are
+        labelled as such. Installs on a phone home screen.
+      </p>
+      <ul>
+        <li>&ldquo;I&rsquo;m leaving&rdquo; and &ldquo;I&rsquo;m back&rdquo; instead of raw modes</li>
+        <li>Set temperature is the headline; measured temperature supports it</li>
+        <li>Dial-only heaters called out per room and per device</li>
+        <li>Drill into a room for its devices, its week and its settings</li>
+        <li>Add to Home Screen on iPhone, standalone window</li>
+      </ul>
+      <a class="go" href="/">Open Cabin (now the production interface)</a>
+    </article>
+
+  </div>
+
+  <div class="foot">
+    <h3>How to judge them</h3>
+    <p>
+      Try each one twice: once on a laptop and once on your phone. Ask yourself the same four
+      questions each time &mdash; can I tell what the heating is doing within a couple of seconds,
+      can I find the cold room, can I raise a room by three degrees without thinking, and do I know
+      which physical device I am controlling?
+    </p>
+    <h3>Read the write-up</h3>
+    <p>
+      The analysis of the current UI, the problems each concept is trying to solve, the full
+      comparison and my recommendation are in <code>docs/UI_REDESIGN.md</code> in the repository.
+    </p>
+    <p><a href="/">&larr; Back to the current app</a></p>
+  </div>
+
+</main>
+</body>
+</html>
