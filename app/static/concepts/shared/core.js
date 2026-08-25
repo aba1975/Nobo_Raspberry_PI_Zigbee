@@ -91,6 +91,13 @@ const Nobo = (() => {
     weekProfiles: () => req('/api/week_profiles').then(r => r.week_profiles || r),
     setSchedule:  (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
                                      method: 'POST', body: JSON.stringify(body) }),
+
+    // The command log is one buffer holding three kinds of entry, told apart
+    // by `source`: 'api' (a change made through the app), 'schedule' (the away
+    // scheduler acting on its own) and 'hub' (the connection itself). The
+    // `direction` is 'sent', 'received' or 'error'. Newest first.
+    log:      (limit = 300) => req(`/api/log?limit=${encodeURIComponent(limit)}`),
+    clearLog: ()            => req('/api/log/clear', { method: 'POST' }),
   };
 
   /* ---------------------------------------------------------------

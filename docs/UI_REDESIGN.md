@@ -237,6 +237,61 @@ Inside the card the room name takes a full row, then the set temperature and its
 row below. The whole card is the tap target that opens the room; the stepper is layered above it so
 adjusting a temperature does not navigate.
 
+### Adding a room
+
+The Rooms heading carries an **Add a room** button — the only action on the home screen that is not
+about heat, and placed on the section it belongs to rather than in a global toolbar. Concept D
+previously had no way to create a room at all, which meant a first-run system, or anyone adding a
+loft, had to go back to the current app to do it. A prototype that cannot be used from empty is not
+a prototype of the product.
+
+The sheet asks for a name and, optionally, an icon. Concept D itself never draws the icon — one of
+the criticisms it makes of the current app is that emoji are load-bearing as an icon system — but
+the icon is stored per room by the server and *is* shown by the current app, so refusing to collect
+it would quietly degrade the room for anyone switching back. It is offered, explained, and ignored.
+
+The hub assigns the new room's id, not the client, so the sheet reloads state afterwards rather
+than trusting anything echoed back. New rooms start empty and on the standard week; heaters are
+added or moved into them from inside the room, where the heater list already lives.
+
+The empty state now says what to do next instead of stating a fact, and the room count no longer
+reads "1 rooms".
+
+### The activity log
+
+There is a record of what the system did: every change made through the app, every action the away
+schedule took on its own, and the state of the connection to the hub. It is genuinely useful when
+something has misbehaved and close to useless the rest of the time, so it is placed accordingly —
+inside the **System status** box, which is collapsed by default and deliberately the last thing on
+the home screen. You reach it in two taps, and only when you go looking.
+
+This is a direct answer to problem 8 below: the current app puts **Log** in the top-level
+navigation, giving a diagnostics buffer the same prominence as the rooms you actually came for.
+
+The log view filters on the entry's own fields rather than on the wording of its message:
+
+| Filter | Rule |
+| --- | --- |
+| Everything | — |
+| Changes | `source` is `api` or `schedule` |
+| Hub | `source` is `hub` |
+| Problems | `direction` is `error` |
+
+Each chip carries its own count, so an empty Problems filter is visible without selecting it. Errors
+are tinted with the Comfort red and given weight; the raw protocol command, where there is one, is
+kept but demoted to small monospace on its own line — it means nothing to most people and everything
+to the one person debugging a hub.
+
+The server writes timestamps in the Pi's own timezone with no offset, so they are parsed field by
+field rather than handed to `Date`, which would read them as UTC and shift every entry. Times from
+today show as `HH:MM:SS`; older entries gain the date.
+
+The log is fetched when the view opens and polled every ten seconds only while it is open — never
+from the home screen, and never while a sheet is open, which would move the list out from under a
+confirmation. **Clear the log** sits behind a confirmation that says plainly that it discards the
+record and changes no setting and no room. The buffer is in memory, so it starts again empty when
+the system restarts; the view says so rather than letting an empty log look like a fault.
+
 ### Install on a phone home screen
 
 Concept D ships a web app manifest, a maskable icon, an Apple touch icon, `theme-color`, standalone
@@ -334,6 +389,9 @@ generic icons.
 ### What Concept D does not do
 
 - It does not manage users; that links back to the main app.
+- It creates and deletes rooms, but it does not reorder them; the order is the hub's.
+- It shows the activity log but does not export it, and the log is a memory buffer that does not
+  survive a restart. Both are server-side properties, not UI choices.
 - It cannot show whether an element is genuinely drawing power, because the API does not report it.
   Heating is inferred from measured versus target temperature and is labelled as an estimate.
 - The week editor writes whole profiles. It does not rename or reassign profiles, so a room sharing

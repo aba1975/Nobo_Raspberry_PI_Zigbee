@@ -45,10 +45,15 @@
     status: null,
     hub: null,
     caps: null,
-    view: 'home',        // 'home' | 'zone' | 'settings'
+    view: 'home',        // 'home' | 'zone' | 'log' | 'settings'
     zoneId: null,
     schedule: null,
     scheduleMeta: null,
+    /* The command log is only fetched when its view is opened - it is
+       diagnostics, and there is no reason to poll for it on the home screen. */
+    log: null,
+    logError: null,
+    logFilter: 'all',
     /* While a write is in flight, or the user is mid-gesture, incoming live
        updates must not redraw the control out from under them. */
     pending: new Set(),
@@ -549,15 +554,17 @@
   function renderZones() {
     const list = $('#zoneList');
     if (!state.zones.length) {
-      list.innerHTML = `<li class="zone"><div class="zone-meta">No rooms configured yet.</div></li>`;
+      list.innerHTML = `<li class="zone"><div class="zone-meta">No rooms yet.
+        Add one, then put its heaters in it.</div></li>`;
       $('#roomsNote').textContent = '';
       return;
     }
     list.innerHTML = state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
+    const rooms = `${state.zones.length} ${state.zones.length === 1 ? 'room' : 'rooms'}`;
     $('#roomsNote').textContent = manual
-      ? `${state.zones.length} rooms · ${manual} with a dial-only heater`
-      : `${state.zones.length} rooms`;
+      ? `${rooms} · ${manual} with a dial-only heater`
+      : rooms;
 
     list.querySelectorAll('[data-open]').forEach(b => {
       b.onclick = () => showZone(b.dataset.open);
@@ -1033,6 +1040,137 @@
   }
 
   /* ------------------------------------------------------------------
+   * Activity log - reached from inside System status
+   *
+   * One server buffer holds three kinds of entry, told apart by `source`:
+   * a change made through the app ('api'), the away scheduler acting on its
+   * own ('schedule'), and the hub connection itself ('hub'). Anything with
+   * direction 'error' is a problem whatever its source. The filters are built
+   * on those fields rather than on the wording of the message.
+   * ---------------------------------------------------------------- */
+
+  const LOG_FILTERS = {
+    all:      { label: 'Everything', match: () => true },
+    changes:  { label: 'Changes',    match: e => e.source === 'api' || e.source === 'schedule' },
+    hub:      { label: 'Hub',        match: e => e.source === 'hub' },
+    problems: { label: 'Problems',   match: e => e.direction === 'error' },
+  };
+
+  async function showLog() {
+    state.view = 'log';
+    $('#topTitle').textContent = 'Activity log';
+    $('#topSub').textContent = 'What the system did, and when';
+    switchView();
+    renderLog();
+    await loadLog();
+  }
+
+  async function loadLog() {
+    try {
+      const data = await Nobo.api.log(300);
+      state.log = data.entries || [];
+      state.logError = null;
+    } catch (e) {
+      state.logError = e.message;
+    }
+    if (state.view === 'log') renderLog();
+  }
+
+  function renderLog() {
+    const root = $('#viewLog');
+    const filter = LOG_FILTERS[state.logFilter] || LOG_FILTERS.all;
+
+    const chips = Object.entries(LOG_FILTERS).map(([key, f]) => {
+      const n = state.log ? state.log.filter(f.match).length : 0;
+      return `<button class="log-chip" type="button" data-logfilter="${key}"
+        aria-pressed="${state.logFilter === key}">${esc(f.label)} (${n})</button>`;
+    }).join('');
+
+    let body;
+    if (state.logError) {
+      body = `<div class="note note-warn">${esc(state.logError)}</div>`;
+    } else if (state.log === null) {
+      body = `<p class="zd-sub">Reading the log…</p>`;
+    } else {
+      const shown = state.log.filter(filter.match);
+      body = shown.length
+        ? `<ul class="log-list">${shown.map(logRow).join('')}</ul>`
+        : `<p class="zd-sub">Nothing recorded under “${esc(filter.label)}”.</p>`;
+    }
+
+    root.innerHTML = `
+      <section class="card">
+        <p class="zd-sub">Every change made through this app, everything the away
+        schedule did on its own, and the state of the connection to the hub. Newest
+        first. The log lives in memory, so it starts again empty when the system
+        restarts.</p>
+        <div class="log-filters" role="group" aria-label="Filter the log">${chips}</div>
+        ${body}
+        <div class="log-foot">
+          <span class="zd-sub">${state.log ? state.log.length : 0} entries kept</span>
+          <span class="sheet-actions">
+            <button class="btn" type="button" data-act="log-refresh">Refresh</button>
+            <button class="btn btn-danger" type="button" data-act="log-clear">Clear the log</button>
+          </span>
+        </div>
+      </section>`;
+
+    root.querySelectorAll('[data-logfilter]').forEach(b => {
+      b.onclick = () => { state.logFilter = b.dataset.logfilter; renderLog(); };
+    });
+    root.querySelector('[data-act="log-refresh"]').onclick = () => loadLog();
+    root.querySelector('[data-act="log-clear"]').onclick = () => {
+      confirmSheet('Clear the log?',
+        'Every entry is discarded. This does not change any setting or any room - it only throws away the record of what happened.',
+        'Clear', async () => {
+          try {
+            await Nobo.api.clearLog();
+            Nobo.toast('Log cleared');
+            await loadLog();
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+        }, true);
+    };
+  }
+
+  function logRow(e) {
+    const when = fmtLogTime(e.timestamp);
+    const isError = e.direction === 'error';
+    const dir = isError ? 'Problem'
+      : e.direction === 'received' ? 'From hub'
+      : e.source === 'schedule' ? 'Schedule'
+      : e.source === 'hub' ? 'Hub'
+      : 'Change';
+    const badgeClass = isError ? 'badge-mode-comfort'
+      : e.source === 'hub' || e.direction === 'received' ? 'badge-mode-away'
+      : e.source === 'schedule' ? 'badge-mode-normal'
+      : 'badge-ok';
+
+    return `
+      <li class="log-entry${isError ? ' is-error' : ''}">
+        <span class="log-time">${esc(when)}</span>
+        <span class="badge ${badgeClass}">${esc(dir)}</span>
+        <span class="log-what">${esc(e.description || '')}</span>
+        ${e.command ? `<span class="log-cmd">${esc(e.command)}</span>` : ''}
+      </li>`;
+  }
+
+  /**
+   * The server writes its timestamps in the Pi's own timezone with no offset,
+   * so they must not be treated as UTC. Read the fields out of the string
+   * rather than letting Date guess.
+   */
+  function fmtLogTime(ts) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(ts || ''));
+    if (!m) return String(ts || '');
+    const [, y, mo, d, hh, mm, ss] = m;
+    const today = new Date();
+    const sameDay = today.getFullYear() === +y
+      && today.getMonth() + 1 === +mo
+      && today.getDate() === +d;
+    return sameDay ? `${hh}:${mm}:${ss}` : `${d}/${mo} ${hh}:${mm}:${ss}`;
+  }
+
+  /* ------------------------------------------------------------------
    * Device and room management
    * ---------------------------------------------------------------- */
 
@@ -1384,6 +1522,54 @@
     });
   }
 
+  /**
+   * Create a room.
+   *
+   * The hub assigns the id, not the client, so the new room is found by
+   * reloading rather than by trusting anything echoed back. A room starts
+   * empty: heaters are moved or added into it afterwards, from inside it.
+   */
+  function addZoneSheet() {
+    openSheet('Add a room', `
+      <p class="zd-sub">A new room starts empty and on the standard week. Open it
+      afterwards to add its heaters and set its temperatures.</p>
+      <label class="field">
+        <span>Room name</span>
+        <input type="text" id="azName" autocomplete="off" placeholder="e.g. Loft">
+      </label>
+      <label class="field">
+        <span>Icon (optional)</span>
+        <input type="text" id="azIcon" autocomplete="off" maxlength="2" placeholder="e.g. \u{1F6CF}">
+        <small class="field-hint">Stored for the current app, which shows an icon per room.
+        Concept D identifies a room by its name alone.</small>
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" data-act="cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" data-act="ok" type="button">Add room</button>
+      </div>`, (root) => {
+      const nameEl = root.querySelector('#azName');
+      const okBtn = root.querySelector('[data-act="ok"]');
+
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      okBtn.onclick = async () => {
+        const name = nameEl.value.trim();
+        const icon = root.querySelector('#azIcon').value.trim();
+        if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
+        okBtn.disabled = true;
+        try {
+          await Nobo.api.addZone({ name, icon: icon || undefined });
+          closeSheet();
+          Nobo.toast(`${name} added`);
+          await refresh(true);
+        } catch (e) {
+          okBtn.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+      nameEl.onkeydown = (ev) => { if (ev.key === 'Enter') okBtn.click(); };
+    });
+  }
+
   function deleteZone(zone) {
     confirmSheet('Delete this room?',
       `${zone.name} and its schedule are removed. Its heaters are not deleted.`,
@@ -1588,6 +1774,7 @@
   function switchView() {
     $('#viewHome').hidden     = state.view !== 'home';
     $('#viewZone').hidden     = state.view !== 'zone';
+    $('#viewLog').hidden      = state.view !== 'log';
     $('#viewSettings').hidden = state.view !== 'settings';
     $('#btnBack').hidden      = state.view === 'home';
     window.scrollTo(0, 0);
@@ -1606,6 +1793,8 @@
   $('#btnSettings').addEventListener('click', () => {
     if (state.view === 'settings') showHome(); else showSettings();
   });
+  $('#btnAddZone').addEventListener('click', addZoneSheet);
+  $('#btnLog').addEventListener('click', showLog);
 
   function renderHome() {
     renderTrip();
@@ -1659,6 +1848,13 @@
         renderLink();
       } catch (_) { /* the connection pill already reports this */ }
     }, 30000);
+
+    /* The log only matters while you are looking at it, so it is polled only
+       then - and never while a sheet is open, which would move the list out
+       from under a confirmation. */
+    setInterval(() => {
+      if (state.view === 'log' && sheetEl.hidden) loadLog();
+    }, 10000);
   })();
 
 })();

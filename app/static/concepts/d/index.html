@@ -81,6 +81,7 @@
       <div class="section-head">
         <h2 class="section-title" id="roomsHeading">Rooms</h2>
         <span class="section-note" id="roomsNote"></span>
+        <button class="btn btn-add" id="btnAddZone" type="button">Add a room</button>
       </div>
       <ul class="zone-list" id="zoneList"></ul>
     </section>
@@ -89,11 +90,19 @@
     <details class="sysbox" id="sysBox">
       <summary>System status</summary>
       <dl class="sysgrid" id="sysGrid"></dl>
+      <!-- The log belongs with the diagnostics, not in the main flow. You go
+           looking for it only when something has already misbehaved. -->
+      <div class="sysbox-foot">
+        <button class="btn" id="btnLog" type="button">Open the activity log</button>
+      </div>
     </details>
   </section>
 
   <!-- ============ ZONE DETAIL ============ -->
   <section class="view" id="viewZone" hidden></section>
+
+  <!-- ============ ACTIVITY LOG ============ -->
+  <section class="view" id="viewLog" hidden></section>
 
   <!-- ============ SETTINGS ============ -->
   <section class="view" id="viewSettings" hidden></section>

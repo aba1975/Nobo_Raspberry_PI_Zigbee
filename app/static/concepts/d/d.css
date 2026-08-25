@@ -211,6 +211,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 .section-note { font-size: .78rem; color: var(--ink-faint); }
+/* Keep the count beside the heading and let the action sit at the far edge,
+   rather than letting space-between spread all three evenly. */
+.section-head > .section-note { margin-right: auto; }
+.btn-add { align-self: center; }
 
 .modes { margin-bottom: 1.5rem; }
 .mode-row {
@@ -385,6 +389,53 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .sysgrid dt { color: var(--ink-faint); }
 .sysgrid dd { margin: 0; font-weight: 550; }
+.sysbox-foot { padding: 0 1rem 1rem; }
+
+/* ------------------------------------------------------------ activity log
+   Diagnostics, reached from inside the collapsed System status box. It is a
+   dense, monospaced record on purpose: you are here because something did not
+   behave, and the exact wording and the exact time are the point. */
+
+.log-filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+.log-chip {
+  font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+  padding: .4rem .8rem; min-height: 34px;
+  border: 1px solid var(--rule); border-radius: 99px;
+  background: var(--card); color: var(--ink-soft);
+}
+.log-chip:hover { border-color: var(--pine); color: var(--ink); }
+.log-chip[aria-pressed="true"] { background: var(--pine-wash); border-color: var(--pine); color: var(--pine); }
+
+.log-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
+.log-entry {
+  display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: .5rem .8rem;
+  padding: .55rem .7rem; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  font-size: .82rem; line-height: 1.4;
+}
+.log-time {
+  font-variant-numeric: tabular-nums; font-size: .76rem; color: var(--ink-faint); white-space: nowrap;
+}
+.log-what { color: var(--ink); overflow-wrap: anywhere; }
+/* The raw protocol command, when there was one. Kept but pushed right down in
+   the visual hierarchy - it means nothing to most people and everything to
+   the one person debugging a hub. */
+.log-cmd {
+  grid-column: 3; margin-top: .2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .74rem; color: var(--ink-faint); overflow-wrap: anywhere;
+}
+.log-entry.is-error { border-color: color-mix(in srgb, var(--m-comfort) 45%, transparent); background: var(--m-comfort-wash); }
+.log-entry.is-error .log-what { color: var(--m-comfort); font-weight: 600; }
+
+.log-foot { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: space-between; align-items: center; margin-top: 1rem; }
+
+@media (max-width: 560px) {
+  .log-entry { grid-template-columns: auto 1fr; }
+  .log-cmd { grid-column: 1 / -1; }
+}
+@media (pointer: coarse) {
+  .log-chip { min-height: 44px; }
+}
 
 /* -------------------------------------------------------- zone detail */
 
