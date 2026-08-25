@@ -160,8 +160,23 @@ class TestNoPointlessBroadcasts:
 
 
 class TestPolicyShape:
-    def test_log_and_hub_config_are_the_only_exclusions(self):
-        assert server.NO_BROADCAST_PATHS == frozenset({"/api/log/clear", "/api/hub/config"})
+    def test_every_exclusion_is_a_deliberate_one(self):
+        """Broadcasting is opt-out, and each opt-out needs a reason.
+
+        A write that changes zone state and forgets to broadcast leaves every
+        other open browser showing stale rooms, which is the bug this middleware
+        exists to prevent. Pinning the set means a new exclusion cannot be added
+        without someone reading this list and justifying it:
+
+        * ``/api/log/clear`` — the log is diagnostics, not zone state.
+        * ``/api/hub/config`` — ``apply_hub_config`` broadcasts itself, once the
+          new zones have actually loaded. Broadcasting here as well would push
+          the *old* hub's zones.
+        * ``/api/site`` — renames the installation. No zone card shows it.
+        """
+        assert server.NO_BROADCAST_PATHS == frozenset(
+            {"/api/log/clear", "/api/hub/config", "/api/site"}
+        )
 
     def test_all_write_methods_are_covered(self):
         assert server.MUTATING_METHODS == frozenset({"POST", "PUT", "PATCH", "DELETE"})

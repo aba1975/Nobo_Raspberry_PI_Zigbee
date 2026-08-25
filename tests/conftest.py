@@ -81,4 +81,8 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(config_persistence, "DEMO_ZONES_FILE", tmp_path / "demo_zones.json")
     monkeypatch.setattr(config_persistence, "DEMO_SCHEDULES_FILE", tmp_path / "demo_schedules.json")
     monkeypatch.setattr(config_persistence, "SERVER_STATE_FILE", tmp_path / "server_state.json")
+    # The file paths are resolved from DATA_DIR at import time, so patching
+    # DATA_DIR alone leaves them pointing at the real data directory. Each one
+    # a test can write has to be redirected by name.
+    monkeypatch.setattr(config_persistence, "SITE_FILE", tmp_path / "site.json")
     yield

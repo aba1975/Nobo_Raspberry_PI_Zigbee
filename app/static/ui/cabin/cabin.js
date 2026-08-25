@@ -47,6 +47,8 @@
     caps: null,
     view: 'home',        // 'home' | 'zone' | 'log' | 'settings'
     zoneId: null,
+    site: null,          // what the household calls this place
+    me: null,            // the signed-in user, cached for re-renders
     schedule: null,
     scheduleMeta: null,
     /* The command log is only fetched when its view is opened - it is
@@ -126,18 +128,53 @@
    * ---------------------------------------------------------------- */
 
   async function loadAll() {
-    const [zones, status, hub, caps, devices] = await Promise.all([
+    const [zones, status, hub, caps, devices, site] = await Promise.all([
       Nobo.api.zones().catch(() => []),
       Nobo.api.status().catch(() => null),
       Nobo.api.hubConfig().catch(() => null),
       Nobo.api.capabilities().catch(() => null),
       Nobo.api.devices().catch(() => []),
+      Nobo.api.site().catch(() => null),
     ]);
     state.zones = zones || [];
     state.status = status;
     state.hub = hub;
     state.caps = caps;
     state.devices = devices || [];
+    if (site) state.site = site;
+    applySiteName();
+  }
+
+  /* ------------------------------------------------------------------
+   * What this place is called
+   *
+   * Two forms are needed and they are not interchangeable. SITE() is the name
+   * standing on its own - the header, the trip heading, the page title - and
+   * falls back to "Cabin". SITE_IN() is the name mid-sentence - "Warm all of
+   * the cabin?" - and falls back to "the cabin", because "Warm all of Cabin?"
+   * reads like a bug.
+   *
+   * Every string below is written to take a name rather than to be one, so a
+   * user's name substitutes without any string needing a special case.
+   * ---------------------------------------------------------------- */
+
+  const SITE    = () => (state.site && state.site.display_name) || 'Cabin';
+  const SITE_IN = () => (state.site && state.site.inline_name) || 'the cabin';
+
+  function applySiteName() {
+    document.title = `${SITE()} - Nobø Control`;
+    // iOS reads this when the user adds the app to the home screen, which
+    // happens long after load, so updating it here is enough.
+    const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    if (appleTitle) appleTitle.setAttribute('content', SITE());
+    const tripHeading = $('#tripHeading');
+    if (tripHeading) tripHeading.textContent = SITE();
+    const modesHeading = $('#modesHeading');
+    if (modesHeading) modesHeading.textContent = `All of ${SITE_IN()}`;
+    if (state.view === 'home') {
+      const t = $('#topTitle');
+      if (t) t.textContent = SITE();
+    }
   }
 
   const away = () => (state.status && state.status.away_schedule) || { enabled: false };
@@ -216,7 +253,7 @@
         return;
       } else if (mode === 'comfort') {
         card.classList.add('is-heat');
-        stateEl.textContent = 'Warming the whole cabin';
+        stateEl.textContent = `Warming all of ${SITE_IN()}`;
         detail.textContent  = 'Every room is held at its comfort temperature until you change it.';
       } else if (mode === 'eco') {
         stateEl.textContent = 'Ticking over on eco';
@@ -248,7 +285,7 @@
   /** Remove the away window entirely. Reachable from the card and the sheet. */
   function deleteAwayPeriod() {
     confirmSheet('Delete the away period?',
-      'The dates are removed and the cabin goes back to its normal schedules straight away.',
+      `The dates are removed and ${SITE_IN()} goes back to its normal schedules straight away.`,
       'Delete away period', async () => {
         try {
           await Nobo.api.clearAwaySchedule();
@@ -343,7 +380,7 @@
       ${a.enabled ? `
       <div class="sheet-alt">
         <button class="btn btn-danger btn-wide" data-act="delete" type="button">Delete this away period</button>
-        <small class="field-hint">Removes the dates and returns the cabin to its normal schedules.</small>
+        <small class="field-hint">Removes the dates and returns ${SITE_IN()} to its normal schedules.</small>
       </div>` : ''}
     `, (root) => {
       const hint = root.querySelector('#tsHint');
@@ -442,16 +479,16 @@
       const mode = btn.dataset.global;
       const labels = {
         home:    ['Back to schedules?', 'Every room returns to its own weekly schedule.'],
-        comfort: ['Warm the whole cabin?', 'Every room is held at its comfort temperature until you change it.'],
-        eco:     ['Whole cabin on eco?', 'Every room is held at its eco temperature.'],
-        away:    ['Whole cabin on away?', 'Every room drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
+        comfort: [`Warm all of ${SITE_IN()}?`, 'Every room is held at its comfort temperature until you change it.'],
+        eco:     [`All of ${SITE_IN()} on eco?`, 'Every room is held at its eco temperature.'],
+        away:    [`All of ${SITE_IN()} on away?`, 'Every room drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
       };
       const [title, msg] = labels[mode];
       confirmSheet(title, msg, 'Yes, ' + mode, async () => {
         hold();
         try {
           await Nobo.api.setGlobalMode(mode);
-          Nobo.toast('Whole cabin set to ' + mode);
+          Nobo.toast(`All of ${SITE_IN()} set to ` + mode);
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       });
@@ -1592,16 +1629,47 @@
     switchView();
     renderSettings();
     try {
-      renderSettings(await Nobo.api.me());
+      // Cached so later re-renders (after saving, say) keep the right identity
+      // and do not flash an ordinary user's disabled controls back to enabled.
+      state.me = await Nobo.api.me();
+      renderSettings();
     } catch (_) { /* the static render is already correct enough */ }
   }
 
-  function renderSettings(me) {
+  function renderSettings(me = state.me) {
     const hub = state.hub || {};
+    const site = state.site || {};
+    const isAdmin = !me || me.role === undefined || me.role === 'admin';
     $('#topTitle').textContent = 'Settings';
-    $('#topSub').textContent = 'Hub, mode and users';
+    $('#topSub').textContent = 'Name, hub, mode and users';
 
     $('#viewSettings').innerHTML = `
+      <section class="card">
+        <h2>What this place is called</h2>
+        <p class="zd-sub">Used across the app and on the sign-in page. A nickname,
+        an address, whatever you call it — "Mostugu", "Storslåvegen 42", "The flat".</p>
+        <label class="field">
+          <span>Name</span>
+          <input type="text" id="stSiteName" value="${esc(site.name || '')}"
+                 maxlength="${site.max_length || 40}" autocomplete="off"
+                 placeholder="Cabin" ${isAdmin ? '' : 'disabled'}>
+          <small class="field-hint">Leave it empty to go back to "Cabin".</small>
+        </label>
+        <label class="exc-row">
+          <input type="checkbox" id="stSiteLogin"
+                 ${site.show_on_login === false ? '' : 'checked'} ${isAdmin ? '' : 'disabled'}>
+          <span class="exc-name">Show it on the sign-in page</span>
+        </label>
+        <small class="field-hint">The sign-in page is shown to anyone who can reach
+        this Pi, before any password. Fine for a nickname; turn this off if the name
+        is your address and the network is shared.</small>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-site"
+            ${isAdmin ? '' : 'disabled'}>Save name</button>
+        </div>
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change the name.</div>'}
+      </section>
+
       <section class="card">
         <h2>Where the data comes from</h2>
         <div class="switch">
@@ -1638,7 +1706,7 @@
       <section class="card">
         <h2>Rooms that must not get cold</h2>
         <p class="zd-sub">${AWAY_EXPLAINER()} Pick the rooms that should hold their
-        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever the cabin
+        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
         goes Away — a bathroom with pipes, a workshop, a wine store.</p>
         <div id="awayExc" class="exc-list">
           <p class="zd-sub">Loading rooms…</p>
@@ -1684,6 +1752,7 @@
     const root = $('#viewSettings');
     root.querySelector('[data-act="toggle-demo"]').onclick = () => toggleDemo(!hub.demo_mode);
     root.querySelector('[data-act="save-hub"]').onclick = saveHub;
+    root.querySelector('[data-act="save-site"]').onclick = saveSite;
     root.querySelector('[data-act="open-log"]').onclick = showLog;
     root.querySelector('[data-act="signout"]').onclick = async () => {
       try { await Nobo.api.logout(); } catch (_) {}
@@ -1748,7 +1817,7 @@
         ? `${zone_ids.length} room${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
         : 'Every room will follow Away');
       if (res && res.applied_now && res.applied_now.length) {
-        Nobo.toast('Applied now, because the cabin is away');
+        Nobo.toast(`Applied now, because ${SITE_IN()} is away`);
       }
       refresh();
     } catch (e) { Nobo.toast(e.message, 'error'); }
@@ -1783,6 +1852,24 @@
     } catch (e) { Nobo.toast(e.message, 'error'); }
   }
 
+  async function saveSite() {
+    const nameEl = $('#stSiteName');
+    const loginEl = $('#stSiteLogin');
+    if (!nameEl) return;
+    try {
+      state.site = await Nobo.api.setSite({
+        name: nameEl.value,
+        show_on_login: !!(loginEl && loginEl.checked),
+      });
+      // Re-label everything immediately. The name appears in the header, the
+      // trip card and half the confirmations, so waiting for a reload would
+      // leave the app half-renamed.
+      applySiteName();
+      renderSettings();
+      Nobo.toast(state.site.is_named ? `Now called ${state.site.name}` : 'Name cleared');
+    } catch (e) { Nobo.toast(e.message, 'error'); }
+  }
+
   /* ------------------------------------------------------------------
    * View switching
    * ---------------------------------------------------------------- */
@@ -1799,7 +1886,7 @@
   function showHome() {
     state.view = 'home';
     state.zoneId = null;
-    $('#topTitle').textContent = 'Cabin';
+    $('#topTitle').textContent = SITE();
     $('#topSub').textContent = 'Nobø Control';
     switchView();
     renderHome();

@@ -101,6 +101,16 @@ about *how many* connections exist, or how long they live, needs real sockets or
   `broadcast_zone_update()` themselves
 - Paths are resolved from the module location, never the working directory, so
   the app and the tests behave the same wherever they are started from
+- The installation's name (`data/site.json`) is Pi-only — the hub has no such
+  field. It resolves to **two** forms, and they are not interchangeable:
+  `display_name` stands alone ("Mostugu", default `Cabin`) and `inline_name`
+  goes mid-sentence ("all of the cabin", default `the cabin`). Write new strings
+  to *take* a name rather than to *be* one, or the unnamed default reads as
+  "Warm all of Cabin?". `site_settings()` resolves both; never re-derive them.
+- The name reaches `/login`, which is public, so it is escaped with
+  `html.escape` and gated behind `show_on_login`. A user may reasonably name the
+  system after their street address; that must not be readable to anyone who can
+  reach the Pi unless they chose it
 
 ## Talking to a Real Hub
 

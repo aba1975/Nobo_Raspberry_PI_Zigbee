@@ -69,6 +69,11 @@ const Nobo = (() => {
     hubConfig:    ()     => req('/api/hub/config'),
     setHubConfig: (body) => req('/api/hub/config', { method: 'POST', body: JSON.stringify(body) }),
 
+    // What the household calls this place. Cosmetic, but it is what turns
+    // "the cabin" into "Mostugu" everywhere the interface addresses the user.
+    site:    ()     => req('/api/site'),
+    setSite: (body) => req('/api/site', { method: 'PUT', body: JSON.stringify(body) }),
+
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {

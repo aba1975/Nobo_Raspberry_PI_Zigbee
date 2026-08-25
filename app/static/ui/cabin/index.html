@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cabin - Nobø Control</title>
 
-<!-- Installable on a phone home screen. The manifest sits behind the app's
-     session auth, so it must be requested with credentials. -->
-<link rel="manifest" href="/static/ui/cabin/manifest.webmanifest" crossorigin="use-credentials">
+<!-- Installable on a phone home screen. Served by the app rather than read
+     from disk, so the icon on the home screen carries the name the user chose.
+     It sits behind session auth, so it must be requested with credentials. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#2F5D50" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#15201C" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -51,7 +52,7 @@
 
     <!-- The one thing a cabin owner does most: leave, and come back. -->
     <section class="trip" id="trip" aria-labelledby="tripHeading">
-      <h1 class="trip-eyebrow" id="tripHeading">The cabin</h1>
+      <h1 class="trip-eyebrow" id="tripHeading">Cabin</h1>
       <p class="trip-state" id="tripState">Loading…</p>
       <p class="trip-detail" id="tripDetail"></p>
 
@@ -68,7 +69,7 @@
 
     <!-- Direct mode control, secondary to the trip but still one tap away. -->
     <section class="modes" aria-labelledby="modesHeading">
-      <h2 class="section-title" id="modesHeading">Whole cabin</h2>
+      <h2 class="section-title" id="modesHeading">All of the cabin</h2>
       <div class="mode-row" role="group" aria-label="Set every room at once">
         <button class="mode-btn" data-global="home"    type="button"><span class="mode-glyph" aria-hidden="true">⌂</span>Home</button>
         <button class="mode-btn" data-global="comfort" type="button"><span class="mode-glyph" aria-hidden="true">☀</span>Comfort</button>
