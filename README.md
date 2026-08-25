@@ -56,6 +56,7 @@ interface says so rather than pretending the change worked.
 
 | Feature | What it does |
 | --- | --- |
+| **Name your system** | Call it what you call the place — "Mostugu", "Storslåvegen 42" — and the whole app follows, sign-in page included. See [Naming Your System](#naming-your-system). |
 | **Hub settings in the browser** | Switch between demo mode and your real hub, and set the hub serial and IP, without editing files or using SSH. See [Changing Hub Settings From the Web Interface](#changing-hub-settings-from-the-web-interface). |
 | **Demo mode** | A full simulated house with eight zones, so you can try everything before a hub is connected. |
 | **Automatic start** | Starts on boot and restarts by itself if it stops. |
@@ -717,6 +718,64 @@ Ends your session and returns you to the login page.
 
 > **Note:** User accounts are stored in the Docker data volume (`data/users.json`), with passwords hashed using bcrypt. They survive restarts, software updates and reboots, and are included in `scripts/backup.sh`.
 
+## Naming Your System
+
+Out of the box the app calls itself **Cabin**. That is the name of the
+*interface*, not of anybody's house, so you can change it to whatever you call
+the place: a nickname like `Mostugu`, a street address like `Storslåvegen 42`,
+or something plain like `The flat`.
+
+### How to do it
+
+1. Log in as an **admin** user.
+2. Open **Settings** (the ⚙ icon).
+3. The first card is **What this place is called**. Type the name and press
+   **Save name**.
+
+The change takes effect immediately, everywhere:
+
+| Where | Before | After |
+| --- | --- | --- |
+| Header | Cabin | Mostugu |
+| Sign-in page | Heating control for the cabin. | Heating control for Mostugu. |
+| Trip card | Cabin | Mostugu |
+| Whole-house modes | All of the cabin | All of Mostugu |
+| Confirmations | Warm all of the cabin? | Warm all of Mostugu? |
+| Browser tab | Cabin - Nobø Control | Mostugu - Nobø Control |
+| Home-screen icon | Cabin | Mostugu |
+
+Leave the field empty to go back to **Cabin**.
+
+### A note on the sign-in page
+
+The sign-in page is served to **anyone who can reach the Pi**, before any
+password is asked for. A nickname there is harmless. A street address is your
+address, given to whoever is on the network — and to the whole internet if you
+have forwarded a port to this machine.
+
+So there is a checkbox, **Show it on the sign-in page**, next to the name. It is
+on by default, because a name nobody chose to hide is a name they wanted shown.
+Turn it off and the sign-in page goes back to the generic wording while the rest
+of the app still uses your name.
+
+This is worth thinking about for about five seconds and then forgetting: if you
+are naming it `Mostugu`, leave it on.
+
+### Notes
+
+- **Only an admin can change it.** It changes what every user of the
+  installation sees, including on a page shown before sign-in, so it is not left
+  open to an ordinary account.
+- **The hub does not know about it.** The name lives on the Pi, in
+  `data/site.json`, and is included in `scripts/backup.sh`. Nothing is sent to
+  the hub, and the official Nobø app is unaffected.
+- **It does not rename the interface.** The Cabin interface is still called
+  Cabin and is still at `/cabin`; the rollback instructions are unchanged.
+- **Names are limited to 40 characters** and to a single line, because the name
+  goes in page titles and headings. Anything longer is trimmed rather than
+  refused.
+- Non-ASCII is fine — `æ`, `ø` and `å` are stored and displayed as typed.
+
 ## Changing Hub Settings From the Web Interface
 
 Once the system is running you no longer need SSH to switch between demo mode and your real Nobø Hub. You can do it from the browser.
@@ -1078,11 +1137,11 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 
 - `.env` — your hub configuration (serial, IP)
 - `data/` volume — user accounts, away schedules, demo zone state, zone icons
-  (`zone_icons.json`) and server state
+  (`zone_icons.json`), the system name (`site.json`) and server state
 
 Zone icons are worth calling out: the hub has no icon field, so they exist only
-on the Pi. Everything else about a real hub's zones and devices lives on the
-hub itself and is not part of this backup.
+on the Pi. The same goes for the system name. Everything else about a real hub's
+zones and devices lives on the hub itself and is not part of this backup.
 
 ### Restore from backup
 
@@ -1243,6 +1302,8 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/devices` | All devices, with their friendly names and zone assignment |
 | `GET /api/devices/search` | What a running device search has heard so far (real hub only) |
 | `GET /api/hub/config` | Current hub connection settings |
+| `GET /api/site` | What this installation is called, with both display forms resolved |
+| `GET /manifest.webmanifest` | The installed-app manifest, carrying the chosen name |
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
 | `GET /api/global-mode/away-exceptions` | Zones held on Eco during Away, plus the fixed away temperature |
@@ -1290,6 +1351,7 @@ confirm. `502` means the hub answered but refused or said nothing useful;
 | `POST /auth/change-password`, `POST /auth/rename` | Your own account |
 | `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
 | `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
+| `PUT /api/site` | Rename the installation (admins only). Body `{"name": "Mostugu", "show_on_login": true}` — either field may be omitted to leave it unchanged. |
 
 ### If a request fails
 

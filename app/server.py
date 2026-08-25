@@ -6,7 +6,9 @@ FastAPI backend for local control of Nobø heating system via pynobo library
 import os
 import re
 import asyncio
+import html
 import ipaddress
+import json
 import logging
 import math
 import threading
@@ -543,7 +545,8 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Writes that cannot change zone state, so there is nothing to push.
 # /api/hub/config is excluded because switching hub or demo mode already
 # broadcasts from apply_hub_config once the new zones are actually loaded.
-NO_BROADCAST_PATHS = frozenset({"/api/log/clear", "/api/hub/config"})
+# /api/site only changes what the place is called, which no zone card shows.
+NO_BROADCAST_PATHS = frozenset({"/api/log/clear", "/api/hub/config", "/api/site"})
 
 
 class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
@@ -610,6 +613,12 @@ class HubConfigUpdate(BaseModel):
     demo_mode: bool
     serial: Optional[str] = None
     ip: Optional[str] = None
+
+
+class SiteUpdate(BaseModel):
+    """What this place is called, and whether to say so before sign-in."""
+    name: Optional[str] = None
+    show_on_login: Optional[bool] = None
 
 
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away', 'off'}
@@ -1664,6 +1673,117 @@ async def update_hub_config(request: Request, body: HubConfigUpdate):
         auth.delete_session(session_id)
     response.delete_cookie(key="session_id", path="/")
     return response
+
+
+# ---------------------------------------------------------------------------
+# Site identity
+# ---------------------------------------------------------------------------
+# The hub has no concept of a house name, so this lives entirely on the Pi.
+# It is cosmetic, but it is the difference between an app that belongs to you
+# and one that calls your home "the cabin".
+
+# Used wherever a name stands on its own: page titles, the header, the trip
+# heading. Title case, because it is a proper noun in that position.
+SITE_NAME_FALLBACK = "Cabin"
+# Used mid-sentence: "Warm all of the cabin?", "returns the cabin to its normal
+# schedules". A named site substitutes cleanly into the same phrasings, which is
+# why every string is written to take a name rather than to be a name.
+SITE_INLINE_FALLBACK = "the cabin"
+
+
+def site_settings() -> dict:
+    """Current site identity, with both display forms already resolved.
+
+    Resolving here rather than in each caller means the fallback wording exists
+    in exactly one place, and a page cannot accidentally render "Warm all of
+    Cabin?".
+    """
+    site = config_persistence.load_site()
+    name = site.get("name") or ""
+    return {
+        "name": name,
+        "show_on_login": bool(site.get("show_on_login", True)),
+        "display_name": name or SITE_NAME_FALLBACK,
+        "inline_name": name or SITE_INLINE_FALLBACK,
+        "is_named": bool(name),
+        "max_length": config_persistence.SITE_NAME_MAX,
+    }
+
+
+@app.get("/api/site")
+async def get_site():
+    """What this place is called. Read by every interface on load."""
+    return site_settings()
+
+
+@app.put("/api/site")
+async def update_site(request: Request, body: SiteUpdate):
+    """Rename the system.
+
+    Admin only, for the same reason as the hub settings: it changes what every
+    user of this installation sees, including on the sign-in page, so it is not
+    left open to an ordinary account or a headless integration.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    current = config_persistence.load_site()
+
+    # Absent fields keep their current value, so a client can change the name
+    # without having to know or resend the login-page preference.
+    name = current["name"] if body.name is None else body.name
+    show = current["show_on_login"] if body.show_on_login is None else bool(body.show_on_login)
+
+    cleaned = config_persistence._clean_site_name(name)
+    if body.name is not None and name.strip() and not cleaned:
+        # They typed something, and nothing usable survived normalisation.
+        raise HTTPException(
+            status_code=400,
+            detail="That name contains no usable characters. Try letters, numbers or spaces.",
+        )
+
+    config_persistence.save_site({"name": cleaned, "show_on_login": show})
+
+    add_log_entry(
+        "sent",
+        f"System renamed to '{cleaned}'" if cleaned else "System name cleared",
+        source="api",
+    )
+    return site_settings()
+
+
+@app.get("/manifest.webmanifest")
+async def site_manifest():
+    """The installed-app manifest, carrying the user's chosen name.
+
+    Built from the static manifest rather than written out here, so the icons,
+    colours and — critically — ``start_url``/``scope`` stay defined in one
+    place. Only the three name fields are overridden. A manifest scoped to a
+    static path would install a home-screen icon that opens a file instead of
+    the app.
+    """
+    base = {}
+    static_manifest = STATIC_DIR / "ui" / ACTIVE_UI / "manifest.webmanifest"
+    try:
+        with static_manifest.open("r", encoding="utf-8") as fh:
+            base = json.load(fh)
+    except FileNotFoundError:
+        logger.warning("No static manifest at %s — serving a minimal one", static_manifest)
+    except json.JSONDecodeError as exc:
+        logger.warning("Static manifest is not valid JSON: %s — serving a minimal one", exc)
+
+    site = site_settings()
+    base.setdefault("start_url", "/")
+    base.setdefault("scope", "/")
+    base["name"] = f"{site['display_name']} — Nobø Control"
+    base["short_name"] = site["display_name"][:12]
+    base["description"] = f"Heating control for {site['inline_name']}."
+
+    return JSONResponse(
+        content=base,
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/api/hub")
@@ -3857,11 +3977,13 @@ _LOGIN_CLASSIC_HTML = """<!DOCTYPE html>
     color: var(--accent); border-radius: var(--radius); padding: .6rem .8rem;
     margin-bottom: 1rem; font-size: .875rem; display: none; }
   .error.show { display: block; }
+  .site { text-align: center; margin: -1rem 0 1.5rem; font-size: .9rem; color: var(--muted); }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>🔒 Nobø Control</h1>
+  <p class="site"><!--SITE_TAGLINE--></p>
   <div class="error" id="errorMsg"></div>
   <form id="loginForm">
     <div class="form-group">
@@ -4014,7 +4136,7 @@ _LOGIN_CABIN_HTML = """<!DOCTYPE html>
       <button type="submit" id="submitBtn">Sign in</button>
     </form>
   </div>
-  <p class="foot">Heating control for the cabin.</p>
+  <p class="foot"><!--SITE_TAGLINE--></p>
 </div>
 <script>
 const form = document.getElementById('loginForm');
@@ -4072,9 +4194,30 @@ def _require_admin(session: dict) -> None:
 
 @app.get("/login")
 async def login_page():
-    """Serve the sign-in page matching the active interface."""
+    """Serve the sign-in page matching the active interface.
+
+    The name is substituted server-side rather than fetched by script. The
+    sign-in page is the first thing anyone sees, and a page that renders "the
+    cabin" and then blinks to "Mostugu" looks broken. It also keeps the site
+    settings off the list of things readable without a session.
+    """
+    site = site_settings()
+
+    if site["show_on_login"] and site["is_named"]:
+        tagline = f"Heating control for {html.escape(site['name'])}."
+    elif ACTIVE_UI == "cabin":
+        # The wording Cabin has always shipped with. Left alone when unnamed so
+        # an installation that never sets a name looks exactly as it did.
+        tagline = f"Heating control for {SITE_INLINE_FALLBACK}."
+    else:
+        # Classic never had a tagline. Inventing one for it, and a cabin-flavoured
+        # one at that, would change a page the user chose specifically to go back to.
+        tagline = ""
+
+    page = _LOGIN_PAGES[ACTIVE_UI].replace("<!--SITE_TAGLINE-->", tagline)
+
     return HTMLResponse(
-        content=_LOGIN_PAGES[ACTIVE_UI],
+        content=page,
         headers={"Cache-Control": "no-cache"},
     )
 

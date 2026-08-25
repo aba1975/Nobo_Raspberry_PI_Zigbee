@@ -35,6 +35,7 @@ SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
+SITE_FILE = DATA_DIR / "site.json"
 
 # Default server state values
 _DEFAULT_SERVER_STATE: dict = {"global_mode_source": "manual"}
@@ -321,3 +322,80 @@ def load_away_exceptions() -> list:
         logger.warning("away_exceptions.json is corrupt: %s — backing up and using none", exc)
         _backup_corrupt(AWAY_EXCEPTIONS_FILE)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Site identity
+# ---------------------------------------------------------------------------
+# What the household calls this place: "Mostugu", "Storslåvegen 42", "The flat".
+# Purely cosmetic — the hub neither knows nor cares — but it is the difference
+# between an app that belongs to you and one that calls your home "the cabin".
+#
+# ``show_on_login`` exists because the sign-in page is served to anyone who can
+# reach the Pi, before any password is asked for. A nickname there is harmless;
+# a street address is an address given away to whoever is on the network. That
+# is the user's call to make, not ours, so it is a setting rather than an
+# assumption. It defaults to on, because a name nobody chose to hide is a name
+# they wanted shown.
+
+SITE_NAME_MAX = 40
+
+_DEFAULT_SITE: dict = {"name": "", "show_on_login": True}
+
+
+def _clean_site_name(value: object) -> str:
+    """Normalise a site name: trimmed, single-line, length-capped.
+
+    Control characters are stripped rather than rejected. This value is
+    interpolated into page titles and the sign-in page, so a newline or a stray
+    escape sequence is not worth an error message to a user who almost
+    certainly pasted it by accident.
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = "".join(ch for ch in value if ch.isprintable())
+    return cleaned.strip()[:SITE_NAME_MAX]
+
+
+def save_site(site: dict) -> None:
+    """Persist the site identity atomically."""
+    try:
+        _atomic_write(
+            SITE_FILE,
+            {
+                "name": _clean_site_name(site.get("name", "")),
+                "show_on_login": bool(site.get("show_on_login", True)),
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to save site settings: %s", exc)
+        raise
+
+
+def load_site() -> dict:
+    """
+    Load the site identity from ``data/site.json``.
+
+    Falls back to the unnamed default whenever the file is missing or unusable.
+    An unnamed site is the shipped behaviour, so a corrupt file costs the user
+    their chosen name until they set it again — never a broken page.
+    """
+    try:
+        with SITE_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "site.json has unexpected format (expected dict, got %s) — using the default",
+                type(data).__name__,
+            )
+            return dict(_DEFAULT_SITE)
+        return {
+            "name": _clean_site_name(data.get("name", "")),
+            "show_on_login": bool(data.get("show_on_login", True)),
+        }
+    except FileNotFoundError:
+        return dict(_DEFAULT_SITE)
+    except json.JSONDecodeError as exc:
+        logger.warning("site.json is corrupt: %s — backing up and using the default", exc)
+        _backup_corrupt(SITE_FILE)
+        return dict(_DEFAULT_SITE)
