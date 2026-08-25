@@ -14,7 +14,10 @@ This is a port of the original Windows-based project. The application code is id
 - Runs 24/7 on your Raspberry Pi as an always-on home server
 - Works entirely on your local network — no cloud required
 
-> **Important:** The Nobo Eco Hub only allows one TCP connection at a time. While this web control system is connected, the official Nobo app cannot connect simultaneously.
+> **You can keep using the official Nobø app.** The hub accepts **two** LAN
+> connections at once (plus up to ten over the Internet), and pushes every
+> change to all of them, so the Pi and the app stay in sync. See
+> [Using this alongside the official app](#using-this-alongside-the-official-app).
 
 ## Features
 
@@ -483,7 +486,7 @@ Look at the `demo_mode` value in the response:
 
 - `"demo_mode":true` — running on simulated data
 - `"demo_mode":false` and `"connected":true` — talking to your real hub
-- `"connected":false` — check the serial number and IP, and make sure the official Nobo app is not connected to the hub
+- `"connected":false` — check the serial number and IP, that the hub is powered on, and that no more than one *other* device is on the hub over the LAN (the hub allows two)
 
 > **Note:** After switching modes, do a hard refresh in your browser (`Ctrl+Shift+R`, or `Cmd+Shift+R` on macOS) so it does not show cached data from the previous mode.
 
@@ -713,7 +716,11 @@ Switching between demo mode and a real hub replaces every zone, device and sched
 - **If the hub cannot be reached**, the settings are still saved and you get a warning message before being signed out. The app keeps retrying in the background, so once the hub becomes reachable it will connect on its own. Check that:
   - the serial number and IP address are correct,
   - the hub is powered on and on the same network,
-  - the official Nobø app is **not** connected to the hub at the same time (the hub only accepts one connection).
+  - no more than one *other* device is already connected to the hub over the LAN.
+    The hub allows two LAN connections at once, so the Pi plus one phone is fine;
+    a second phone on the same network is one too many. Phones connected over the
+    Internet rather than the LAN do not count towards that. See
+    [Using this alongside the official app](#using-this-alongside-the-official-app).
 - **Switching back to demo mode** is always safe and always works, even if the real hub is unreachable. This is a good way to confirm the web interface itself is healthy.
 
 ### Reading the status indicator
@@ -739,6 +746,75 @@ cd /opt/nobo-control
 docker compose exec nobo-web-control rm -f /app/data/hub_config.json
 sudo systemctl restart nobo-control
 ```
+
+## Using This Alongside the Official App
+
+You do not have to choose. The Pi and the official Nobø Energy Control app can
+be connected to the hub at the same time, and there is nothing to switch.
+
+This is stated in the official protocol specification
+([`API_Nobo.pdf`](API_Nobo.pdf), Nobø Hub API v1.1):
+
+> **Two devices can be connected directly via LAN to one Hub at the same time.**
+> (In addition, up to 10 devices can be simultaneously connected via the
+> Internet.) — §5.8, page 4
+
+and, on keeping them consistent:
+
+> **If several clients are connected simultaneously, the Hub always pushes any
+> changes to all connected clients, to keep them synchronized.** The Hub always
+> pushes any changes to all connected clients, also if the change is not
+> initiated by a connected client. — §3, page 3
+
+So a change you make in the app appears on the Pi within seconds, and vice
+versa, without either side polling. The same mechanism reports things neither of
+them did: an override expiring, or someone pressing a physical Nobø Switch.
+
+### The budget
+
+| Route | Simultaneous connections |
+|-------|--------------------------|
+| Local network (LAN, TCP 27779) | **2** |
+| Via the Internet (the app's remote mode) | **10** |
+
+The Pi holds one LAN connection permanently — it is an always-on server, that is
+the point of it. That leaves **one** LAN slot.
+
+In practice:
+
+- **Pi + one phone at home** — fine, this is the normal case.
+- **Pi + several phones away from home** — fine. Remote phones use the Internet
+  route and do not consume LAN slots.
+- **Pi + two phones at home on Wi-Fi** — one too many. The third connection is
+  simply not accepted. Close the app on one phone, or turn its Wi-Fi off so it
+  connects remotely instead.
+
+The app releases its slot when you close it, so this is rarely noticeable. Note
+that the spec's handshake reject codes (page 5) cover only version, serial,
+argument and timestamp errors — there is **no** "hub busy" code, so a hub at its
+limit does not explain itself. If a device silently fails to connect at home
+while everything else looks right, suspect the LAN slot count.
+
+### If you want the Pi to let go entirely
+
+There is no need for this in normal use, but if you want the hub completely to
+yourself — during setup or fault-finding — either stop the service:
+
+```bash
+sudo systemctl stop nobo-control       # start it again with: sudo systemctl start nobo-control
+```
+
+or switch the Pi to demo mode from **Settings → Hub Connection**, which drops
+the hub connection while leaving the web interface running. Demo mode is
+reversible and never touches your real heating.
+
+### What the app can do that this cannot
+
+Adding and removing *receivers* (the units in the heaters) is done with the
+official app, following [`Manual_Nobo.pdf`](Manual_Nobo.pdf). This web interface
+can register a device by serial number and organise zones, but the app remains
+the tool for the initial pairing of the system. Keeping both connected means you
+never have to disconnect one to use the other.
 
 ## Updating the Software
 
@@ -785,7 +861,12 @@ The Pi and the web interface are working, but the app cannot talk to your Nobø 
 
 1. **The IP address is correct.** Hubs often get a new address from the router after a power cut. Find the current one in your router's device list, then update it under **Devices → Hub Connection**. Consider giving the hub a static/reserved IP in your router so this cannot happen again.
 2. **The serial number is correct** — all 12 digits from the sticker on the hub.
-3. **Nothing else is connected to the hub.** The hub accepts **one** connection at a time. Close the official Nobo app on every phone and tablet.
+3. **Not too many things are connected over the LAN.** The hub allows **two** local
+   connections at once, and the Pi holds one of them. The official app can stay
+   open on one phone; a *second* phone on the same Wi-Fi is one too many. The hub
+   gives no "busy" message when this happens, it simply does not accept the
+   connection. Phones using the app away from home go via the Internet and do not
+   count. See [Using this alongside the official app](#using-this-alongside-the-official-app).
 4. **The hub is on the same network** as the Pi and is powered on.
 
 You can confirm what the server thinks is going on with:
@@ -896,7 +977,7 @@ cd /opt/nobo-control && docker compose logs --tail 50
 
 - Verify the serial number and IP in `.env` are correct
 - Check that the Pi and Hub are on the same network/subnet
-- Make sure no other app (like the official Nobo app) is connected to the hub
+- Make sure no more than one other device is connected to the hub over the LAN — it allows two, and the Pi uses one
 - Try restarting the Nobo Hub (power cycle)
 - Check the logs for connection error messages
 

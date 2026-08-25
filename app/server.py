@@ -1647,8 +1647,10 @@ async def update_hub_config(request: Request, body: HubConfigUpdate):
     if not demo_mode and not result["connected"]:
         result["warning"] = (
             "Settings saved, but the hub could not be reached. Check the serial "
-            "number and IP address, and make sure the official Nobo app is not "
-            "connected to the hub."
+            "number and IP address, and that the hub is powered on and on this "
+            "network. The hub accepts two connections over the local network at "
+            "once, so the official Nobo app can stay connected — but a second "
+            "phone on the same network is one too many."
         )
 
     # Switching data source changes zones, devices and schedules wholesale. Rather

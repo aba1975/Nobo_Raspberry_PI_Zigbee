@@ -2483,8 +2483,9 @@ function openHubConfigConfirm() {
             ${changing}
             <p><strong>Serial:</strong> ${escapeHtml(formatSerialForDisplay(serialRaw))}<br>
                <strong>IP address:</strong> ${escapeHtml(ip)}</p>
-            <p>⚠️ The hub allows only one connection at a time. If the official Nobo
-            app is connected, this will not work until you close it.</p>
+            <p>The official Nobø app can stay connected — the hub keeps both of you
+            in sync. It allows two connections over the local network at once, and
+            this will use one of them.</p>
             <p>Commands you send from here will change your actual heating.</p>
         `;
     }
