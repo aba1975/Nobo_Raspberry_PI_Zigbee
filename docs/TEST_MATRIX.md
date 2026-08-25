@@ -1,0 +1,219 @@
+# Test Matrix — Checking a Real Installation
+
+This is the checklist for the things automated tests cannot reach: a real hub, a
+real phone, a real browser, a real power cut.
+
+The unit and integration suite (`python -m pytest`, 453 tests) already covers the
+application's own logic against a fake hub. What it cannot cover is whether the
+hub behaves as documented, whether the radio actually switches a heater on,
+whether the Pi survives its own power supply, and how many TCP connections are
+open. That is what this document is for.
+
+## How to use it
+
+Each test says who does it. Most need both of us:
+
+| Symbol | Meaning |
+|---|---|
+| 👤 | You — needs a phone, a physical heater, or eyes on the room |
+| 🤖 | Me — SSH, API calls, log and socket inspection |
+| 👥 | Both, at the same time |
+
+Work top to bottom. The order is deliberate: everything in phase 1 and 2 is
+read-only, so if something is wrong we find out before anything has been
+changed. Phase 3 onwards writes to the hub, and every step says how to undo it.
+
+**Before starting anything that writes, take a snapshot.** I can capture the
+full hub state to a file, and diff it at the end to prove we left the house as we
+found it. Ask for it — it takes a few seconds and it is the difference between
+"I think we put it back" and knowing.
+
+Record results in the table at the bottom. A test that has never been run is
+more useful marked "not run" than quietly assumed to pass.
+
+---
+
+## Phase 0 — Ground rules
+
+- **The heating is real.** These tests change the temperature of a house that
+  someone may be living in. Do not run phase 4 in January on an occupied cabin.
+- **Pick a low-stakes zone.** A hallway, a technical room, a spare bedroom.
+  Avoid a bathroom with underfloor heating (slow to recover) and any room with
+  a frost risk if you leave it Off by mistake.
+- **Know how to undo it from the phone.** If we lose the Pi mid-test, the
+  official app is the fallback for putting the house back. Have it installed and
+  logged in before starting.
+- **One writer at a time.** If we are both changing things, we cannot tell whose
+  change caused what.
+
+---
+
+## Phase 1 — The Pi itself (read-only, safe any time)
+
+| # | Test | Who | How | Pass looks like |
+|---|---|---|---|---|
+| 1.1 | Service is enabled and running | 🤖 | `systemctl is-enabled nobo-control; systemctl is-active nobo-control` | `enabled` and `active` |
+| 1.2 | Container is healthy, not restarting | 🤖 | `docker ps` | `Up … (healthy)`, restart count 0 |
+| 1.3 | Health endpoint answers | 🤖 | `curl -s localhost:8000/api/health` | `{"status":"ok", …}` |
+| 1.4 | Correct branch and version deployed | 🤖 | `git log --oneline -1` | Matches what we intended to deploy |
+| 1.5 | Survives a reboot unattended | 👥 | `sudo reboot`, then wait | App answers again within ~60s, no login needed, data intact |
+| 1.6 | Survives a **power cut** | 👤 | Pull the plug, wait 10s, plug in | Same as 1.5. This is the one that matters in a cabin |
+| 1.7 | Disk is not filling up | 🤖 | `df -h /` | Comfortably under 80% |
+| 1.8 | Clock is correct and in the right timezone | 🤖 | `timedatectl` | Correct local time — schedules are wall-clock, so a wrong clock heats at the wrong hour |
+
+> **1.6 is the one people skip and regret.** A graceful `reboot` flushes the
+> filesystem; a power cut does not. It is the honest test for a cabin, where the
+> power will eventually go out while nobody is there.
+
+---
+
+## Phase 2 — Talking to the hub (read-only, safe any time)
+
+| # | Test | Who | How | Pass looks like |
+|---|---|---|---|---|
+| 2.1 | Hub is reachable on the network | 🤖 | `ping`, `nc -vz <hub-ip> 27779` | Port open |
+| 2.2 | App reports connected | 🤖 | `GET /api/status` | `connected: true`, `demo_mode: false` |
+| 2.3 | Zones match the real house | 👥 | Open the web UI | Room names and count are the real ones, not the demo house |
+| 2.4 | Devices match the real house | 👥 | Each room in the UI | Every heater you own appears, with the right serial and model |
+| 2.5 | Non-ASCII names are correct | 👤 | Look at the room list | `æ ø å` render properly — no `Ã¸`, no `\xa0` |
+| 2.6 | Setpoints match the app | 👥 | Compare UI with the phone app, room by room | Same comfort and eco values |
+| 2.7 | Exactly **one** connection to the hub | 🤖 | `ss -tn \| grep 27779` | Exactly one `ESTAB`. Two means a leak |
+| 2.8 | Connection survives idle | 🤖 | Leave it 15 min, re-check 2.2 and 2.7 | Still connected, still one socket. Proves the keep-alive works — the hub drops silent clients after 30s |
+| 2.9 | Nothing is being written | 🤖 | Activity log, Settings → Activity log | All hub entries say `received`. No `sent` we did not cause |
+
+---
+
+## Phase 3 — Sync between the Pi and the phone (reversible, low risk)
+
+This proves the two-connection behaviour on your own hub. Each test is a change
+and an immediate change back.
+
+| # | Test | Who | How | Pass looks like |
+|---|---|---|---|---|
+| 3.1 | Phone → Pi | 👥 | You change global mode in the app. I watch. | Pi shows it within ~10s, **without refreshing** |
+| 3.2 | Pi → phone | 👥 | I set a room override. You watch the app. | App shows it within ~10s |
+| 3.3 | Pi → browser, live | 👤 | Open the UI on two devices, change something on one | The other updates on its own (WebSocket) |
+| 3.4 | Both connected at once | 👥 | Do 3.1 with the app open and the Pi connected | Neither is kicked off. This is the claim in the README |
+| 3.5 | Physical switch → both | 👤 | Press a Nobø Switch, if you have one | Change appears on the Pi and the app |
+| 3.6 | Phone rejoins after the Pi | 👤 | Close the app, reopen it | Reconnects normally, shows current state |
+
+---
+
+## Phase 4 — Control (writes to the hub — pick a low-stakes room)
+
+Do these one at a time and confirm each before moving on.
+
+| # | Test | Who | How | Pass looks like | Undo |
+|---|---|---|---|---|---|
+| 4.1 | Comfort override | 👥 | Set the test room to Comfort | Mode changes in UI and app | Set back to Schedule |
+| 4.2 | The heater actually responds | 👤 | Stand at the heater during 4.1 | It clicks / warms. **This is the only test that proves the radio works end to end** | — |
+| 4.3 | Eco override | 👥 | Set Eco | Mode and setpoint change | Back to Schedule |
+| 4.4 | Off override | 👥 | Set Off | Heater stops | Back to Schedule |
+| 4.5 | Back to Schedule | 👥 | Clear the override | Returns to whatever the week profile says now | — |
+| 4.6 | Change comfort temperature | 👥 | Set the test room's comfort to a distinct value like 23 | Shows 23 in UI and app | Set it back to the original |
+| 4.7 | Global Away | 👥 | Set the whole house Away | Every room follows | Set back to Home |
+| 4.8 | Global Home | 👥 | Back to Home | Every room returns | — |
+| 4.9 | Rooms excluded from Away | 👤 | Mark a room as excluded, then set Away | That room keeps its own mode | Restore |
+| 4.10 | Override survives a restart | 🤖 | Set an override, restart the service, re-read | Still there — the hub holds it, not the Pi | Clear it |
+
+> **4.2 is the most important test in this document.** Everything else confirms
+> that a message reached the hub. Only standing next to the heater confirms the
+> hub reached the heater. It is the one step no amount of software testing can
+> replace.
+
+---
+
+## Phase 5 — Zones, devices, schedules (changes hub configuration)
+
+**This is the part that has never been run against real hardware.** Discovery,
+pairing and week profile edits are implemented from the protocol document, not
+from observed behaviour. Expect to find something.
+
+Do these when you have time to undo them, not five minutes before leaving.
+
+| # | Test | Who | How | Pass looks like | Undo |
+|---|---|---|---|---|---|
+| 5.1 | Create a zone | 👥 | Add "Test Zone" | Appears, gets a hub-assigned id | Delete it |
+| 5.2 | Rename a zone | 👥 | Rename it, with an `ø` in the name | Name correct in UI **and phone app** | Rename back |
+| 5.3 | Manual device registration | 👤 | Add a heater by serial number | Right model and image recognised | Remove it |
+| 5.4 | Move a device between zones | 👥 | Move one heater to Test Zone | Moves in both UI and app | Move it back |
+| 5.5 | **Automatic discovery** | 👤 | Put a device in pairing mode, run Search | It is found | Do not pair yet |
+| 5.6 | **Pair a discovered device** | 👤 | Pair it | Added to the chosen zone | Remove it |
+| 5.7 | Rename a device | 👥 | Rename a heater | Correct in both | Rename back |
+| 5.8 | Delete an empty zone | 🤖 | Delete Test Zone once empty | Gone | — |
+| 5.9 | Delete a zone with devices is refused | 🤖 | Try it | Clear error, nothing deleted | — |
+| 5.10 | **Read a week profile** | 👥 | Open a room's schedule | Matches the app's schedule exactly | — |
+| 5.11 | **Edit a week profile** | 👥 | Change one time block on the test room | Correct in the app too | Restore |
+| 5.12 | Schedule copy-on-write | 👥 | Edit a schedule shared by several rooms | **Only that room changes.** Others keep theirs | Restore |
+| 5.13 | Scheduled away | 👥 | Set an away period a few minutes out | Applies at the right wall-clock time | Cancel it |
+
+> **5.12 is the one with the worst failure mode.** Week profiles are shared
+> objects on the hub, and every zone starts on the same factory profile. If the
+> copy-on-write logic is wrong, editing one room silently reschedules the whole
+> house — and you would not notice until rooms started heating at the wrong time
+> days later. Check the other rooms explicitly, in the app, not just in the UI.
+
+---
+
+## Phase 6 — Failure and recovery
+
+| # | Test | Who | How | Pass looks like |
+|---|---|---|---|---|
+| 6.1 | Hub unplugged | 👤 | Unplug the hub for 2 min | Pi shows disconnected, retries with backoff, does not crash |
+| 6.2 | Hub back | 👤 | Plug it in | Reconnects on its own within ~1 min |
+| 6.3 | **No connection leak after reconnecting** | 🤖 | `ss -tn \| grep 27779` after 6.2 | Still exactly one socket |
+| 6.4 | Wi-Fi drops | 👤 | Disable Wi-Fi briefly | Recovers on its own |
+| 6.5 | Hub's nightly reboot | 🤖 | Check logs after 24h | Reconnects each time, one socket after |
+| 6.6 | Hub IP changed by DHCP | 👥 | Reboot the router, or change the lease | Either still works, or gives a clear error. **A static lease for the hub is worth setting up** |
+| 6.7 | Wrong serial rejected cleanly | 🤖 | Enter a wrong serial | Clear error, no crash, easy to correct |
+| 6.8 | Switch to demo and back | 🤖 | Toggle twice | Works both ways, **one socket** at the end, demo data intact |
+
+---
+
+## Phase 7 — The interface
+
+| # | Test | Who | How | Pass looks like |
+|---|---|---|---|---|
+| 7.1 | Works on your phone | 👤 | Open the UI on a phone browser | Readable, tappable, no sideways scrolling |
+| 7.2 | Works on a computer | 👤 | Desktop browser | Laid out sensibly |
+| 7.3 | Add to home screen | 👤 | Install as a web app | Correct name and icon, opens full screen |
+| 7.4 | Every button does something | 👤 | Press all of them | No dead buttons. *This has caught real bugs* |
+| 7.5 | Mode colours match | 👤 | Compare a room's buttons with its current mode | Colours agree |
+| 7.6 | Activity log | 👤 | Settings → Activity log | Shows recent changes. Empty after a restart is normal — it is in memory |
+| 7.7 | Rooms without sensors | 👤 | Look at an R80 / NTB-2R room | Setpoint shown, no invented room temperature |
+| 7.8 | Rooms with sensors | 👤 | If you own one | Measured temperature shown |
+| 7.9 | Login required | 🤖 | Open the API logged out | Redirected to login |
+| 7.10 | Old page after an update | 👤 | Update, then reload | New version loads — no stale buttons that do nothing |
+
+---
+
+## Result sheet
+
+Copy this and fill it in. Date each run — a pass from six months and four
+updates ago is not a pass.
+
+```
+Date:            ______________
+Version tested:  ______________  (git log --oneline -1)
+Hub serial:      ______________
+Tester(s):       ______________
+
+Phase 1  Pi              ___ / 8    notes:
+Phase 2  Hub read        ___ / 9    notes:
+Phase 3  Sync            ___ / 6    notes:
+Phase 4  Control         ___ / 10   notes:
+Phase 5  Configuration   ___ / 13   notes:
+Phase 6  Recovery        ___ / 8    notes:
+Phase 7  Interface       ___ / 10   notes:
+
+Hub state restored to starting point?   yes / no
+Anything left changed:                  ______________
+```
+
+## The short version
+
+If you only have twenty minutes: **1.3, 2.2, 2.7, 3.1, 4.1, 4.2, 6.3.**
+
+That is: the app is up, the hub is connected, no connections are leaking, sync
+works both ways, a room responds, **a heater physically responds**, and nothing
+leaks after a reconnect. Those seven cover the failure modes that actually bite.

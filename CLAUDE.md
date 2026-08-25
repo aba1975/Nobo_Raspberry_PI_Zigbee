@@ -69,8 +69,15 @@ code paths are covered separately, against `tests/fake_hub.py`:
 - `tests/test_real_hub_endpoints.py` — drives the whole FastAPI app against the
   fake hub over HTTP.
 
-**Any change to a protocol assumption belongs in `fake_hub.py` first.** And
-note the standing caveat: no real-hub code has ever run against real hardware.
+**Any change to a protocol assumption belongs in `fake_hub.py` first.**
+
+The code has now been run against real hardware (hub `102 000 147 017`), and it
+worked: seven zones, eleven devices and seven week profiles read correctly, and
+a mode change made in the official app arrived unprompted a few seconds later.
+That exercise also found a connection leak the fake hub could not have caught —
+see rule 4 below — so treat the fake as necessary but not sufficient. Anything
+about *how many* connections exist, or how long they live, needs real sockets or
+`ss` to verify. `docs/TEST_MATRIX.md` is the checklist for that.
 
 ## Important Design Notes
 
@@ -97,7 +104,7 @@ note the standing caveat: no real-hub code has ever run against real hardware.
 
 ## Talking to a Real Hub
 
-Three rules, each learned from a bug:
+Four rules, each learned from a bug:
 
 1. **Never call pynobo's synchronous wrappers from a request handler.** They
    create their task on whichever event loop is running, which inside FastAPI is
@@ -110,6 +117,16 @@ Three rules, each learned from a bug:
    `zone_id` with `tempsensor_for_zone_id` when a component is only a
    temperature sensor, so echoing its dict back would move the device into that
    zone. Use `HubProtocolTap.component_row()`, which keeps the raw wire rows.
+4. **Never assign to `hub` without stopping what was there.** Connection
+   attempts are serialised by `hub_connect_lock`, skipped entirely when a
+   healthy client is already installed, and any client they displace is passed
+   to `stop_hub_client()`. Before that, a configuration change and the reconnect
+   loop could each start an attempt in the same five-second window; both
+   succeeded, the second won, and the first was left holding a socket with its
+   keep-alive still running — so the hub never timed it out either. With only
+   two LAN slots, two orphans lock the user out of their own heating, and the
+   handshake has no "busy" reject code to explain why. Found with `ss -tn`, not
+   by a test; `tests/test_connection_leak.py` covers it now.
 
 Also worth knowing:
 
@@ -125,3 +142,9 @@ Also worth knowing:
 - Week profiles are shared between zones and every zone starts on profile `1`.
   `apply_week_profile_to_zone()` only edits in place when the profile belongs to
   that zone alone and is not `1`; otherwise it creates a per-zone copy.
+- **`current_temperature` is `null` for most devices, and that is correct.**
+  Receivers such as the R80 RDC 700 and NTB-2R have no thermometer, so the hub
+  reports no reading and the UI must not present the absence as a fault. Models
+  that do measure (for example thermostats reporting via `Y02`) populate it
+  normally. Do not "fix" a null by substituting the setpoint — that would show a
+  number the hardware never measured.

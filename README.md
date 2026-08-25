@@ -110,30 +110,63 @@ affected the features that *did* claim to work with a real hub:
 - **The hub connection was never closed on a mode switch.** `stop()` is a
   coroutine, and it was being called without being awaited, so it did nothing.
   Each switch between demo mode and a real hub leaked a connection.
+- **Two connection attempts could race, and the loser was abandoned.** Changing
+  the hub configuration starts a connection attempt; the reconnect loop, which
+  wakes every five seconds, could start a second one before the first finished.
+  Both succeeded, the second became the live one, and the first was left holding
+  an open socket with its keep-alive still running — so the hub never timed it
+  out either. Since the hub allows only two connections on the LAN, a couple of
+  those would lock you out of your own heating with nothing to explain why.
+  Found by counting sockets on a real hub, not by a test.
 
-If real-hub control has been unreliable for you in the past, those two are the
+If real-hub control has been unreliable for you in the past, those are the
 likely reason.
 
-#### Verified against a fake hub, not against real hardware
+#### Now verified against real hardware
 
-This must be stated plainly. **None of the real-hub code has ever run against a
-real Nobø Eco Hub.** It is tested against `tests/fake_hub.py`, a purpose-built
-server that speaks the documented wire protocol and that the genuine `pynobo`
-client connects to and drives (`tests/test_real_hub_endpoints.py`, 39 tests).
+Earlier versions of this file said, correctly at the time, that none of the
+real-hub code had ever run against a real Nobø Eco Hub. That is no longer true.
 
-That catches this application's own mistakes — name encoding, week profile
-sharing, component fields, error handling — but it cannot catch a hub that
-behaves differently from the specification, because the fake encodes the same
-reading of the specification that the app does. The reply shapes for adding and
-removing things, and the pairing exchange in particular, are inferred from the
-protocol document and from pynobo's own handling.
+The application has been connected to a live hub and read it correctly: seven
+zones, eleven devices across two models, and seven week profiles, with names
+containing `æ`, `ø` and `å` decoded properly. A mode change made from the
+official Nobø phone app appeared on the Pi a few seconds later without anyone
+refreshing anything, which is the hub pushing to two clients at once exactly as
+the specification describes. The connection held for eighteen minutes with no
+drops, and the Pi wrote nothing to the hub throughout — every entry in the
+command log was inbound.
 
-If you own a hub, you are the first to exercise these paths for real. The
-command log (see below) shows exactly what was sent and what came back, which
-is the right place to look if something does not behave.
+That exercise found the connection race described above, which the fake hub
+could not have caught: the fake answers each connection faithfully, but nothing
+in a functional test counts how many sockets are open.
+
+So the fake remains necessary and is still the place to start
+(`tests/fake_hub.py`, driven by `tests/test_real_hub_endpoints.py`). It catches
+this application's own mistakes — name encoding, week profile sharing, component
+fields, error handling. What it cannot catch is a hub that behaves differently
+from the specification, because the fake encodes the same reading of the
+specification that the app does, or anything about how many connections exist
+and how long they live.
+
+Two areas are still unproven on real hardware, because both change the hub and
+the verification above was deliberately read-only: **discovery and pairing of a
+new device**, and **editing a week profile**. The reply shapes for those are
+inferred from the protocol document and from pynobo's handling. If you exercise
+them, the command log shows exactly what was sent and what came back.
+
+`docs/TEST_MATRIX.md` is a checklist for working through the rest, in an order
+that starts read-only and keeps every step reversible.
 
 #### Things worth knowing about a real hub
 
+- **Most heaters have no thermometer, so no room temperature is shown.**
+  Receivers such as the R80 RDC 700 and the NTB-2R switch power to a heater and
+  report nothing back, so the hub has no reading to give and the room shows a
+  setpoint but no measured temperature. This is the hardware, not a fault, and
+  not something an update can change. Models that do measure — thermostats that
+  report a temperature to the hub — display it normally, and a house can mix
+  both. The application deliberately shows nothing rather than showing the
+  setpoint, because a number you cannot trust is worse than an honest blank.
 - **Weekly schedules are shared objects.** A hub week profile can be used by
   several zones, and every zone starts out on the same factory profile. Editing
   it in place would silently reschedule the whole house, so the first time you
@@ -770,6 +803,10 @@ So a change you make in the app appears on the Pi within seconds, and vice
 versa, without either side polling. The same mechanism reports things neither of
 them did: an override expiring, or someone pressing a physical Nobø Switch.
 
+This has been confirmed on real hardware, not just read off the page: with the
+Pi connected, setting the house to Home from the phone app appeared on the Pi
+about six seconds later, on its own. Both were connected the whole time.
+
 ### The budget
 
 | Route | Simultaneous connections |
@@ -1316,10 +1353,16 @@ application's own behaviour.
 | --- | --- |
 | `tests/test_fake_hub.py` | That the fake is faithful enough for the real client. If these fail, nothing below means anything. |
 | `tests/test_real_hub_endpoints.py` | The full HTTP API driven against the fake hub: schedules, zones, devices, discovery and pairing. |
+| `tests/test_connection_leak.py` | That overlapping connection attempts leave exactly one open client. The hub allows two connections, so a leak here locks you out. |
+| `tests/test_mode_switch_recovery.py` | That switching between demo mode and a real hub cannot get stuck "not connected". |
 
 This cannot catch a hub that behaves differently from its specification, because
-the fake encodes the same reading of the specification the application does. See
-[Verified against a fake hub, not against real hardware](#verified-against-a-fake-hub-not-against-real-hardware).
+the fake encodes the same reading of the specification the application does, and
+a functional test cannot see how many sockets are open. Both limits are real:
+the connection leak above was found on live hardware with `ss -tn`, after the
+fake-hub suite had passed. See
+[Now verified against real hardware](#now-verified-against-real-hardware), and
+`docs/TEST_MATRIX.md` for checks that need a hub, a phone or a browser.
 
 One message in the output is expected and harmless: a
 `PynoboConnectionError: Failed to connect to Nobø Ecohub at 192.0.2.10`
@@ -1338,6 +1381,17 @@ docker run --rm --user root -v "$PWD":/src -w /src \
 
 `--user root` is needed because the image runs as an unprivileged user that
 does not own your checkout.
+
+### Testing a real installation
+
+The suite above cannot tell you whether the hub behaves as documented, whether
+the radio actually switches a heater on, or whether the Pi survives a power cut.
+[`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) is a checklist for those: seven
+phases, ordered so the read-only checks come first and every step that changes
+something says how to undo it.
+
+If you have twenty minutes, the short version at the end of that document covers
+the failure modes that actually bite.
 
 ## Timezone
 
