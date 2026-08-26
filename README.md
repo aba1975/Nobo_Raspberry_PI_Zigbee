@@ -37,7 +37,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
-| **Alerts by email** | Tells you when the hub goes offline, a room is left switched off, or something is changed from another app — plus a regular "still here" check-in, so that silence means trouble. Every event has its own on/off switch. See [Alerts](#alerts). |
+| **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -248,37 +248,49 @@ and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
 
 ### Alerts
 
-A cabin stands empty. Nobody is there to notice that a thermostat was switched
-off in November and never switched back on, and the first sign of trouble is a
-burst pipe in March. The application already knew enough to have said something;
-now it does.
+Optional email alerts. **Everything here is off by default, including the
+feature itself**, and that is a deliberate judgement rather than caution: the
+Nobø hub reports so little about individual heaters that the honest set of
+alerts is small, and none of it is urgent enough to mail somebody unasked. It is
+kept because it costs nothing to keep and somebody may want it.
 
-Alerts go out by **email**, over plain SMTP, so any free mailbox works. Turn
-them on under **Settings → Telling you when something is wrong**, and use
-**Send a test email** before saving — if the mail server refuses, you get its
-actual words back, because "authentication failed" and "no such host" need
-different fixes.
+Read [What it can and cannot know](#what-it-can-and-cannot-know) **before**
+relying on this for anything. In particular, there is no frost alarm, and there
+cannot be one.
 
-Every event has its own switch:
+Turn it on under **Settings → Telling you when something is wrong**. The
+settings stay hidden until you press the switch, and nothing is sent until you
+press **Save alerts**. Use **Send a test email** first — if the mail server
+refuses, you get its actual words back, because "authentication failed" and "no
+such host" need different fixes.
 
-| Event | On by default | What it means |
-| --- | --- | --- |
-| **Hub goes offline** | Yes | The Pi has lost contact with the hub — hub power, or the network. Noticed within about half a minute. |
-| **Hub comes back** | Yes | Sent after an offline alert, so you know it fixed itself. |
-| **A regular "still here" email** | Yes | Sent on a schedule whether or not anything is wrong. **If these stop arriving, something has happened to the Pi itself.** |
-| **A room is left switched off** | Yes | A room held Off by its schedule will not heat at all. Off is below Away: no anti-frost either. |
-| **Something changed from another app** | Yes | A zone changed and it was not this system that did it. |
-| **An away period starts or ends** | Yes | Confirms a planned trip actually took effect. |
-| **A weekly schedule event starts** | **No** | Every comfort/eco switch in every room. Many a day — a diary, not an alarm. |
+| Event | What it means |
+| --- | --- |
+| **Hub goes offline** | The Pi has lost contact with the hub — hub power, or the network. Noticed within about half a minute. **The only fault this hardware genuinely reports.** |
+| **Hub comes back** | Sent after an offline alert, so you know it fixed itself. |
+| **Something changed from another app** | A zone changed and it was not this system that did it. |
+| **An away period starts or ends** | Confirms a planned trip actually took effect. |
 
-> **There is no cold-room alarm, and there cannot be one.** Nobø heater
-> receivers do not measure room temperature. See [What it can and cannot
-> know](#what-it-can-and-cannot-know) — the most important part of this section.
+Each condition speaks **once** when it starts and once when it clears, never
+repeatedly while it persists. **Quiet hours** holds back routine news overnight
+but never something urgent.
 
-Two settings exist purely so the alerts stay worth reading. **Quiet hours**
-holds back routine news overnight — but never a frost warning, which would be
-no use in the morning. And each condition speaks **once** on the way in and once
-on recovery, never repeatedly while it persists.
+Several more alerts were built and then removed, which is worth recording so
+nobody rebuilds them:
+
+| Removed | Why |
+| --- | --- |
+| A room is too cold | Needs a room temperature. Nothing reports one. |
+| A room cannot get warm | Same. |
+| A thermostat stops reporting | Same. |
+| A heater has been running for X hours | The hub is never told whether an element draws power. |
+| A regular "still here" email | Removed as not worth reading. |
+| A room is left switched off | Removed as not worth reading. |
+| A weekly schedule event starts | Removed as not worth reading. |
+
+The first four could never fire on this hardware; the last three could, but an
+alert nobody wants to read is not harmless — it teaches people to ignore the
+ones that matter.
 
 #### What it can and cannot know
 
@@ -345,29 +357,24 @@ browser, and does not pretend to.
 
 #### What is left, and why it is worth having
 
-Given all of the above, two things carry the weight.
+Given all of the above, what remains is modest and it is better to say so.
 
-**A room left switched off** is the one frost risk that is visible, because it
-is a fact about the configuration rather than about the building. It will not
-catch a thermostat switched off at the wall — nothing will — but it does catch
-the same mistake made in the app or the schedule.
+**The hub going offline** is the one genuine fault this hardware reports, and it
+does so within about half a minute. If the hub loses power or the network drops
+while you are away, you will know.
 
-**The "still here" email** is the answer to a question the system cannot
-otherwise answer: *is the whole thing still alive?* A Pi that has lost power,
-lost its network or corrupted its SD card cannot send you a warning. But a
-check-in that was arriving every week and then stops tells you exactly that.
-Silence becomes information.
+**Changes made from another app** are worth knowing about if more than one
+person has access, and an **away period starting or ending** confirms a planned
+trip actually took effect.
 
-It lists the hub state, the away period and every room's mode and setpoint, so a
-glance confirms the place is as you left it. The first one is sent as soon as
-you enable alerts, so a wrong mail setting shows up immediately rather than in a
-week's time.
+That is the honest list. It will not tell you a pipe is freezing.
 
-**If you want real temperature and frost alarms**, they have to come from
-hardware Nobø no longer sells you. A smart plug or energy meter with a *local*
-API (Shelly and similar) on the heater circuit would give both the actual
-"running constantly for 48 hours" measurement and a power-loss signal. That is
-not built here — say the word.
+**And there is no good workaround on this hardware.** A smart plug with a local
+API would give the "running constantly" and "lost power" signals — but only for
+a heater you can put a plug in front of. A floor-heating thermostat wired into
+the wall by an electrician has no plug to intercept, so that route is closed
+too. Anything better would mean an independent sensor on its own network, which
+is a different product rather than a change to this one.
 
 #### Settings
 
@@ -381,9 +388,6 @@ When alerts are off, the settings are hidden — there is nothing to configure
 until you want them. Turning the switch on reveals the form; nothing is sent
 until you press **Save alerts**, because the server refuses to enable a
 configuration that could not deliver.
-
-The time of the last check-in lives in `data/notify_state.json`, separately, so
-that saving preferences cannot disturb it and a reboot cannot reset the clock.
 
 All three notification endpoints are **admin only** — the settings decide where
 alerts about your building are sent, and who can silence them.

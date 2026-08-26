@@ -6,8 +6,8 @@ world and leaves us to work out the story. This module holds that reasoning,
 deliberately separated from both the server and the sending, so it can be
 tested against a sequence of snapshots with no hub, no network and no clock.
 
-Three things are detected here, and all three work on ordinary Nobø hardware —
-which is the constraint that shaped this file.
+Two things are detected here, and both work on ordinary Nobø hardware — which
+is the constraint that shaped this file.
 
 **Somebody changed something, and it was not us.** The Nobø override struct has
 no source field, so this is done by elimination: every write this application
@@ -16,29 +16,28 @@ came from somewhere else — the official Nobø app, another browser, or the hub
 itself expiring an override. We can say *that* it was not us; we can never say
 which of the others it was, and the wording is careful not to pretend otherwise.
 
-**A weekly schedule event started.** ``schedule_mode`` is what the week profile
-says right now, so a change in it while the zone follows its schedule is a
-scheduled switch rather than somebody interfering.
-
-**A room has been left switched off.** Off is below Away: no heating at all, not
-even anti-frost. This is the only frost-related thing that can be seen on a
-house with no thermometers, because it is a fact about the configuration rather
-than about the building.
+**A setpoint changed**, by the same reasoning.
 
 What is deliberately not here
 -----------------------------
-Cold rooms, silent thermostats and heaters that cannot keep up were all
-implemented and then removed. Every one needs a measured room temperature; only
-the SW4 reports one, and it is no longer sold. They are not commented out or
-left switched off, because an alert that cannot fire is worse than none — the
-owner believes the cabin is watched when nothing is watching it.
+A great deal, and the removals are the interesting part of this file's history.
 
-Nor is there any way to see a heater that has lost power. Not because the hub
-is deaf — it can hear components during a search (``X00`` / ``Y04``) — but
-because no liveness signal is ever exposed: the component ``Status`` field is
-"not yet implemented, always 0", nothing can be asked, and nothing is pushed
-when a device goes away. The keep-alive in this system runs between the Pi and
-the hub and nowhere else; see ``notifications.py``.
+Cold rooms, silent thermostats and heaters that cannot keep up all need a
+measured room temperature. Only the SW4 reports one, and it is no longer sold,
+so those alerts were deleted rather than left switched off — an alert that
+cannot fire is worse than none, because the owner believes the cabin is watched
+when nothing is watching it.
+
+A room-left-switched-off warning and a per-zone schedule diary were both built
+and then removed at the owner's request as not worth the noise. Same judgement,
+applied to alerts that *could* fire but that nobody wanted to read.
+
+And there is no way to see a heater that has lost power. Not because the hub is
+deaf — it can hear components during a search (``X00`` / ``Y04``) — but because
+no liveness signal is ever exposed: the component ``Status`` field is "not yet
+implemented, always 0", nothing can be asked, and nothing is pushed when a
+device goes away. The keep-alive in this system runs between the Pi and the hub
+and nowhere else; see ``notifications.py``.
 """
 
 from __future__ import annotations
@@ -72,14 +71,10 @@ def _label(mode: Optional[str]) -> str:
 
 @dataclass
 class _ZoneMemory:
-    """What we last saw for one zone, and how long any problem has been true."""
+    """What we last saw for one zone."""
     mode: Optional[str] = None
-    schedule_mode: Optional[str] = None
     comfort: Optional[float] = None
     eco: Optional[float] = None
-    # Kept only so an alert can quote a reading if one happens to exist.
-    temperature: Optional[float] = None
-    off_since: float = 0.0
     seen: bool = True
 
 
@@ -143,13 +138,6 @@ class ZoneWatcher:
         changed, and mailing the owner a summary of the entire house every time
         the service restarts would be intolerable.
         """
-        try:
-            settings = self.notifier.settings
-            off_for = float(settings.get("off_for_hours", 24)) * 3600
-        except Exception:
-            off_for = 86400.0
-
-        now = self.now_fn()
         first_pass = not self._primed
 
         for mem in self._zones.values():
@@ -168,36 +156,20 @@ class ZoneWatcher:
             mem.seen = True
 
             mode = zone.get("current_mode")
-            schedule_mode = zone.get("schedule_mode")
             comfort = _as_float(zone.get("comfort_temperature"))
             eco = _as_float(zone.get("eco_temperature"))
-            temp = _as_float(zone.get("current_temperature"))
 
             if not first_pass and not new_zone:
                 self._check_mode(zone_id, name, mem, mode)
                 self._check_setpoint(zone_id, name, mem, "comfort", mem.comfort, comfort)
                 self._check_setpoint(zone_id, name, mem, "eco", mem.eco, eco)
-                self._check_schedule(zone_id, name, mem, mode, schedule_mode)
 
             mem.mode = mode
-            mem.schedule_mode = schedule_mode
             mem.comfort = comfort
             mem.eco = eco
 
-            # -- switched off ------------------------------------------------
-            # The only frost-related thing visible on this hardware, because it
-            # is a fact about the configuration rather than about the building.
-            self._check_off(zone_id, name, mem, zone, off_for, now)
-
-            # A reading is kept if one happens to arrive, purely so an alert can
-            # quote it. Nothing depends on it, because almost nothing reports it.
-            if temp is not None:
-                mem.temperature = temp
-
-        # A zone that vanished should not keep an alarm raised forever.
         for zone_id, mem in list(self._zones.items()):
             if not mem.seen:
-                self.notifier.set_condition("zone_off", f"zone_off:{zone_id}", False)
                 self._zones.pop(zone_id, None)
 
         self._primed = True
@@ -237,65 +209,6 @@ class ZoneWatcher:
             "which app made a change, so this is as much as can honestly be said.",
             severity="info",
             key=f"changed_{which}:{zone_id}",
-        )
-
-    def _check_schedule(self, zone_id: str, name: str, mem: _ZoneMemory,
-                        mode: Optional[str], schedule_mode: Optional[str]) -> None:
-        if mode != "normal" or schedule_mode is None or schedule_mode == mem.schedule_mode:
-            return
-        if mem.schedule_mode is None:
-            return
-        self.notifier.notify(
-            "schedule_event",
-            f"{name} switched to {_label(schedule_mode)}",
-            f"{name} moved from {_label(mem.schedule_mode)} to {_label(schedule_mode)},\n"
-            "because that is what its weekly schedule says for this time.",
-            severity="info",
-            key=f"schedule:{zone_id}",
-        )
-
-    def _check_off(self, zone_id: str, name: str, mem: _ZoneMemory,
-                   zone: Dict[str, Any], off_for: float, now: float) -> None:
-        """
-        A room the schedule is holding Off, for long enough to be a mistake.
-
-        This is the one frost-related thing that can be seen on a house with no
-        thermometers anywhere, because it is a fact about the *configuration*
-        rather than about the building. It does not catch a thermostat switched
-        off at the wall — nothing can, the hub is never told — but it does catch
-        the same mistake made in software, which is the half that is visible.
-        """
-        key = f"zone_off:{zone_id}"
-        is_off = zone.get("current_mode") == "normal" and zone.get("schedule_mode") == "off"
-
-        if not is_off:
-            mem.off_since = 0.0
-            self.notifier.set_condition(
-                "zone_off", key, False,
-                recovery_subject=f"{name} is heating again",
-                recovery_body=f"{name} is no longer switched off by its schedule.",
-            )
-            return
-
-        if not mem.off_since:
-            mem.off_since = now
-        if (now - mem.off_since) < off_for and not self.notifier.is_raised(key):
-            return
-
-        hours = int((now - mem.off_since) / 3600)
-        self.notifier.set_condition(
-            "zone_off", key, True,
-            subject=f"{name} has been switched off for {hours} hours",
-            body=(
-                f"{name} is set to Off in its weekly schedule and has been for about\n"
-                f"{hours} hours.\n\n"
-                "Off means no heating at all — not even the 7°C anti-frost that Away\n"
-                "gives you. If there is water anywhere in this room, that is a risk.\n\n"
-                "If this is deliberate, you can turn this alert off under Settings."
-            ),
-            severity="critical",
-            recovery_subject=f"{name} is heating again",
-            recovery_body=f"{name} is no longer switched off by its schedule.",
         )
 
 

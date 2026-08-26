@@ -3,10 +3,13 @@ notifications.py — telling somebody when the heating needs attention.
 
 Why this exists
 ---------------
-A cabin stands empty. Nobody is there to notice that a thermostat was switched
-off in November and never switched back on, and the first sign of trouble is a
-burst pipe in March. The application already knows enough to have said
-something; it just never did.
+A cabin stands empty, and nobody is there to notice when something goes wrong.
+That was the ambition. What survives is a good deal smaller, because the
+hardware reports far less than it first appeared to — see below.
+
+**This feature is off by default and every alert within it is off by default.**
+It is kept because it costs nothing to keep and somebody may want it, not
+because it is recommended. Read the limits before relying on it for anything.
 
 What the hub can and cannot tell us
 -----------------------------------
@@ -44,21 +47,27 @@ is worth writing them down because they decide the shape of everything here:
    is undocumented and unknowable from here; it also does not matter, because
    there is no channel through which the answer could arrive.
 
-Which leaves an awkward truth: on this hardware the system cannot detect a cold
-room, a dead heater, or a heater running flat out. What it *can* do is be
-honest about the things it does see, and — through the heartbeat — make its own
-silence meaningful, so that a Pi which has lost power still tells you something
-by failing to write.
+Which leaves an awkward truth, and it is better written down than discovered
+later: **on this hardware the system cannot detect a cold room, a dead heater,
+a heater running flat out, or anything at all about an individual thermostat.**
+
+What is left is four things, all of which are real but none of which is urgent:
+the hub going away and coming back, somebody changing a zone from another app,
+and an away period starting or ending. Hence the defaults.
+
+A periodic "still here" email was built and then removed at the owner's request,
+along with a room-left-off warning and a per-zone schedule diary. The judgement
+behind that is worth keeping: an alert nobody wants to read is not harmless, it
+teaches people to ignore the ones that matter.
 
 Design rules
 ------------
 - **Never block the heating.** Every send happens on a worker thread with a
   timeout, and every failure is swallowed and logged. A broken mail server must
   not stop an away period from being applied.
-- **Say it once.** Conditions are level-triggered, not edge-triggered: a room
-  left off is *continuously* off, and re-sending that every 30 seconds would
-  train the user to ignore the alerts. Each condition alerts on the way in,
-  stays quiet while it persists, and alerts again on recovery.
+- **Say it once.** Conditions are level-triggered, not edge-triggered, so a
+  state that persists is reported when it starts and when it clears, never
+  repeatedly in between.
 - **Never log or return the password.**
 """
 
@@ -81,7 +90,6 @@ logger = logging.getLogger(__name__)
 # Redirected by tests, in the same way as the other persistence modules.
 DATA_DIR = Path(__file__).resolve().parent / "data"
 NOTIFICATIONS_FILE = DATA_DIR / "notifications.json"
-STATE_FILE = DATA_DIR / "notify_state.json"
 
 SMTP_TIMEOUT_SECONDS = 20
 
@@ -95,55 +103,41 @@ SEND_TIMEOUT_SECONDS = 45
 # ---------------------------------------------------------------------------
 # key -> (label, default_on, explanation shown in the UI)
 #
-# Every alert here works on ordinary Nobø hardware. There used to be three more
-# — a cold-room alarm, a silent-thermostat alarm and a cannot-get-warm alarm —
-# and they were removed rather than left switched on: all three need a room
-# temperature, only the SW4 reports one, and the SW4 is no longer sold. An alert
-# that cannot fire is worse than no alert, because the owner believes the cabin
-# is watched when nothing is watching it.
+# Everything here is off by default. That is a deliberate judgement about how
+# little this hardware can actually tell you: the hub reports no heater
+# liveness, no room temperature and no power draw, so the honest set of alerts
+# is small and none of it is important enough to mail somebody unasked. The
+# feature is kept because it costs nothing to keep and somebody may want it,
+# not because it is recommended.
 #
-# Defaults are chosen for a cabin that is empty most of the year: the things
-# that mean "go and look" are on, and the things that happen many times a day
-# are off. A notification the user has learned to ignore is worse than none.
+# Three more were removed rather than left switched off: a periodic "still
+# here" email, a room-left-off warning and a per-zone schedule diary. Same
+# reasoning as the temperature alerts before them - anything that is not worth
+# reading trains the owner to ignore the ones that are.
 EVENT_TYPES: Dict[str, Dict[str, Any]] = {
     "hub_offline": {
         "label": "Hub goes offline",
-        "default": True,
+        "default": False,
         "help": "The Pi has lost contact with the hub — the hub has lost power, or the "
-                "network is down. Noticed within about half a minute.",
+                "network is down. Noticed within about half a minute. This is the only "
+                "fault the hardware genuinely reports.",
     },
     "hub_online": {
         "label": "Hub comes back",
-        "default": True,
+        "default": False,
         "help": "Sent after an offline alert so you know it fixed itself.",
-    },
-    "heartbeat": {
-        "label": "A regular “still here” email",
-        "default": True,
-        "help": "Sent on a schedule whether or not anything is wrong, so that silence "
-                "means something. If the Pi loses power it cannot warn you — but a "
-                "heartbeat that stops arriving does.",
-    },
-    "zone_off": {
-        "label": "A room is left switched off",
-        "default": True,
-        "help": "A room whose schedule holds it Off will not heat at all, whatever the "
-                "weather. Off is below Away: no anti-frost either.",
     },
     "changed_elsewhere": {
         "label": "Something is changed from another app",
-        "default": True,
-        "help": "A zone's mode or temperature changed and it was not this system that did it.",
+        "default": False,
+        "help": "A zone's mode or temperature changed and it was not this system that did it. "
+                "The hub does not record which app made a change, so that is as much as can "
+                "be said.",
     },
     "away_period": {
         "label": "An away period starts or ends",
-        "default": True,
-        "help": "Confirms the planned trip actually took effect.",
-    },
-    "schedule_event": {
-        "label": "A weekly schedule event starts",
         "default": False,
-        "help": "Every comfort/eco switch, in every room. Many a day — off unless you want a diary.",
+        "help": "Confirms a planned trip actually took effect.",
     },
 }
 
@@ -161,13 +155,6 @@ _DEFAULTS: Dict[str, Any] = {
         "to_addrs": [],
     },
     "events": {k: v["default"] for k, v in EVENT_TYPES.items()},
-    # A room left switched off will not heat whatever the weather. A day is long
-    # enough that turning a room off to air it is not an incident.
-    "off_for_hours": 24,
-    # How often the "still here" email goes out. Weekly suits a cabin: often
-    # enough that a dead Pi is noticed within days, rare enough to stay read.
-    "heartbeat_days": 7,
-    "heartbeat_hour": 9,
     "quiet_hours": {"enabled": False, "start": "23:00", "end": "07:00"},
     # A floor on how often the same condition may speak, whatever happens.
     "min_minutes_between": 10,
@@ -224,9 +211,6 @@ def _merge(stored: Any) -> Dict[str, Any]:
 
     for key, lo, hi in (
         ("min_minutes_between", 0, 24 * 60),
-        ("off_for_hours", 1, 30 * 24),
-        ("heartbeat_days", 1, 90),
-        ("heartbeat_hour", 0, 23),
     ):
         if key in stored:
             try:
@@ -308,54 +292,7 @@ def public_settings(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         k: {"label": v["label"], "help": v["help"], "default": v["default"]}
         for k, v in EVENT_TYPES.items()
     }
-    out["last_heartbeat"] = load_state().get("last_heartbeat")
     return out
-
-
-# ---------------------------------------------------------------------------
-# Runtime state
-# ---------------------------------------------------------------------------
-# Kept apart from the settings so that saving preferences cannot disturb it, and
-# so that a corrupt settings file cannot cost the heartbeat its history. It has
-# to survive a restart: a Pi that reboots weekly would otherwise never reach the
-# interval and never send, which is the one failure this feature must not have.
-
-def load_state() -> Dict[str, Any]:
-    try:
-        with STATE_FILE.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_state(state: Dict[str, Any]) -> None:
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = STATE_FILE.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(state, fh, indent=2)
-        tmp.replace(STATE_FILE)
-    except Exception as exc:
-        logger.warning("Could not save notification state: %s", exc)
-
-
-def heartbeat_due(now: float, settings: Dict[str, Any],
-                  state: Optional[Dict[str, Any]] = None) -> bool:
-    """
-    Whether the "still here" email is due.
-
-    First run counts as due, so the user finds out immediately that it works
-    rather than waiting a week to discover the mail settings were wrong.
-    """
-    if not settings.get("enabled") or not settings.get("events", {}).get("heartbeat"):
-        return False
-    state = state if state is not None else load_state()
-    last = state.get("last_heartbeat")
-    if not isinstance(last, (int, float)):
-        return True
-    interval = max(1, int(settings.get("heartbeat_days", 7))) * 86400
-    return (now - last) >= interval
 
 
 # ---------------------------------------------------------------------------

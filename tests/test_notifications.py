@@ -33,7 +33,6 @@ import notify_watch
 def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(notifications, "DATA_DIR", tmp_path)
     monkeypatch.setattr(notifications, "NOTIFICATIONS_FILE", tmp_path / "notifications.json")
-    monkeypatch.setattr(notifications, "STATE_FILE", tmp_path / "notify_state.json")
     yield
 
 
@@ -57,12 +56,14 @@ def sent():
 
 @pytest.fixture
 def notifier(sent):
+    # Every event is off by default now, so a test fixture has to opt in - which
+    # is itself worth having, because it means a test can never pass by accident
+    # on a default that later changes.
     n = notifications.Notifier(settings=notifications._merge({
         "enabled": True,
         "email": {"host": "mail.example.com", "to_addrs": ["me@example.com"],
                   "from_addr": "pi@example.com"},
-        # Off by default, so a test that wants it must say so.
-        "events": {"schedule_event": False},
+        "events": {k: True for k in notifications.EVENT_TYPES},
         "min_minutes_between": 0,
     }))
     n.send_impl = lambda cfg, subject, body: sent.append((subject, body))
@@ -106,26 +107,48 @@ def flush(sent):
 
 def test_no_alert_depends_on_a_room_temperature():
     """
-    The whole point of the rebuild. Every temperature-based alert was removed:
-    only the SW4 reports a temperature and it is no longer sold, so those alerts
-    could never fire while sitting there looking like protection.
+    Only the SW4 reports a temperature and it is no longer sold, so alerts that
+    needed one could never fire while sitting there looking like protection.
     """
     for gone in ("room_cold", "sensor_silent", "cannot_reach"):
         assert gone not in notifications.EVENT_TYPES
 
 
-def test_the_watcher_has_no_temperature_detectors_left():
-    for gone in ("_check_cold", "_clear_cold", "_check_silent", "_check_cannot_reach"):
+def test_the_noisy_alerts_were_removed_too():
+    """
+    A periodic check-in, a room-left-off warning and a per-zone schedule diary
+    were all built and then removed as not worth reading. An alert nobody wants
+    is not harmless: it teaches people to ignore the ones that matter.
+    """
+    for gone in ("heartbeat", "zone_off", "schedule_event"):
+        assert gone not in notifications.EVENT_TYPES
+
+
+def test_only_the_four_honest_alerts_remain():
+    assert set(notifications.EVENT_TYPES) == {
+        "hub_offline", "hub_online", "changed_elsewhere", "away_period",
+    }
+
+
+def test_everything_is_off_by_default():
+    """
+    The hardware reports so little that none of this is worth mailing somebody
+    unasked. The feature is kept for whoever wants it, not recommended.
+    """
+    assert all(v["default"] is False for v in notifications.EVENT_TYPES.values())
+    assert notifications.load_settings()["enabled"] is False
+    assert all(v is False for v in notifications.load_settings()["events"].values())
+
+
+def test_the_watcher_has_no_removed_detectors_left():
+    for gone in ("_check_cold", "_clear_cold", "_check_silent",
+                 "_check_cannot_reach", "_check_off", "_check_schedule"):
         assert not hasattr(notify_watch.ZoneWatcher, gone), gone
 
 
-def test_a_frost_related_alert_still_exists():
-    """Otherwise the removal would have left no frost protection at all."""
-    assert notifications.EVENT_TYPES["zone_off"]["default"] is True
-
-
-def test_the_heartbeat_is_offered_by_default():
-    assert notifications.EVENT_TYPES["heartbeat"]["default"] is True
+def test_the_heartbeat_machinery_is_gone():
+    for gone in ("heartbeat_due", "load_state", "save_state", "STATE_FILE"):
+        assert not hasattr(notifications, gone), gone
 
 
 # ---------------------------------------------------------------------------
@@ -162,11 +185,11 @@ def test_a_corrupt_file_disables_notifications_rather_than_crashing(tmp_path, mo
 
 def test_nonsense_values_fall_back_to_defaults():
     saved = notifications.save_settings({
-        "off_for_hours": "ages",
+        "min_minutes_between": "ages",
         "email": {"port": 99999},
         "quiet_hours": {"enabled": True, "start": "25:00", "end": "07:00"},
     })
-    assert saved["off_for_hours"] == 24
+    assert saved["min_minutes_between"] == 10
     assert saved["email"]["port"] == 587
     assert saved["quiet_hours"]["start"] == "23:00"
 
@@ -176,16 +199,24 @@ def test_an_unknown_event_key_is_ignored():
     assert "nonsense" not in saved["events"]
 
 
-def test_a_settings_file_from_the_old_version_still_loads():
-    """Anyone who ran the temperature build has those keys saved."""
+def test_a_settings_file_from_an_older_version_still_loads():
+    """
+    Anyone who ran an earlier build has removed keys and removed events saved.
+    Those must be dropped without taking the surviving preferences with them.
+    """
     saved = notifications.save_settings({
         "enabled": False,
         "cold_threshold_c": 5.0,
-        "events": {"room_cold": True, "zone_off": False},
+        "off_for_hours": 24,
+        "heartbeat_days": 7,
+        "events": {"room_cold": True, "zone_off": True, "heartbeat": True,
+                   "hub_offline": True},
     })
-    assert "cold_threshold_c" not in saved
-    assert "room_cold" not in saved["events"]
-    assert saved["events"]["zone_off"] is False, "surviving preferences are kept"
+    for gone in ("cold_threshold_c", "off_for_hours", "heartbeat_days"):
+        assert gone not in saved
+    for gone in ("room_cold", "zone_off", "heartbeat"):
+        assert gone not in saved["events"]
+    assert saved["events"]["hub_offline"] is True, "surviving preferences are kept"
 
 
 def test_addresses_that_are_not_addresses_are_dropped():
@@ -193,62 +224,6 @@ def test_addresses_that_are_not_addresses_are_dropped():
         "email": {"to_addrs": ["me@example.com", "not an address", ""]},
     })
     assert saved["email"]["to_addrs"] == ["me@example.com"]
-
-
-# ---------------------------------------------------------------------------
-# The heartbeat — making silence mean something
-# ---------------------------------------------------------------------------
-
-def test_the_first_heartbeat_is_due_immediately(notifier):
-    """So a wrong mail setting is found out now, not in a week."""
-    assert notifications.heartbeat_due(1000.0, notifier.settings) is True
-
-
-def test_a_heartbeat_is_not_due_again_straight_away(notifier):
-    notifications.save_state({"last_heartbeat": 1000.0})
-    assert notifications.heartbeat_due(1000.0 + 3600, notifier.settings) is False
-
-
-def test_a_heartbeat_is_due_after_the_interval(notifier):
-    notifications.save_state({"last_heartbeat": 1000.0})
-    later = 1000.0 + (7 * 86400) + 1
-    assert notifications.heartbeat_due(later, notifier.settings) is True
-
-
-def test_the_interval_is_configurable(notifier):
-    notifier.settings["heartbeat_days"] = 1
-    notifications.save_state({"last_heartbeat": 1000.0})
-    assert notifications.heartbeat_due(1000.0 + 86400 + 1, notifier.settings) is True
-
-
-def test_no_heartbeat_when_the_user_turned_it_off(notifier):
-    notifier.settings["events"]["heartbeat"] = False
-    assert notifications.heartbeat_due(1e9, notifier.settings) is False
-
-
-def test_no_heartbeat_when_alerts_are_off(notifier):
-    notifier.settings["enabled"] = False
-    assert notifications.heartbeat_due(1e9, notifier.settings) is False
-
-
-def test_the_heartbeat_time_survives_a_restart():
-    """
-    A Pi that reboots often would otherwise never reach the interval and never
-    send — which is the one failure this feature must not have, since its whole
-    value is that its silence is meaningful.
-    """
-    notifications.save_state({"last_heartbeat": 1234.0})
-    assert notifications.load_state()["last_heartbeat"] == 1234.0
-
-
-def test_a_corrupt_state_file_means_send_now_rather_than_never(notifier):
-    notifications.STATE_FILE.write_text("{broken", encoding="utf-8")
-    assert notifications.heartbeat_due(1e9, notifier.settings) is True
-
-
-def test_the_last_heartbeat_is_reported_to_the_ui():
-    notifications.save_state({"last_heartbeat": 4242.0})
-    assert notifications.public_settings()["last_heartbeat"] == 4242.0
 
 
 # ---------------------------------------------------------------------------
@@ -268,26 +243,27 @@ def test_nothing_is_sent_for_an_event_the_user_turned_off(notifier, sent):
 
 def test_a_continuing_condition_speaks_once(notifier, sent):
     for _ in range(5):
-        notifier.set_condition("zone_off", "zone_off:1", True, subject="off", body="b")
+        notifier.set_condition("hub_offline", "hub_offline", True, subject="gone", body="b")
     flush(sent)
     assert len(sent) == 1
 
 
 def test_recovery_is_reported_once(notifier, sent):
-    notifier.set_condition("zone_off", "zone_off:1", True, subject="off", body="b")
+    notifier.set_condition("hub_offline", "hub_offline", True, subject="gone", body="b")
     flush(sent)
     sent.clear()
     for _ in range(3):
-        notifier.set_condition("zone_off", "zone_off:1", False,
-                               recovery_subject="on again", recovery_body="b")
+        notifier.set_condition("hub_offline", "hub_offline", False,
+                               recovery_event_type="hub_online",
+                               recovery_subject="back", recovery_body="b")
     flush(sent)
     assert len(sent) == 1
-    assert "on again" in sent[0][0]
+    assert "back" in sent[0][0]
 
 
-def test_rooms_alarm_independently(notifier, sent):
-    notifier.set_condition("zone_off", "zone_off:1", True, subject="a", body="b")
-    notifier.set_condition("zone_off", "zone_off:2", True, subject="b", body="b")
+def test_conditions_alarm_independently(notifier, sent):
+    notifier.set_condition("changed_elsewhere", "changed:1", True, subject="a", body="b")
+    notifier.set_condition("changed_elsewhere", "changed:2", True, subject="b", body="b")
     flush(sent)
     assert len(sent) == 2
 
@@ -311,7 +287,7 @@ def test_quiet_hours_hold_back_routine_news(notifier, monkeypatch):
 def test_quiet_hours_do_not_hold_back_something_urgent(notifier, monkeypatch):
     notifier.settings["quiet_hours"] = {"enabled": True, "start": "23:00", "end": "07:00"}
     monkeypatch.setattr(notifier, "_quiet_now", lambda now=None: True)
-    assert notifier.notify("zone_off", "off", "y", severity="critical") is True
+    assert notifier.notify("hub_offline", "gone", "y", severity="critical") is True
 
 
 def test_quiet_hours_wrap_around_midnight(notifier):
@@ -409,99 +385,6 @@ def test_a_newly_added_room_is_not_an_alert(watcher, sent):
     watcher.observe([zone("1"), zone("2", name="New Room", mode="eco")])
     flush(sent)
     assert sent == []
-
-
-# ---------------------------------------------------------------------------
-# A room left switched off — the frost alert that works on this hardware
-# ---------------------------------------------------------------------------
-
-def off_zone(**kw):
-    return zone(mode="normal", schedule_mode="off", **kw)
-
-
-def test_a_room_left_switched_off_is_reported(watcher, sent):
-    watcher.observe([off_zone()])
-    watcher.clock.advance(25 * 3600)
-    watcher.observe([off_zone()])
-    flush(sent)
-    assert len(sent) == 1
-    assert "switched off" in sent[0][0]
-
-
-def test_it_works_with_no_temperature_anywhere(watcher, sent):
-    """Which is the situation on every house this software is aimed at."""
-    watcher.observe([off_zone()])
-    watcher.clock.advance(25 * 3600)
-    watcher.observe([off_zone()])
-    flush(sent)
-    assert sent, "a house with no thermometers must still get this alert"
-
-
-def test_briefly_switching_a_room_off_is_not_reported(watcher, sent):
-    watcher.observe([off_zone()])
-    watcher.clock.advance(2 * 3600)
-    watcher.observe([zone(mode="normal", schedule_mode="comfort")])
-    flush(sent)
-    assert sent == []
-
-
-def test_the_off_alert_explains_that_off_is_below_away(watcher, sent):
-    watcher.observe([off_zone()])
-    watcher.clock.advance(25 * 3600)
-    watcher.observe([off_zone()])
-    flush(sent)
-    assert "not even" in sent[0][1] and "7" in sent[0][1]
-
-
-def test_turning_a_room_back_on_says_so(watcher, sent):
-    watcher.observe([off_zone()])
-    watcher.clock.advance(25 * 3600)
-    watcher.observe([off_zone()])
-    flush(sent)
-    sent.clear()
-    watcher.observe([zone(mode="normal", schedule_mode="comfort")])
-    flush(sent)
-    assert len(sent) == 1
-    assert "heating again" in sent[0][0]
-
-
-def test_an_overridden_room_is_not_called_switched_off(watcher, sent):
-    """An override beats the schedule, so the Off in the profile is not in force."""
-    watcher.observe([zone(mode="comfort", schedule_mode="off")])
-    watcher.clock.advance(50 * 3600)
-    watcher.observe([zone(mode="comfort", schedule_mode="off")])
-    flush(sent)
-    assert sent == []
-
-
-def test_the_off_threshold_is_configurable(watcher, notifier, sent):
-    notifier.settings["off_for_hours"] = 2
-    watcher.observe([off_zone()])
-    watcher.clock.advance(3 * 3600)
-    watcher.observe([off_zone()])
-    flush(sent)
-    assert len(sent) == 1
-
-
-# ---------------------------------------------------------------------------
-# Schedule events
-# ---------------------------------------------------------------------------
-
-def test_schedule_events_are_silent_by_default(watcher, sent):
-    """Dozens a day across eight rooms would train the user to ignore all of it."""
-    watcher.observe([zone(mode="normal", schedule_mode="eco")])
-    watcher.observe([zone(mode="normal", schedule_mode="comfort")])
-    flush(sent)
-    assert sent == []
-
-
-def test_schedule_events_are_reported_when_asked_for(watcher, notifier, sent):
-    notifier.settings["events"]["schedule_event"] = True
-    watcher.observe([zone(mode="normal", schedule_mode="eco")])
-    watcher.observe([zone(mode="normal", schedule_mode="comfort")])
-    flush(sent)
-    assert len(sent) == 1
-    assert "Comfort" in sent[0][0]
 
 
 # ---------------------------------------------------------------------------

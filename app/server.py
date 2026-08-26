@@ -1424,10 +1424,11 @@ def note_local_write(zone_id: Any, field_name: str, value: Any) -> None:
 
 async def notification_watch_loop():
     """
-    Re-examine the house every minute, and send the heartbeat when it is due.
+    Re-check the house every minute for changes made somewhere else.
 
-    A room left switched off is a state, not a message: nothing arrives to react
-    to, so this polls. The heartbeat rides along on the same timer.
+    The hub pushes most changes, and ``broadcast_zone_update`` observes those as
+    they arrive. This loop is the safety net for anything that does not produce
+    a push — a missed message, or a reconnection that resynchronised quietly.
     """
     INTERVAL = 60
     while True:
@@ -1439,99 +1440,10 @@ async def notification_watch_loop():
                 connected = hub_connected
             if connected:
                 zone_watcher.observe(get_zones_data())
-            # Deliberately outside the connected check: a heartbeat is most
-            # worth sending when something is wrong, and "the hub is down" is
-            # exactly the news the owner wants in it.
-            maybe_send_heartbeat()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("Notification watch loop error: %s", exc)
-
-
-def build_heartbeat() -> str:
-    """
-    The body of the "still here" email: everything an owner would check.
-
-    Written to be read on a phone, in order of what matters: is it connected, is
-    it away, and what is each room set to. The point is that a glance tells you
-    the cabin is as you left it.
-    """
-    with connection_lock:
-        connected = hub_connected
-    lines = [
-        "Nothing is wrong. This is the regular check-in, so that you know the",
-        "system is still running and still reachable.",
-        "",
-        f"Hub: {'connected' if connected else 'NOT CONNECTED'}",
-        f"Mode: {'demo' if DEMO_MODE else 'live'}",
-        f"Local time: {local_now().strftime('%Y-%m-%d %H:%M %Z')}",
-    ]
-
-    try:
-        schedule = away_schedule.load_schedule()
-        if schedule.get("enabled"):
-            active = away_schedule.is_schedule_active(schedule, datetime.now(timezone.utc))
-            lines.append(
-                f"Away period: {'running now' if active else 'planned'}, "
-                f"until {schedule.get('end_at') or 'no end date'}"
-            )
-        else:
-            lines.append("Away period: none set")
-    except Exception:
-        pass
-
-    try:
-        zones = get_zones_data()
-        lines += ["", f"Rooms ({len(zones)}):"]
-        for zone in zones:
-            mode = zone.get("current_mode")
-            if mode == "normal":
-                mode = f"schedule ({zone.get('schedule_mode') or 'unknown'})"
-            target = {
-                "comfort": zone.get("comfort_temperature"),
-                "eco": zone.get("eco_temperature"),
-                "away": zone.get("away_temperature"),
-            }.get(zone.get("current_mode"))
-            bits = [f"  {zone.get('name')}: {mode}"]
-            if target is not None:
-                bits.append(f"set to {float(target):.0f}\u00b0C")
-            measured = zone.get("current_temperature")
-            if measured is not None:
-                bits.append(f"measuring {float(measured):.1f}\u00b0C")
-            lines.append(", ".join(bits))
-    except Exception as exc:
-        lines.append(f"  (could not read the rooms: {exc})")
-
-    lines += [
-        "",
-        "If these stop arriving, something has happened to the Raspberry Pi itself —",
-        "power, network or SD card. It cannot warn you about that on its own, which",
-        "is the whole reason this message exists.",
-    ]
-    return "\n".join(lines)
-
-
-def maybe_send_heartbeat() -> bool:
-    """Send the periodic check-in if it is due. Returns whether it was sent."""
-    now = time.time()
-    if not notifications.heartbeat_due(now, notifier.settings):
-        return False
-
-    # Stamped before sending, not after. A mail server that hangs must not cause
-    # a retry every minute for as long as it stays broken.
-    state = notifications.load_state()
-    state["last_heartbeat"] = now
-    notifications.save_state(state)
-
-    sent = notifier.notify(
-        "heartbeat",
-        "Still here, all is well",
-        build_heartbeat(),
-        severity="info",
-        key="heartbeat",
-    )
-    return sent
 
 
 def get_current_schedule_mode(zone_id: str) -> str:
@@ -2052,9 +1964,6 @@ class NotificationUpdate(BaseModel):
     email: Optional[NotificationEmail] = None
     events: Optional[Dict[str, bool]] = None
     min_minutes_between: Optional[int] = None
-    off_for_hours: Optional[int] = None
-    heartbeat_days: Optional[int] = None
-    heartbeat_hour: Optional[int] = None
     quiet_hours: Optional[Dict[str, Any]] = None
 
 
@@ -2073,8 +1982,7 @@ def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
         for key, value in body.events.items():
             if key in notifications.EVENT_TYPES:
                 current["events"][key] = bool(value)
-    for field_name in ("min_minutes_between", "off_for_hours",
-                       "heartbeat_days", "heartbeat_hour"):
+    for field_name in ("min_minutes_between",):
         value = getattr(body, field_name)
         if value is not None:
             current[field_name] = value

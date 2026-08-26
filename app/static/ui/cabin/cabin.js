@@ -160,12 +160,6 @@
 
   const SITE    = () => (state.site && state.site.display_name) || 'Cabin';
   const SITE_IN = () => (state.site && state.site.inline_name) || 'the cabin';
-  // "The cabin stands empty" at the start of a sentence. Only the first letter
-  // is touched, so a real name like "Mostugu" is left exactly as typed.
-  const SITE_IN_CAP = () => {
-    const s = SITE_IN();
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  };
 
   function applySiteName() {
     document.title = `${SITE()} - Nobø Control`;
@@ -1726,8 +1720,11 @@
 
       <section class="card">
         <h2>Telling you when something is wrong</h2>
-        <p class="zd-sub">${SITE_IN_CAP()} stands empty most of the year, so nothing
-        here is noticed unless it comes and finds you. Alerts are sent by email.</p>
+        <p class="zd-sub">Optional email alerts. The Nobø hub reports very little
+        about individual heaters, so this can tell you when the hub itself goes
+        away and when settings are changed from another app — but it cannot see a
+        cold room, a heater without power, or a thermostat switched off at the wall.
+        Everything here is off unless you turn it on.</p>
 
         <div class="switch">
           <div class="switch-text">
@@ -1865,10 +1862,6 @@
 
     const pending = !n.enabled;
 
-    const last = n.last_heartbeat
-      ? new Date(n.last_heartbeat * 1000).toLocaleString()
-      : 'not yet sent';
-
     box.innerHTML = `
       ${pending ? `<div class="note">Fill these in and press <strong>Save alerts</strong>
         to switch them on. Nothing is sent until then.</div>` : ''}
@@ -1882,23 +1875,6 @@
               <small class="field-hint">${esc(types[key].help)}</small>
             </span>
           </label>`).join('')}
-      </div>
-
-      <h3 class="notify-head">Timing</h3>
-      <div class="notify-grid">
-        <label class="field">
-          <span>Warn about a room left off after</span>
-          <input type="number" id="ntOffFor" min="1" max="720" step="1"
-                 value="${esc(String(n.off_for_hours))}" ${dis}>
-          <small class="field-hint">Hours. Off means no heating at all, not even
-          the ${AWAY_TEMP_LABEL()} that Away gives you.</small>
-        </label>
-        <label class="field">
-          <span>Send “still here” every</span>
-          <input type="number" id="ntBeat" min="1" max="90" step="1"
-                 value="${esc(String(n.heartbeat_days))}" ${dis}>
-          <small class="field-hint">Days. Last sent: ${esc(last)}.</small>
-        </label>
       </div>
 
       <h3 class="notify-head">Where to send it</h3>
@@ -1981,8 +1957,6 @@
     });
     const body = {
       events,
-      off_for_hours: num('#ntOffFor', n.off_for_hours),
-      heartbeat_days: num('#ntBeat', n.heartbeat_days),
       quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
       email: {
         host: val('#ntHost'),
