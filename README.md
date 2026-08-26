@@ -37,6 +37,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
+| **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -76,6 +77,14 @@ interface says so rather than pretending the change worked.
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ✅ |
+| **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
+
+**Room temperature is the exception worth knowing about.** Of the 25 device
+models this software knows, only the **SW4** control panel has a thermometer.
+The NTB-2R, the R80 RDC 700 and every other receiver control the temperature
+without reporting it, so a blank room temperature is correct behaviour and not
+a fault. It is not the setpoint, and the app will not substitute one. This
+matters beyond cosmetics: it decides which [alerts](#alerts) can work.
 
 Everything on that list is now implemented in both modes. The one asymmetry is
 device discovery: it asks the hub to listen on its radio for devices in pairing
@@ -236,6 +245,156 @@ Two things worth knowing:
 The list is stored in `data/away_exceptions.json` and is included in a backup.
 If a zone in the list is deleted, it is ignored rather than causing an error,
 and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
+
+### Alerts
+
+Optional email alerts. **Everything here is off by default, including the
+feature itself**, and that is a deliberate judgement rather than caution: the
+Nobø hub reports so little about individual heaters that the honest set of
+alerts is small, and none of it is urgent enough to mail somebody unasked. It is
+kept because it costs nothing to keep and somebody may want it.
+
+Read [What it can and cannot know](#what-it-can-and-cannot-know) **before**
+relying on this for anything. In particular, there is no frost alarm, and there
+cannot be one.
+
+Turn it on under **Settings → Telling you when something is wrong**. The
+settings stay hidden until you press the switch, and nothing is sent until you
+press **Save alerts**. Use **Send a test email** first — if the mail server
+refuses, you get its actual words back, because "authentication failed" and "no
+such host" need different fixes.
+
+| Event | What it means |
+| --- | --- |
+| **Hub goes offline** | The Pi has lost contact with the hub — hub power, or the network. Noticed within about half a minute. **The only fault this hardware genuinely reports.** |
+| **Hub comes back** | Sent after an offline alert, so you know it fixed itself. |
+| **Something changed from another app** | A zone changed and it was not this system that did it. |
+| **An away period starts or ends** | Confirms a planned trip actually took effect. |
+
+Each condition speaks **once** when it starts and once when it clears, never
+repeatedly while it persists. **Quiet hours** holds back routine news overnight
+but never something urgent.
+
+Several more alerts were built and then removed, which is worth recording so
+nobody rebuilds them:
+
+| Removed | Why |
+| --- | --- |
+| A room is too cold | Needs a room temperature. Nothing reports one. |
+| A room cannot get warm | Same. |
+| A thermostat stops reporting | Same. |
+| A heater has been running for X hours | The hub is never told whether an element draws power. |
+| A regular "still here" email | Removed as not worth reading. |
+| A room is left switched off | Removed as not worth reading. |
+| A weekly schedule event starts | Removed as not worth reading. |
+
+The first four could never fire on this hardware; the last three could, but an
+alert nobody wants to read is not harmless — it teaches people to ignore the
+ones that matter.
+
+#### What it can and cannot know
+
+The limits here are the hub's, and no amount of software removes them. They are
+worth stating plainly, because the alternative is a feature that looks like
+protection and is not.
+
+**Is there a keep-alive?** Yes — but only in one place.
+
+| Link | Keep-alive | So we can tell if… |
+| --- | --- | --- |
+| Pi ↔ hub (network) | **Yes, both ways.** The Pi sends `HANDSHAKE` every 14 s and the hub echoes it. Nothing back within 28 s and the link is declared dead. The hub also UDP-broadcasts every 2 s. | …the **hub** loses power or the network drops. **Within about 30 seconds.** |
+| Hub ↔ heater (radio) | **No liveness reporting of any kind.** | …nothing. A **heater** switched off at the wall or without power is **invisible**. |
+
+The second row deserves precision, because it is the difference between "no
+heartbeat" and "no way to see a heartbeat", and only one of those is provable
+from the specification.
+
+The hub is **not** deaf. `X00` starts a *receiver search*, and the hub answers
+with a `Y04` for every component it hears. So the radio hardware can receive,
+and devices do transmit — during pairing.
+
+What does not exist is any way for that to reach this application during normal
+operation:
+
+- The component struct's `Status` field is *"not yet implemented — always set to
+  0"*, so the one field that could carry health never does.
+- `Active override Id` on a component is likewise *"not yet implemented — always
+  set to -1"*, and component-level overrides are *"not yet supported"*.
+- There is **no command to ask** whether a component is alive, and **no
+  unsolicited message** that reports one has gone away. The words "not
+  responding", "offline", "unreachable" and "battery" do not appear anywhere in
+  the specification. The only component messages the hub pushes are database
+  events — added, updated, removed — plus `Y02` temperature and `Y04` search
+  results.
+
+So whether a paired NTB-2R quietly beacons on the radio is undocumented and
+cannot be determined from here. It also does not matter: **there is no channel
+through which the hub could tell the Pi**, so a heater that has lost power
+cannot be reported, and no amount of work on this end changes that.
+
+**Nothing measures room temperature.** Of the 25 device models this software
+knows, only the SW4 control panel has a thermometer, and it is no longer sold.
+The NTB-2R, the R80 RDC 700 and every other receiver control temperature without
+ever reporting it. A blank room temperature is therefore correct, not a fault.
+
+Three alerts — a cold-room alarm, a silent-thermostat alarm and a
+cannot-get-warm alarm — were built and then **removed** for this reason. They
+were not left switched off or hidden behind a setting, because an alert that
+cannot fire is worse than none at all: the owner believes the cabin is watched
+when nothing is watching it.
+
+**"Warn me if a heater runs constantly for X hours"** cannot be done either, and
+for the same reason: the hub is never told whether an element is drawing power.
+The thermostat that cycles the heater is inside the device, and it reports
+nothing.
+
+**Who changed a temperature** is answered *by elimination*. The Nobø override
+struct is `<Id> <Mode> <Type> <End> <Start> <Target> <TargetID>` — no field for
+the source. The server records every write it makes, and anything arriving
+without a matching record came from somewhere else. The alert says "it was not
+changed from here" and stops; it cannot tell the official Nobø app from another
+browser, and does not pretend to.
+
+#### What is left, and why it is worth having
+
+Given all of the above, what remains is modest and it is better to say so.
+
+**The hub going offline** is the one genuine fault this hardware reports, and it
+does so within about half a minute. If the hub loses power or the network drops
+while you are away, you will know.
+
+**Changes made from another app** are worth knowing about if more than one
+person has access, and an **away period starting or ending** confirms a planned
+trip actually took effect.
+
+That is the honest list. It will not tell you a pipe is freezing.
+
+**And there is no good workaround on this hardware.** A smart plug with a local
+API would give the "running constantly" and "lost power" signals — but only for
+a heater you can put a plug in front of. A floor-heating thermostat wired into
+the wall by an electrician has no plug to intercept, so that route is closed
+too. Anything better would mean an independent sensor on its own network, which
+is a different product rather than a change to this one.
+
+#### Settings
+
+`data/notifications.json`, included in a backup. The mail password is stored in
+it and the file is written `0600`. **It is never returned by the API**: reading
+the settings gives you `password_set: true` instead, so it cannot leak through a
+screenshot, a proxy log or a support bundle. Leave the password box empty when
+saving to keep the one already stored.
+
+When alerts are off, the settings are hidden — there is nothing to configure
+until you want them. Turning the switch on reveals the form; nothing is sent
+until you press **Save alerts**, because the server refuses to enable a
+configuration that could not deliver.
+
+All three notification endpoints are **admin only** — the settings decide where
+alerts about your building are sent, and who can silence them.
+
+A mail server that is down, slow or misconfigured can never affect the heating:
+sending happens on a worker thread with a timeout, and every failure is logged
+and swallowed rather than raised.
 
 ## Prerequisites
 
@@ -1307,6 +1466,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
 | `GET /api/global-mode/away-exceptions` | Zones held on Eco during Away, plus the fixed away temperature |
+| `GET /api/notifications` | Alert settings. Admin only. The mail password is replaced by `password_set` |
 | `WS /ws` | Live updates. Pushes the current zones on connect, then again whenever anything changes. |
 
 ### Controlling
@@ -1320,6 +1480,8 @@ Note that `/auth/login` takes form fields, not JSON.
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
+| `PUT /api/notifications` | Change alert settings. Admin only. Partial: omitted fields keep their value, and an omitted password keeps the stored one. Refuses to enable alerts that could not be delivered. |
+| `POST /api/notifications/test` | Send a test email, optionally using settings in the body that have not been saved yet. Admin only. Returns the mail server's own error on failure. |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
 
 ### Zones and devices

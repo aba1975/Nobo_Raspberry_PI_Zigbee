@@ -1719,6 +1719,30 @@
       </section>
 
       <section class="card">
+        <h2>Telling you when something is wrong</h2>
+        <p class="zd-sub">Optional email alerts. The Nobø hub reports very little
+        about individual heaters, so this can tell you when the hub itself goes
+        away and when settings are changed from another app — but it cannot see a
+        cold room, a heater without power, or a thermostat switched off at the wall.
+        Everything here is off unless you turn it on.</p>
+
+        <div class="switch">
+          <div class="switch-text">
+            <strong>Send alerts</strong>
+            <span>Off until a mail server and a recipient are set below.</span>
+          </div>
+          <button class="btn" type="button" data-act="toggle-notify"
+            aria-pressed="false" ${isAdmin ? '' : 'disabled'}>Off</button>
+        </div>
+
+        <div id="notifyBox" class="notify-box">
+          <p class="zd-sub">Loading…</p>
+        </div>
+
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      </section>
+
+      <section class="card">
         <h2>Your account</h2>
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
@@ -1763,6 +1787,234 @@
     root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/classic#settings'; };
     root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
     loadAwayExceptions();
+    const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
+    if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
+    loadNotifications(isAdmin);
+  }
+
+  /* ------------------------------------------------------------------
+   * Notifications
+   *
+   * What can honestly be detected, and what cannot, is decided by the Nobø
+   * protocol rather than by us:
+   *
+   *   - An override carries no source, so "who changed this?" is answered by
+   *     elimination. The server records its own writes; anything else came
+   *     from somewhere else, and the wording never guesses which app.
+   *   - A component's Status field is "not yet implemented", so there is no
+   *     signal at all when somebody presses the button on a thermostat.
+   *   - But a temperature can arrive as "N/A" once the hub's stored value goes
+   *     stale, which is what a switched-off thermostat eventually looks like.
+   *
+   * So the two alerts that matter for a cabin - a cold room and a thermostat
+   * that has gone quiet - are both inferred, and the copy here says so rather
+   * than implying the system knows more than it does.
+   * ---------------------------------------------------------------- */
+
+  const NOTIFY_SECURITY = [
+    ['starttls', 'STARTTLS (port 587)'],
+    ['ssl', 'SSL/TLS (port 465)'],
+    ['none', 'None (not recommended)'],
+  ];
+
+  async function loadNotifications(isAdmin) {
+    const box = $('#notifyBox');
+    if (!box) return;
+    try {
+      state.notify = await Nobo.api.notifications();
+      state.notifyExpanded = !!state.notify.enabled;
+      renderNotifications(isAdmin);
+    } catch (e) {
+      // An ordinary user is not allowed to read these, which is not an error
+      // worth shouting about - just hide the panel.
+      box.closest('.card').hidden = true;
+    }
+  }
+
+  function renderNotifications(isAdmin) {
+    const box = $('#notifyBox');
+    const n = state.notify;
+    if (!box || !n) return;
+    const dis = isAdmin ? '' : 'disabled';
+
+    const toggle = $('[data-act="toggle-notify"]');
+    if (toggle) {
+      toggle.textContent = n.enabled ? 'On' : 'Off';
+      toggle.setAttribute('aria-pressed', String(!!n.enabled));
+    }
+
+    const types = n.event_types || {};
+
+    // Everything below the master switch is hidden until alerts are actually
+    // on. Asked for, and right: a page of mail-server fields is noise to
+    // somebody who has not decided they want alerts yet.
+    //
+    // The exception is the moment of turning them on. The settings have to be
+    // fillable *before* they can be enabled - the server refuses to enable a
+    // configuration that could not deliver - so pressing the switch reveals the
+    // form even though nothing is saved yet.
+    if (!n.enabled && !state.notifyExpanded) {
+      box.innerHTML = `
+        <p class="zd-sub">Turn <strong>Send alerts</strong> on to choose what to be
+        told about and where to send it.</p>`;
+      return;
+    }
+
+    const pending = !n.enabled;
+
+    box.innerHTML = `
+      ${pending ? `<div class="note">Fill these in and press <strong>Save alerts</strong>
+        to switch them on. Nothing is sent until then.</div>` : ''}
+      <h3 class="notify-head">What to tell me about</h3>
+      <div class="exc-list">
+        ${Object.keys(types).map(key => `
+          <label class="exc-row notify-row">
+            <input type="checkbox" data-ev="${esc(key)}"
+                   ${n.events[key] ? 'checked' : ''} ${dis}>
+            <span class="exc-name">${esc(types[key].label)}
+              <small class="field-hint">${esc(types[key].help)}</small>
+            </span>
+          </label>`).join('')}
+      </div>
+
+      <h3 class="notify-head">Where to send it</h3>
+      <div class="notify-grid">
+        <label class="field">
+          <span>Send to</span>
+          <input type="text" id="ntTo" value="${esc((n.email.to_addrs || []).join(', '))}"
+                 placeholder="you@example.com" autocomplete="off" ${dis}>
+          <small class="field-hint">Separate several addresses with commas.</small>
+        </label>
+        <label class="field">
+          <span>Mail server</span>
+          <input type="text" id="ntHost" value="${esc(n.email.host || '')}"
+                 placeholder="smtp.gmail.com" autocomplete="off" ${dis}>
+        </label>
+        <label class="field">
+          <span>Port</span>
+          <input type="number" id="ntPort" value="${esc(String(n.email.port || 587))}" ${dis}>
+        </label>
+        <label class="field">
+          <span>Encryption</span>
+          <select id="ntSec" ${dis}>
+            ${NOTIFY_SECURITY.map(([v, l]) =>
+              `<option value="${v}"${n.email.security === v ? ' selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="ntUser" value="${esc(n.email.username || '')}"
+                 autocomplete="off" ${dis}>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="ntPass" value="" autocomplete="new-password"
+                 placeholder="${n.email.password_set ? 'Unchanged' : ''}" ${dis}>
+          <small class="field-hint">${n.email.password_set
+            ? 'Leave empty to keep the password you already saved.'
+            : 'With Gmail this is an app password, not your normal one.'}</small>
+        </label>
+        <label class="field">
+          <span>From</span>
+          <input type="text" id="ntFrom" value="${esc(n.email.from_addr || '')}"
+                 placeholder="pi@example.com" autocomplete="off" ${dis}>
+        </label>
+      </div>
+
+      <label class="exc-row notify-row">
+        <input type="checkbox" id="ntQuiet" ${n.quiet_hours.enabled ? 'checked' : ''} ${dis}>
+        <span class="exc-name">Stay quiet overnight
+          <small class="field-hint">From ${esc(n.quiet_hours.start)} to ${esc(n.quiet_hours.end)}.
+          Anything urgent is still sent — it would be no use in the morning.</small>
+        </span>
+      </label>
+
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="test-notify" ${dis}>Send a test email</button>
+        <button class="btn btn-primary" type="button" data-act="save-notify" ${dis}>Save alerts</button>
+      </div>`;
+
+    if (!isAdmin) return;
+    box.querySelector('[data-act="save-notify"]').onclick = () => saveNotifications();
+    box.querySelector('[data-act="test-notify"]').onclick = testNotifications;
+  }
+
+  function readNotifyForm() {
+    const val = (id) => { const el = $(id); return el ? el.value.trim() : ''; };
+    const num = (id, fallback) => {
+      const el = $(id);
+      const v = el ? Number(el.value) : NaN;
+      return Number.isFinite(v) ? v : fallback;
+    };
+    const n = state.notify;
+    const events = {};
+    document.querySelectorAll('#notifyBox [data-ev]').forEach(cb => {
+      // A checkbox disabled for want of a thermometer is left out entirely, so
+      // the stored preference survives. Add an SW4 later and the choice the
+      // user originally made comes back rather than having been quietly wiped.
+      if (cb.disabled) return;
+      events[cb.dataset.ev] = cb.checked;
+    });
+    const body = {
+      events,
+      quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
+      email: {
+        host: val('#ntHost'),
+        port: num('#ntPort', 587),
+        security: val('#ntSec') || 'starttls',
+        username: val('#ntUser'),
+        from_addr: val('#ntFrom'),
+        to_addrs: val('#ntTo').split(',').map(s => s.trim()).filter(Boolean),
+      },
+    };
+    // An empty box means "keep what is saved", not "clear it" - the browser is
+    // never given the password, so it cannot send it back.
+    const pass = val('#ntPass');
+    if (pass) body.email.password = pass;
+    return body;
+  }
+
+  async function saveNotifications(enabledOverride) {
+    const body = readNotifyForm();
+    // Saving from the expanded form means "I want these on", which is the only
+    // way to enable them: the toggle alone cannot, because the server rightly
+    // refuses a configuration that could not deliver.
+    body.enabled = enabledOverride !== undefined ? enabledOverride : true;
+    try {
+      state.notify = await Nobo.api.setNotifications(body);
+      state.notifyExpanded = !!state.notify.enabled;
+      Nobo.toast(state.notify.enabled ? 'Alerts are on' : 'Alerts are off');
+      renderNotifications(true);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+    }
+  }
+
+  function toggleNotifications() {
+    const n = state.notify;
+    if (!n) return;
+    if (n.enabled) {
+      state.notifyExpanded = false;
+      saveNotifications(false);
+      return;
+    }
+    // Reveal the form rather than trying to save straight away, which would
+    // fail for anybody who has not entered a mail server yet.
+    state.notifyExpanded = true;
+    renderNotifications(true);
+  }
+
+  async function testNotifications() {
+    const btn = $('#notifyBox [data-act="test-notify"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+      const res = await Nobo.api.testNotification(readNotifyForm());
+      Nobo.toast(`Sent to ${(res.sent_to || []).join(', ')}. Check your inbox.`);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Send a test email'; }
+    }
   }
 
   /* ------------------------------------------------------------------

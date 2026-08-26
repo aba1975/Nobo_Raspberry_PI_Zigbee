@@ -30,6 +30,8 @@ import pynobo
 import auth
 import away_schedule
 import config_persistence
+import notifications
+import notify_watch
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +59,17 @@ DEMO_SOFTWARE_VERSION = "1.4.0 (Simulated)"  # Software version shown in demo mo
 
 # Demo mode zone data - 8 grouped zones with realistic Norwegian indoor temperatures
 # Hardcoded defaults (used on first run or if the persisted file is missing/corrupt).
+#
+# The temperatures here are deliberately sparse, because that is the truth about
+# this hardware: of the 25 models pynobo knows, only the SW4 control panel has a
+# thermometer. An NTB-2R controls temperature perfectly well without ever telling
+# the hub what the room is. This file used to give every NTB-2R zone a reading,
+# which made the demo house look like a fully instrumented building and is not
+# what anybody's cabin looks like.
+#
+# One SW4 is included, in the Living Area, so the features that do need a reading
+# can still be seen working - and so the difference between a measured room and
+# an unmeasured one is visible side by side.
 _DEFAULT_DEMO_ZONES = [
     {
         "zone_id": "1",
@@ -65,7 +78,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Large Bathroom"],
         "components": ["210000016247"],  # NTB-2R device
         "component_names": ["Large Bathroom Heater"],
-        "current_temp": 24.2,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 24.0,
         "eco_temp": 21.0,
         "mode": "comfort",
@@ -78,7 +91,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Small Bathroom"],
         "components": ["210000016248"],  # NTB-2R device
         "component_names": ["Small Bathroom Heater"],
-        "current_temp": 23.8,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 23.5,
         "eco_temp": 20.5,
         "mode": "comfort",
@@ -91,7 +104,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Hallway"],
         "components": ["000000016249"],  # NTB-2R device (000-prefix)
         "component_names": ["Hallway Heater"],
-        "current_temp": 21.5,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 21.0,
         "eco_temp": 19.0,
         "mode": "normal",
@@ -115,9 +128,11 @@ _DEFAULT_DEMO_ZONES = [
         "name": "Living Area",
         "icon": "🍳🛋️",
         "rooms": ["Kitchen", "Living Room"],
-        "components": ["160004028114", "160004028115"],  # R80 RDC 700 devices
-        "component_names": ["Kitchen Heater", "Living Room Heater"],
-        "current_temp": None,  # R80 has no built-in temperature sensor
+        "components": ["160004028114", "160004028115", "234000012006"],  # 2x R80 RDC 700 + an SW4 panel
+        "component_names": ["Kitchen Heater", "Living Room Heater", "Living Room Panel"],
+        # The only measured room in the demo house, because the SW4 is the only
+        # model in the range that carries a thermometer.
+        "current_temp": 20.4,
         "comfort_temp": 21.0,
         "eco_temp": 19.0,
         "mode": "normal",
@@ -156,7 +171,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Laundry Room"],
         "components": ["000000016250", "160004028120"],  # Mixed: NTB-2R + R80 RDC 700
         "component_names": ["Laundry Heater", "Drying Area Controller"],
-        "current_temp": 18.5,  # NTB-2R provides temperature reading
+        "current_temp": None,  # neither model reports a temperature
         "comfort_temp": 22.0,
         "eco_temp": 18.0,
         "mode": "normal",
@@ -174,6 +189,28 @@ if _loaded_zones is not None:
 else:
     DEMO_ZONES = copy.deepcopy(_DEFAULT_DEMO_ZONES)
     logger.info("Demo zones: using hardcoded defaults (no persisted store found)")
+
+
+def _drop_impossible_demo_temperatures(zones: list) -> int:
+    """
+    Strip room temperatures from demo zones whose devices cannot measure one.
+
+    Earlier versions of this file gave every NTB-2R zone a reading, which is not
+    something an NTB-2R can produce. Anybody who ran those versions has that
+    fiction saved in ``data/demo_zones.json``, where it would outlive the fix and
+    contradict the capability the same zone now reports.
+
+    Cheap to repair and self-healing, so it is done on load rather than by
+    editing files on individual machines.
+    """
+    fixed = 0
+    for zone in zones:
+        if zone.get("current_temp") is None:
+            continue
+        if not any(model_has_temp_sensor(c) for c in zone.get("components", [])):
+            zone["current_temp"] = None
+            fixed += 1
+    return fixed
 
 # Away temperature (set by Nobø, not configurable)
 AWAY_TEMPERATURE = 7.0
@@ -219,6 +256,13 @@ main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 websocket_lock = asyncio.Lock()  # Lock for thread-safe websocket list access
 connection_lock = threading.Lock()  # Lock for thread-safe hub_connected access
 log_lock = threading.Lock()  # Lock for thread-safe command log access
+
+# Notifications. The notifier decides what is worth saying and sends it on a
+# worker thread; the watcher turns a stream of zone snapshots into events. Both
+# are created here so every code path can reach them, and both are harmless
+# until the user turns notifications on in Settings.
+notifier = notifications.Notifier()
+zone_watcher = notify_watch.ZoneWatcher(notifier=notifier)
 
 # Command log buffer — keeps the last 500 entries
 command_log: deque = deque(maxlen=500)
@@ -300,6 +344,39 @@ def detect_device_type(serial: str) -> tuple[str, bool, bool]:
     
     # Default for unknown models
     return ("Unknown", False, False)
+
+
+def model_has_temp_sensor(serial: str) -> bool:
+    """
+    Whether this model measures room temperature and reports it to the hub.
+
+    This is the difference between an alert that can fire and one that never
+    will, so it is read from pynobo's own model table rather than guessed.
+
+    It is worth knowing how lopsided the answer is: of the 25 models pynobo
+    knows, exactly one — the SW4 control panel — has a thermometer. Every
+    heater receiver and thermostat, including the NTB-2R and the R80 RDC 700,
+    controls temperature without ever measuring it for the hub. A house can
+    therefore be fully working and report no temperature at all, which is why
+    the temperature-based alerts have to be offered conditionally instead of
+    sitting there looking available.
+    """
+    serial_clean = str(serial).replace(' ', '').strip()
+    if len(serial_clean) < 3:
+        return False
+    model = pynobo.nobo.MODELS.get(serial_clean[:3])
+    return bool(model and getattr(model, "has_temp_sensor", False))
+
+
+# Repair any saved demo house that predates the discovery above. Done here
+# rather than at the load site because it needs model_has_temp_sensor, and in
+# memory only - the corrected values persist the next time anything saves.
+_repaired = _drop_impossible_demo_temperatures(DEMO_ZONES)
+if _repaired:
+    logger.info(
+        "Demo zones: cleared %d invented room temperature(s) from devices that cannot measure one",
+        _repaired,
+    )
 
 
 # The hub protocol is space-delimited, so a space inside a name would break the
@@ -434,6 +511,12 @@ async def lifespan(app: FastAPI):
         local_timezone_name(),
     )
     main_event_loop = asyncio.get_running_loop()
+
+    # Wire up notifications. Done here rather than at import time so that tests
+    # importing the module do not pick up whatever is in the real data dir.
+    notifier.log_hook = add_log_entry
+    refresh_notifier_identity()
+
     try:
         await connect_to_hub()
     except Exception as e:
@@ -444,12 +527,17 @@ async def lifespan(app: FastAPI):
     reconnect_task = asyncio.create_task(reconnect_loop())
     # Start background away-schedule checker
     schedule_task = asyncio.create_task(away_schedule_loop())
+    # Watches for cold rooms and silent thermostats. Separate from the hub push
+    # because both are conditions that persist rather than events that arrive -
+    # a room that stopped reporting sends nothing to react to.
+    watch_task = asyncio.create_task(notification_watch_loop())
 
     yield
     
     # Shutdown
     reconnect_task.cancel()
     schedule_task.cancel()
+    watch_task.cancel()
     logger.info("Shutting down server...")
     # Close all websocket connections
     for ws in connected_websockets:
@@ -1196,6 +1284,24 @@ async def reconnect_loop():
             attempt += 1
             logger.warning(f"Hub disconnected — reconnect attempt #{attempt} (next retry in {interval}s)")
             add_log_entry("error", f"Hub disconnected — reconnect attempt #{attempt} (delay: {interval}s)", source="hub")
+
+            # Alert once, on the way down, not on every retry. Deliberately not
+            # on the first attempt: a hub that blinks and comes straight back is
+            # not worth an email, and the retry is usually quicker than the mail.
+            if attempt >= 2:
+                notifier.set_condition(
+                    "hub_offline", "hub_offline", True,
+                    subject="Lost contact with the hub",
+                    body=(
+                        "The Raspberry Pi can no longer reach the Nobø hub.\n\n"
+                        "While this lasts, nothing can be switched or scheduled — not by this\n"
+                        "system and not by the Nobø app. Any override already on the hub stays\n"
+                        "in force, and heaters keep following whatever they were last told.\n\n"
+                        "Usually this is the hub losing power or the network going down.\n\n"
+                        "Reconnection is being retried automatically."
+                    ),
+                    severity="critical",
+                )
             try:
                 await connect_to_hub()
                 with connection_lock:
@@ -1203,6 +1309,16 @@ async def reconnect_loop():
                 if reconnected:
                     logger.info(f"Hub reconnected successfully after {attempt} attempt(s)")
                     add_log_entry("received", f"Hub reconnected after {attempt} attempt(s)", source="hub")
+                    if notifier.is_raised("hub_offline"):
+                        notifier.set_condition(
+                            "hub_offline", "hub_offline", False,
+                            recovery_event_type="hub_online",
+                            recovery_subject="The hub is back",
+                            recovery_body=(
+                                f"Contact with the Nobø hub was restored after {attempt} attempt(s).\n"
+                                "Everything can be controlled again."
+                            ),
+                        )
                     interval = MIN_INTERVAL  # Reset on success
                     attempt = 0
                     await broadcast_zone_update()
@@ -1243,6 +1359,15 @@ async def broadcast_zone_update():
     
     try:
         zones_data = get_zones_data()
+
+        # Every hub push is also the chance to notice that somebody else moved
+        # something. Guarded, because a fault in the notifier must never stop
+        # the browsers from being updated.
+        try:
+            zone_watcher.observe(zones_data)
+        except Exception as exc:
+            logger.error("Notification watcher failed on a hub update: %s", exc)
+
         message = {
             "type": "zones_update",
             "data": zones_data,
@@ -1266,6 +1391,59 @@ async def broadcast_zone_update():
                 
     except Exception as e:
         logger.error(f"Error broadcasting zone update: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def refresh_notifier_identity() -> None:
+    """Give the notifier the name the user chose, so alerts are recognisable."""
+    try:
+        site = config_persistence.load_site()
+        name = (site.get("name") or "").strip()
+        notifier.site_name = name or "Nobø Control"
+    except Exception:
+        notifier.site_name = "Nobø Control"
+
+
+def note_local_write(zone_id: Any, field_name: str, value: Any) -> None:
+    """
+    Record that this application made a change, before it is sent.
+
+    This is the whole basis of "somebody else changed it": the hub tells us what
+    changed but never who, so the only way to recognise our own echo is to have
+    written it down first. Called before the hub command, because the push can
+    come back faster than the call returns.
+    """
+    try:
+        zone_watcher.record_local_write(str(zone_id), field_name, value)
+    except Exception as exc:
+        logger.debug("Could not record a local write: %s", exc)
+
+
+async def notification_watch_loop():
+    """
+    Re-check the house every minute for changes made somewhere else.
+
+    The hub pushes most changes, and ``broadcast_zone_update`` observes those as
+    they arrive. This loop is the safety net for anything that does not produce
+    a push — a missed message, or a reconnection that resynchronised quietly.
+    """
+    INTERVAL = 60
+    while True:
+        await asyncio.sleep(INTERVAL)
+        try:
+            if not notifier.settings.get("enabled"):
+                continue
+            with connection_lock:
+                connected = hub_connected
+            if connected:
+                zone_watcher.observe(get_zones_data())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Notification watch loop error: %s", exc)
 
 
 def get_current_schedule_mode(zone_id: str) -> str:
@@ -1385,6 +1563,10 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 'supports_eco': any_supports_temp,
                 'supports_temp_adjust': any_supports_temp,
                 'has_manual_devices': any_manual,
+                # Whether anything in this room can measure the temperature. The
+                # demo house deliberately contains both kinds, so the UI can be
+                # exercised without a hub.
+                'has_temp_sensor': any(model_has_temp_sensor(c) for c in demo_zone['components']),
             })
         return zones
     
@@ -1465,6 +1647,11 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 'supports_eco': any_supports_temp,
                 'supports_temp_adjust': any_supports_temp,
                 'has_manual_devices': any_manual,
+                # Read from the model table rather than from whether a reading
+                # has arrived, so a room is known to be unmeasurable straight
+                # away instead of after waiting for a temperature that is never
+                # coming.
+                'has_temp_sensor': any(model_has_temp_sensor(c) for c in zone_components),
             })
     except Exception as e:
         logger.error(f"Error getting zones data: {e}")
@@ -1744,12 +1931,183 @@ async def update_site(request: Request, body: SiteUpdate):
 
     config_persistence.save_site({"name": cleaned, "show_on_login": show})
 
+    # Alerts are signed with the system name, so keep the notifier in step.
+    refresh_notifier_identity()
+
     add_log_entry(
         "sent",
         f"System renamed to '{cleaned}'" if cleaned else "System name cleared",
         source="api",
     )
     return site_settings()
+
+
+# ---------------------------------------------------------------------------
+# Notification settings
+# ---------------------------------------------------------------------------
+# Admin only, all three. The settings hold a mail password and decide where
+# alerts about this building are sent, which is not something an ordinary
+# account should be able to read, redirect or silence.
+
+class NotificationEmail(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    security: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    from_addr: Optional[str] = None
+    to_addrs: Optional[List[str]] = None
+
+
+class NotificationUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    email: Optional[NotificationEmail] = None
+    events: Optional[Dict[str, bool]] = None
+    min_minutes_between: Optional[int] = None
+    quiet_hours: Optional[Dict[str, Any]] = None
+
+
+def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
+    """
+    Fold a partial update onto what is stored.
+
+    Absent fields keep their value so a client can flip one toggle without
+    having to resend the whole configuration — and, crucially, without having
+    to know the password, which it is never given.
+    """
+    current = notifications.load_settings()
+    if body.enabled is not None:
+        current["enabled"] = bool(body.enabled)
+    if body.events:
+        for key, value in body.events.items():
+            if key in notifications.EVENT_TYPES:
+                current["events"][key] = bool(value)
+    for field_name in ("min_minutes_between",):
+        value = getattr(body, field_name)
+        if value is not None:
+            current[field_name] = value
+    if body.quiet_hours is not None:
+        current["quiet_hours"] = body.quiet_hours
+    if body.email is not None:
+        for field_name in ("host", "port", "security", "username", "from_addr", "to_addrs"):
+            value = getattr(body.email, field_name)
+            if value is not None:
+                current["email"][field_name] = value
+        # An omitted password means "keep the one you have". An empty string is
+        # an explicit clear, which is how the user removes it.
+        if body.email.password is not None:
+            current["email"]["password"] = body.email.password
+    return current
+
+
+def _temperature_capability() -> Dict[str, Any]:
+    """
+    Whether anything in this installation measures room temperature.
+
+    No alert depends on this any more — the ones that did were removed, because
+    only the SW4 reports a temperature and it is no longer sold. It is still
+    reported so the interface can explain a blank room temperature instead of
+    leaving it looking broken.
+    """
+    try:
+        zones = get_zones_data()
+    except Exception:
+        zones = []
+    with_sensor = [z["name"] for z in zones if z.get("has_temp_sensor")]
+    return {
+        "available": bool(with_sensor),
+        "zones_with_sensor": with_sensor,
+        "zones_total": len(zones),
+        "sensor_models": sorted(
+            m.name for m in pynobo.nobo.MODELS.values()
+            if getattr(m, "has_temp_sensor", False)
+        ),
+    }
+
+
+@app.get("/api/notifications")
+async def get_notifications(request: Request):
+    """The current notification settings, with the password redacted."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    out = notifications.public_settings()
+    out["temperature"] = _temperature_capability()
+    return out
+
+
+@app.put("/api/notifications")
+async def update_notifications(request: Request, body: NotificationUpdate):
+    """Save notification settings and apply them immediately."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    merged = _merge_notification_body(body)
+
+    # Turning it on with settings that cannot deliver would look like it worked
+    # and then quietly never send anything, which is the worst outcome for a
+    # feature whose entire job is to speak up.
+    if merged.get("enabled"):
+        problems = notifications.validate_email_config(merged)
+        if problems:
+            raise HTTPException(status_code=400, detail=" ".join(problems))
+
+    saved = notifications.save_settings(merged)
+    notifier.reload(saved)
+    refresh_notifier_identity()
+
+    add_log_entry(
+        "sent",
+        "Notifications turned on" if saved["enabled"] else "Notifications turned off",
+        command="notifications update",
+        source="api",
+    )
+    out = notifications.public_settings(saved)
+    out["temperature"] = _temperature_capability()
+    return out
+
+
+@app.post("/api/notifications/test")
+async def test_notification(request: Request, body: Optional[NotificationUpdate] = None):
+    """
+    Send a test email, reporting the real reason if it fails.
+
+    Accepts the settings in the body so the user can test before saving — the
+    alternative is making them save a broken configuration to find out it is
+    broken. The error text comes straight from the mail server, because
+    "authentication failed" and "name or service not known" need different
+    fixes and a generic failure message helps nobody.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    cfg = _merge_notification_body(body) if body is not None else notifications.load_settings()
+
+    try:
+        await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                None, notifications.send_test, cfg, notifier.site_name
+            ),
+            timeout=notifications.SEND_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        add_log_entry("error", "Test notification timed out", source="api")
+        raise HTTPException(
+            status_code=504,
+            detail=f"The mail server did not answer within {notifications.SEND_TIMEOUT_SECONDS} seconds. "
+                   "Check the server address and port.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        # Deliberate status codes must reach the browser as themselves, not be
+        # flattened into a 500 by the catch-all below.
+        raise
+    except Exception as exc:
+        add_log_entry("error", f"Test notification failed: {exc}", source="api")
+        raise HTTPException(status_code=502, detail=f"The mail server refused it: {exc}")
+
+    add_log_entry("sent", "Test notification sent", command="notifications test", source="api")
+    return {"status": "success", "sent_to": cfg["email"]["to_addrs"]}
 
 
 @app.get("/manifest.webmanifest")
@@ -2114,6 +2472,11 @@ async def set_zone_override(zone_id: str, mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
+    # Written down before the command goes out, because the hub can push the
+    # change back to us faster than this function returns. Without this, every
+    # change we make would be reported as "changed from another app".
+    note_local_write(zone_id, "mode", mode)
+
     try:
         # Demo mode - update simulated data
         if DEMO_MODE:
@@ -2248,6 +2611,12 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
     if not connected:
         raise HTTPException(status_code=503, detail="Hub not connected")
     
+    # Recorded up front so our own change is not mistaken for somebody else's.
+    if temps.comfort is not None:
+        note_local_write(zone_id, "comfort", temps.comfort)
+    if temps.eco is not None:
+        note_local_write(zone_id, "eco", temps.eco)
+
     try:
         # Demo mode - validate device type from DEMO_ZONES
         if DEMO_MODE:
@@ -2369,6 +2738,9 @@ async def set_global_override(mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
+    # One record covering every zone, since a global override moves them all.
+    note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
     try:
         # Demo mode - update all simulated zones
         if DEMO_MODE:
@@ -2686,6 +3058,10 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         logger.warning(f"Cannot apply global mode '{mode}': hub not connected")
         return
 
+    # The scheduler changes every zone too, so the same record is needed here or
+    # a planned away period would arrive as "somebody changed it".
+    note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
     if DEMO_MODE:
         for demo_zone in DEMO_ZONES:
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
@@ -2785,6 +3161,14 @@ async def away_schedule_loop():
                     await _apply_global_mode_internal("home", source="schedule")
                     global_mode_source = "manual"
                     config_persistence.save_server_state({"global_mode_source": global_mode_source})
+                    notifier.notify(
+                        "away_period",
+                        "The away period has ended",
+                        "The planned away period is over. Every room is back on its normal\n"
+                        "weekly schedule, so the place will be warming up again.",
+                        severity="info",
+                        key="away_period_end",
+                    )
                 except Exception as e:
                     logger.error(f"Error applying Home on schedule expiry: {e}")
             last_active = False
@@ -2800,6 +3184,16 @@ async def away_schedule_loop():
                 await _apply_global_mode_internal("away", source="schedule")
                 global_mode_source = "schedule"
                 config_persistence.save_server_state({"global_mode_source": global_mode_source})
+                kept = config_persistence.load_away_exceptions()
+                notifier.notify(
+                    "away_period",
+                    "The away period has started",
+                    "The planned away period has begun. Every room has gone to Away, which\n"
+                    f"is a fixed {AWAY_TEMPERATURE:.0f}°C anti-frost setting.\n"
+                    + (f"\n{len(kept)} room(s) are held on Eco instead, as configured.\n" if kept else ""),
+                    severity="info",
+                    key="away_period_start",
+                )
             except Exception as e:
                 logger.error(f"Error applying Away on schedule activation: {e}")
 

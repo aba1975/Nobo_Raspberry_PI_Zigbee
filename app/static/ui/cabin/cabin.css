@@ -643,3 +643,32 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* The 7 C explanation, shown next to Away wherever Away can be chosen. */
 .away-hint { margin: .7rem 0 0; }
 .sched-away-note { margin: .55rem 0 0; }
+
+/* ------------------------------------------------------------ notifications
+   A long form that most people fill in once and never open again, so it is
+   grouped under plain headings rather than hidden behind tabs. */
+.notify-head {
+  margin: 1.4rem 0 .2rem; font-size: .8rem; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint);
+}
+.notify-head:first-child { margin-top: .4rem; }
+.notify-grid {
+  display: grid; gap: .9rem; margin-top: .7rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+/* The event list needs room for an explanation under each label, so unlike the
+   away-exception rows these are top-aligned rather than centred. */
+.notify-row { align-items: start; grid-template-columns: auto 1fr; }
+.notify-row .exc-name { display: grid; gap: .15rem; font-weight: 600; }
+.notify-row .field-hint { font-weight: 400; }
+.notify-row input[type="checkbox"] { margin-top: .15rem; }
+/* An alert that cannot fire on this hardware is shown, greyed, with the reason
+   next to it - rather than hidden, which would leave the user wondering, or
+   enabled, which would be a lie. */
+.notify-row.is-blocked { opacity: .55; }
+.badge-need {
+  background: var(--m-away-wash); color: var(--m-away);
+  border-color: color-mix(in srgb, var(--m-away) 35%, transparent);
+  margin-left: .4rem; font-size: .66rem;
+}
+.notify-head .badge-need { text-transform: none; letter-spacing: 0; }

@@ -74,6 +74,14 @@ const Nobo = (() => {
     site:    ()     => req('/api/site'),
     setSite: (body) => req('/api/site', { method: 'PUT', body: JSON.stringify(body) }),
 
+    // Alerts. Admin only, and the mail password is never returned - the server
+    // sends `password_set: true` instead, so it cannot leak back through here.
+    notifications:    ()     => req('/api/notifications'),
+    setNotifications: (body) => req('/api/notifications', {
+                                 method: 'PUT', body: JSON.stringify(body) }),
+    testNotification: (body) => req('/api/notifications/test', {
+                                 method: 'POST', body: JSON.stringify(body || {}) }),
+
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {
