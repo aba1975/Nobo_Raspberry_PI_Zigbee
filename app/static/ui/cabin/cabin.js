@@ -1846,20 +1846,59 @@
     }
 
     const types = n.event_types || {};
+    const temp = n.temperature || { available: false, zones_with_sensor: [], sensor_models: [] };
+    // Three of the alerts need a room temperature, and most Nobø hardware never
+    // reports one. Offering them anyway would leave the owner believing the
+    // cabin is watched when nothing is watching it, so they are disabled and
+    // the reason is stated.
+    const sensorNote = temp.available
+      ? `<div class="note">Temperature is measured in:
+         ${esc(temp.zones_with_sensor.join(', '))}. Alerts marked
+         <em>needs a thermometer</em> work in those rooms only.</div>`
+      : `<div class="note note-warn">
+         <strong>None of your devices measure room temperature.</strong>
+         Nobø heater receivers and thermostats — the NTB-2R and R80 RDC 700 among them —
+         control the temperature without ever reporting it to the hub. Of the models this
+         software knows, only ${esc((temp.sensor_models || []).join(', ') || 'the SW4')}
+         has a thermometer.<br><br>
+         So the three alerts below marked <em>needs a thermometer</em> cannot fire here,
+         and are switched off. Everything else works normally — in particular
+         <strong>“A room is left switched off”</strong>, which is the frost risk that can be
+         seen without one.</div>`;
+
+    const evKeys = Object.keys(types);
     box.innerHTML = `
+      ${sensorNote}
       <h3 class="notify-head">What to tell me about</h3>
       <div class="exc-list">
-        ${Object.keys(types).map(key => `
-          <label class="exc-row notify-row">
+        ${evKeys.map(key => {
+          const blocked = types[key].needs_sensor && !temp.available;
+          return `
+          <label class="exc-row notify-row${blocked ? ' is-blocked' : ''}">
             <input type="checkbox" data-ev="${esc(key)}"
-                   ${n.events[key] ? 'checked' : ''} ${dis}>
+                   ${n.events[key] && !blocked ? 'checked' : ''}
+                   ${dis || (blocked ? 'disabled' : '')}>
             <span class="exc-name">${esc(types[key].label)}
+              ${types[key].needs_sensor
+                ? `<span class="badge badge-need">needs a thermometer</span>` : ''}
               <small class="field-hint">${esc(types[key].help)}</small>
             </span>
-          </label>`).join('')}
+          </label>`;
+        }).join('')}
       </div>
 
-      <h3 class="notify-head">When to call a room cold</h3>
+      <h3 class="notify-head">A room left switched off</h3>
+      <div class="notify-grid">
+        <label class="field">
+          <span>Warn after</span>
+          <input type="number" id="ntOffFor" min="1" max="720" step="1"
+                 value="${esc(String(n.off_for_hours))}" ${dis}>
+          <small class="field-hint">Hours. Off means no heating at all, not even
+          the ${AWAY_TEMP_LABEL()} that Away gives you.</small>
+        </label>
+      </div>
+
+      <h3 class="notify-head">When to call a room cold <span class="badge badge-need">needs a thermometer</span></h3>
       <div class="notify-grid">
         <label class="field">
           <span>Warn below</span>
@@ -1879,6 +1918,19 @@
           <input type="number" id="ntSilent" min="5" max="10080" step="15"
                  value="${esc(String(n.silent_after_minutes))}" ${dis}>
           <small class="field-hint">Minutes without a reading before saying so.</small>
+        </label>
+        <label class="field">
+          <span>Cannot get warm after</span>
+          <input type="number" id="ntReach" min="1" max="720" step="1"
+                 value="${esc(String(n.cannot_reach_hours))}" ${dis}>
+          <small class="field-hint">Hours short of target. Only counts if the room
+          is <em>not</em> climbing, so a slow warm-up from Away is never reported.</small>
+        </label>
+        <label class="field">
+          <span>…and more than</span>
+          <input type="number" id="ntReachMargin" min="0.5" max="20" step="0.5"
+                 value="${esc(String(n.cannot_reach_margin_c))}" ${dis}>
+          <small class="field-hint">Degrees below the target.</small>
         </label>
       </div>
 
@@ -1954,6 +2006,10 @@
     const n = state.notify;
     const events = {};
     document.querySelectorAll('#notifyBox [data-ev]').forEach(cb => {
+      // A checkbox disabled for want of a thermometer is left out entirely, so
+      // the stored preference survives. Add an SW4 later and the choice the
+      // user originally made comes back rather than having been quietly wiped.
+      if (cb.disabled) return;
       events[cb.dataset.ev] = cb.checked;
     });
     const body = {
@@ -1961,6 +2017,9 @@
       cold_threshold_c: num('#ntCold', n.cold_threshold_c),
       cold_for_minutes: num('#ntColdFor', n.cold_for_minutes),
       silent_after_minutes: num('#ntSilent', n.silent_after_minutes),
+      off_for_hours: num('#ntOffFor', n.off_for_hours),
+      cannot_reach_hours: num('#ntReach', n.cannot_reach_hours),
+      cannot_reach_margin_c: num('#ntReachMargin', n.cannot_reach_margin_c),
       quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
       email: {
         host: val('#ntHost'),

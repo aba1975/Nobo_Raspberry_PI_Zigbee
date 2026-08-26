@@ -37,7 +37,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
-| **Alerts by email** | Tells you when the hub goes offline, a room gets cold, a thermostat stops reporting, or something is changed from another app. Every event has its own on/off switch. See [Alerts](#alerts). |
+| **Alerts by email** | Tells you when the hub goes offline, a room is left switched off, or something is changed from another app. Rooms with a thermometer get frost and cannot-get-warm alerts too. Every event has its own on/off switch. See [Alerts](#alerts). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -77,6 +77,14 @@ interface says so rather than pretending the change worked.
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ✅ |
+| **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
+
+**Room temperature is the exception worth knowing about.** Of the 25 device
+models this software knows, only the **SW4** control panel has a thermometer.
+The NTB-2R, the R80 RDC 700 and every other receiver control the temperature
+without reporting it, so a blank room temperature is correct behaviour and not
+a fault. It is not the setpoint, and the app will not substitute one. This
+matters beyond cosmetics: it decides which [alerts](#alerts) can work.
 
 Everything on that list is now implemented in both modes. The one asymmetry is
 device discovery: it asks the hub to listen on its radio for devices in pairing
@@ -257,11 +265,19 @@ Every event has its own switch:
 | --- | --- | --- |
 | **Hub goes offline** | Yes | The Pi cannot reach the hub. Nothing can be controlled, by any app, until it returns. |
 | **Hub comes back** | Yes | Sent after an offline alert, so you know it fixed itself. |
-| **A room is too cold** | Yes | The frost alarm. Threshold and duration are yours to set. |
-| **A thermostat stops reporting** | Yes | The hub has stopped hearing from a device that used to report. |
+| **A room is left switched off** | Yes | A room held Off by its schedule will not heat at all. **The frost alert that works without a thermometer.** |
+| **A room is too cold** | Yes | The frost alarm. Threshold and duration are yours to set. *Needs a thermometer.* |
+| **A room cannot get warm** | Yes | Well below target for 48 hours and not climbing — a window open, or a failed heater. A slow warm-up from Away does not count. *Needs a thermometer.* |
+| **A thermostat stops reporting** | Yes | The hub has stopped hearing from a device that used to report. *Needs a thermometer.* |
 | **Something changed from another app** | Yes | A zone changed and it was not this system that did it. |
 | **An away period starts or ends** | Yes | Confirms a planned trip actually took effect. |
 | **A weekly schedule event starts** | **No** | Every comfort/eco switch in every room. Many a day — a diary, not an alarm. |
+
+> **Most Nobø hardware has no thermometer.** The three alerts marked *needs a
+> thermometer* are disabled automatically unless something in your house
+> actually measures temperature. See [What it can and cannot
+> know](#what-it-can-and-cannot-know) — this is the most important part of this
+> section.
 
 Two settings exist purely so the alerts stay worth reading. **Quiet hours**
 holds back routine news overnight — but never a frost warning, which would be
@@ -273,6 +289,33 @@ on recovery, never repeatedly while it persists.
 This is worth being precise about, because the limits are the hub's and no
 amount of software removes them.
 
+**Almost nothing measures room temperature.** Of the 25 device models this
+software knows, **exactly one — the SW4 control panel — has a thermometer.**
+Heater receivers and thermostats, including the **NTB-2R** and the
+**R80 RDC 700**, control temperature perfectly well without ever reporting it to
+the hub. This was confirmed against real hardware, not assumed.
+
+That single fact decides which alerts are worth offering, so the app checks it
+rather than hoping:
+
+| Alert | Needs a thermometer |
+| --- | --- |
+| Hub offline / back | No |
+| **A room is left switched off** | **No** |
+| Something changed from another app | No |
+| Away period starts / ends | No |
+| Weekly schedule event | No |
+| A room is too cold | **Yes** |
+| A room cannot get warm | **Yes** |
+| A thermostat stops reporting | **Yes** |
+
+If nothing in your house measures temperature, the three that need one are
+**shown greyed out with the reason** and cannot be switched on. They are not
+hidden — that would leave you wondering — and they are certainly not left
+enabled, which would let you believe the cabin was being watched when nothing
+was watching it. Your choices are remembered, so if you ever add an SW4 the
+settings you picked come back.
+
 **Who changed a temperature** is answered *by elimination*. The Nobø override
 struct is `<Id> <Mode> <Type> <End> <Start> <Target> <TargetID>` — there is no
 field for the source. So the server records every write it makes, and anything
@@ -283,22 +326,33 @@ app from another browser, and it does not pretend to.
 **Somebody pressing the button on a thermostat** is not reported at all. The
 component `Status` field is *"not yet implemented — always set to 0"* in the API
 spec, and component-level overrides are *"not yet supported"*. There is no
-signal to listen for.
+signal to listen for, and no way to add one.
 
-**But a switched-off thermostat is still caught**, two ways round:
+So on a house with no thermometers, the honest answer is that a heater switched
+off at the wall **cannot be detected**. What *can* be detected is the same
+mistake made in software — a room left **Off** in its weekly schedule — which is
+why that alert exists and is on by default. Off is worse than Away: it is no
+heating at all, not even the 7 °C anti-frost.
 
-1. `Y02` carries a temperature *or the string `N/A`*, which the hub sends once
-   its stored value "has become too old and outdated". A thermostat that is
-   switched off, loses power or drops off the radio stops reporting and goes
-   `N/A` — that is the **thermostat stops reporting** alert.
-2. The room it was heating gets cold — that is the **room is too cold** alert.
+**"The heater has been running flat out for two days"** is a good instinct and
+the app implements it — as **"a room cannot get warm"** — but it needs a
+thermometer, because the hub never reports whether an element is drawing power.
+Seen from the other side it is the same fact: a room several degrees below its
+target that is *no warmer than it was two days ago* is a room that is losing.
+The threshold is yours to set (48 hours by default).
 
-The second matters more, because it also catches a tripped breaker, a window
-left open, a failed element and a device that was never paired properly. None of
-those would ever appear in any protocol field.
+Crucially, that alert only fires if the room is **not climbing**. Coming back
+from Away in hard frost, a room genuinely can take days to get from 7 °C to
+22 °C — it is working, and it keeps gaining ground, so it stays silent. A room
+with a window open does not gain ground, and that is the difference the alert
+actually tests for.
 
-Rooms that have **never** reported a temperature — a dial-only R80, say — are
-excluded from both, because for them silence is normal rather than a fault.
+**If you want the full set**, the cheapest route is one **Nobø SW4** in each
+room that matters. It pairs to the hub like any other component, and everything
+above starts working in that room the moment it reports. Failing that, a smart
+plug with a local API (Shelly and similar) on the heater circuit would give the
+literal "has it been on for 48 hours" measurement — that is not built here, but
+say the word.
 
 #### Settings
 

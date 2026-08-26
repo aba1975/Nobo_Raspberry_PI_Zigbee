@@ -516,3 +516,216 @@ def test_a_complete_configuration_has_no_complaints():
                   "from_addr": "pi@example.com"},
     }))
     assert problems == []
+
+
+# ---------------------------------------------------------------------------
+# Which alerts need a thermometer
+# ---------------------------------------------------------------------------
+# Of the 25 Nobø models pynobo knows, exactly one measures room temperature.
+# A house of NTB-2Rs and R80 RDC 700s reports nothing at all, so the alerts
+# that depend on a reading have to be marked as such and the ones that do not
+# have to keep working.
+
+def test_the_temperature_alerts_declare_that_they_need_a_sensor():
+    for key in ("room_cold", "sensor_silent", "cannot_reach"):
+        assert notifications.EVENT_TYPES[key]["needs_sensor"] is True, key
+
+
+def test_the_alerts_that_work_without_one_say_so():
+    for key in ("hub_offline", "hub_online", "zone_off",
+                "changed_elsewhere", "away_period", "schedule_event"):
+        assert notifications.EVENT_TYPES[key].get("needs_sensor") is False, key
+
+
+def test_at_least_one_frost_alert_works_without_a_sensor():
+    """Otherwise a typical installation has no frost protection whatsoever."""
+    usable = [k for k, v in notifications.EVENT_TYPES.items()
+              if not v.get("needs_sensor") and v["default"]]
+    assert "zone_off" in usable
+
+
+def test_the_catalogue_exposes_the_flag_to_the_ui():
+    assert notifications.public_settings()["event_types"]["room_cold"]["needs_sensor"] is True
+
+
+# ---------------------------------------------------------------------------
+# A room left switched off — the frost alert that needs no thermometer
+# ---------------------------------------------------------------------------
+
+def off_zone(**kw):
+    return zone(mode="normal", schedule_mode="off", temp=None, **kw)
+
+
+def test_a_room_left_switched_off_is_reported(watcher, sent):
+    watcher.observe([off_zone()])
+    watcher.clock.advance(25 * 3600)
+    watcher.observe([off_zone()])
+    flush(sent)
+    assert len(sent) == 1
+    assert "switched off" in sent[0][0]
+
+
+def test_it_is_reported_even_with_no_temperature_at_all(watcher, sent):
+    """This is the whole point: it works on hardware that measures nothing."""
+    watcher.observe([off_zone()])
+    watcher.clock.advance(25 * 3600)
+    watcher.observe([off_zone()])
+    flush(sent)
+    assert sent, "a house with no thermometers must still get this alert"
+
+
+def test_briefly_switching_a_room_off_is_not_reported(watcher, sent):
+    watcher.observe([off_zone()])
+    watcher.clock.advance(2 * 3600)
+    watcher.observe([zone(mode="normal", schedule_mode="comfort", temp=None)])
+    flush(sent)
+    assert sent == []
+
+
+def test_the_off_alert_explains_that_off_is_below_away(watcher, sent):
+    watcher.observe([off_zone()])
+    watcher.clock.advance(25 * 3600)
+    watcher.observe([off_zone()])
+    flush(sent)
+    assert "not even" in sent[0][1] and "7" in sent[0][1]
+
+
+def test_turning_a_room_back_on_says_so(watcher, sent):
+    watcher.observe([off_zone()])
+    watcher.clock.advance(25 * 3600)
+    watcher.observe([off_zone()])
+    flush(sent)
+    sent.clear()
+    watcher.observe([zone(mode="normal", schedule_mode="comfort", temp=None)])
+    flush(sent)
+    assert len(sent) == 1
+    assert "heating again" in sent[0][0]
+
+
+def test_an_overridden_room_is_not_called_switched_off(watcher, sent):
+    """An override beats the schedule, so the Off in the profile is not in force."""
+    watcher.observe([zone(mode="comfort", schedule_mode="off", temp=None)])
+    watcher.clock.advance(50 * 3600)
+    watcher.observe([zone(mode="comfort", schedule_mode="off", temp=None)])
+    flush(sent)
+    assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# "The heater has been running flat out for two days"
+# ---------------------------------------------------------------------------
+
+def test_a_room_that_cannot_get_warm_is_reported(watcher, sent):
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    watcher.clock.advance(49 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.1)])
+    flush(sent)
+    assert len(sent) == 1
+    assert "cannot get warm" in sent[0][0]
+
+
+def test_a_slow_warm_up_from_away_is_never_reported(watcher, sent):
+    """
+    The case that would otherwise make this alert useless. Going from 7 to 22
+    in hard frost can genuinely take days; that room is working, and the proof
+    is that it keeps gaining ground.
+    """
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=7.0)])
+    temp = 7.0
+    for _ in range(6):                      # six days of slow, real progress
+        watcher.clock.advance(24 * 3600)
+        temp += 2.0
+        watcher.observe([zone(mode="comfort", comfort=22.0, temp=temp)])
+    flush(sent)
+    assert sent == [], "a room that is still climbing is not stuck"
+
+
+def test_a_room_that_stalls_after_warming_is_reported(watcher, sent):
+    """
+    It climbed, then stopped — a window opened partway through.
+
+    Note it takes one further window to be sure: at the first check the room
+    genuinely had gained ground, so the watcher slides forward and judges it
+    again on its most recent progress. That is deliberately conservative.
+    """
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=7.0)])
+    watcher.clock.advance(24 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=13.0)])
+    watcher.clock.advance(49 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=13.2)])   # slides
+    watcher.clock.advance(49 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=13.3)])   # stuck
+    flush(sent)
+    assert len(sent) == 1
+    assert "cannot get warm" in sent[0][0]
+
+
+def test_being_short_of_a_brand_new_target_is_not_a_fault(watcher, notifier, sent):
+    """One second after asking for Comfort, every room is short. That is physics."""
+    notifier.settings["events"]["changed_elsewhere"] = False   # not what this tests
+    watcher.observe([zone(mode="eco", eco=15.0, temp=15.0)])
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=15.0)])
+    watcher.clock.advance(10 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=15.0)])
+    flush(sent)
+    assert sent == []
+
+
+def test_changing_the_target_restarts_the_clock(watcher, notifier, sent):
+    notifier.settings["events"]["changed_elsewhere"] = False   # not what this tests
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    watcher.clock.advance(40 * 3600)
+    # Target raised again before the window elapsed.
+    watcher.observe([zone(mode="comfort", comfort=24.0, temp=12.0)])
+    watcher.clock.advance(20 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=24.0, temp=12.0)])
+    flush(sent)
+    assert sent == []
+
+
+def test_reaching_the_target_clears_it(watcher, sent):
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    watcher.clock.advance(49 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    flush(sent)
+    sent.clear()
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=21.5)])
+    flush(sent)
+    assert len(sent) == 1
+    assert "reached its temperature" in sent[0][0]
+
+
+def test_a_room_close_to_target_is_never_reported(watcher, sent):
+    """A degree short in normal operation is not a fault."""
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=21.0)])
+    watcher.clock.advance(100 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=21.0)])
+    flush(sent)
+    assert sent == []
+
+
+def test_a_room_with_no_thermometer_cannot_be_judged_on_reaching_target(watcher, sent):
+    """The NTB-2R and R80 case: no reading, so no opinion."""
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=None)])
+    watcher.clock.advance(100 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=None)])
+    flush(sent)
+    assert not any("cannot get warm" in s[0] for s in sent)
+
+
+def test_the_alert_says_the_warm_up_case_is_excluded(watcher, sent):
+    """So the user trusts it rather than assuming it fires on every cold snap."""
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    watcher.clock.advance(49 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    flush(sent)
+    assert "keeps rising" in sent[0][1]
+
+
+def test_the_threshold_is_configurable(watcher, notifier, sent):
+    notifier.settings["cannot_reach_hours"] = 6
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    watcher.clock.advance(7 * 3600)
+    watcher.observe([zone(mode="comfort", comfort=22.0, temp=12.0)])
+    flush(sent)
+    assert len(sent) == 1

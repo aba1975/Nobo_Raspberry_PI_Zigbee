@@ -79,6 +79,14 @@ SEND_TIMEOUT_SECONDS = 45
 # ---------------------------------------------------------------------------
 # key -> (label, default_on, explanation shown in the UI)
 #
+# ``needs_sensor`` matters more than it looks. Of the 25 Nobø models pynobo
+# knows, exactly one — the SW4 control panel — measures room temperature. Every
+# heater receiver and thermostat, the NTB-2R and R80 RDC 700 included, controls
+# temperature without ever reporting it. So on a typical installation the
+# temperature-based alerts can never fire, and offering them as if they could is
+# worse than not offering them at all: the owner believes the cabin is watched
+# when nothing is watching it.
+#
 # Defaults are chosen for a cabin that is empty most of the year: the things
 # that mean "go and look" are on, and the things that happen many times a day
 # are off. A notification the user has learned to ignore is worse than none.
@@ -86,38 +94,60 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
     "hub_offline": {
         "label": "Hub goes offline",
         "default": True,
+        "needs_sensor": False,
         "help": "The Pi can no longer reach the hub, so nothing can be controlled remotely.",
     },
     "hub_online": {
         "label": "Hub comes back",
         "default": True,
+        "needs_sensor": False,
         "help": "Sent after an offline alert so you know it fixed itself.",
+    },
+    "zone_off": {
+        "label": "A room is left switched off",
+        "default": True,
+        "needs_sensor": False,
+        "help": "A room whose schedule holds it Off will not heat at all, whatever the "
+                "weather. This is the frost risk that can be seen without a thermometer.",
     },
     "room_cold": {
         "label": "A room is too cold",
         "default": True,
+        "needs_sensor": True,
         "help": "The frost alarm. Catches a switched-off heater, a tripped breaker, "
                 "a window left open and a failed element alike.",
+    },
+    "cannot_reach": {
+        "label": "A room cannot get warm",
+        "default": True,
+        "needs_sensor": True,
+        "help": "The room has been well below its target for a long time and is not "
+                "climbing — a window left open, or a heater that has stopped working. "
+                "Warming up slowly from Away in deep cold does not count.",
     },
     "sensor_silent": {
         "label": "A thermostat stops reporting",
         "default": True,
+        "needs_sensor": True,
         "help": "The hub has stopped receiving temperatures from a device that used to send "
                 "them — typically switched off at the wall, out of power, or off the radio.",
     },
     "changed_elsewhere": {
         "label": "Something is changed from another app",
         "default": True,
+        "needs_sensor": False,
         "help": "A zone's mode or temperature changed and it was not this system that did it.",
     },
     "away_period": {
         "label": "An away period starts or ends",
         "default": True,
+        "needs_sensor": False,
         "help": "Confirms the planned trip actually took effect.",
     },
     "schedule_event": {
         "label": "A weekly schedule event starts",
         "default": False,
+        "needs_sensor": False,
         "help": "Every comfort/eco switch, in every room. Many a day — off unless you want a diary.",
     },
 }
@@ -145,6 +175,20 @@ _DEFAULTS: Dict[str, Any] = {
     # A thermostat may miss a reading without anything being wrong. Hours, not
     # minutes, so a brief radio glitch stays quiet.
     "silent_after_minutes": 180,
+    # A room left switched off will not heat whatever the weather. A day is long
+    # enough that turning a room off to air it is not an incident.
+    "off_for_hours": 24,
+    # How long a room may sit below its target before it counts as unable to
+    # reach it. Two days, because coming back from Away in deep cold genuinely
+    # can take that long - the "and not climbing" test below is what actually
+    # separates a slow warm-up from a fault.
+    "cannot_reach_hours": 48,
+    # How far below target counts as "not there yet".
+    "cannot_reach_margin_c": 3.0,
+    # A room that gained at least this much over the window is warming up, so it
+    # is working, just slowly. This is what stops a legitimate 7 -> 22 recovery
+    # from being reported as a fault.
+    "cannot_reach_rise_c": 1.0,
     "quiet_hours": {"enabled": False, "start": "23:00", "end": "07:00"},
     # A floor on how often the same condition may speak, whatever happens.
     "min_minutes_between": 10,
@@ -204,12 +248,16 @@ def _merge(stored: Any) -> Dict[str, Any]:
         ("cold_for_minutes", 0, 24 * 60),
         ("silent_after_minutes", 5, 7 * 24 * 60),
         ("min_minutes_between", 0, 24 * 60),
+        ("off_for_hours", 1, 30 * 24),
+        ("cannot_reach_hours", 1, 30 * 24),
+        ("cannot_reach_margin_c", 0.5, 20.0),
+        ("cannot_reach_rise_c", 0.0, 20.0),
     ):
         if key in stored:
             try:
                 val = float(stored[key])
                 if lo <= val <= hi:
-                    cfg[key] = val if key == "cold_threshold_c" else int(val)
+                    cfg[key] = val if key.endswith("_c") else int(val)
             except (TypeError, ValueError):
                 pass
 
@@ -282,7 +330,8 @@ def public_settings(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out["email"].pop("password", None)
     out["email"]["password_set"] = bool(cfg["email"].get("password"))
     out["event_types"] = {
-        k: {"label": v["label"], "help": v["help"], "default": v["default"]}
+        k: {"label": v["label"], "help": v["help"], "default": v["default"],
+            "needs_sensor": v.get("needs_sensor", False)}
         for k, v in EVENT_TYPES.items()
     }
     return out

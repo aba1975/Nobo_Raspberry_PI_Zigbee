@@ -83,6 +83,14 @@ class _ZoneMemory:
     ever_reported: bool = False
     last_reading_at: float = 0.0
     cold_since: float = 0.0
+    # Switched-off watchdog.
+    off_since: float = 0.0
+    # Cannot-reach watchdog. The temperature *at the start* of the shortfall is
+    # kept so "is it climbing?" can be answered, which is the whole difference
+    # between a fault and a slow warm-up.
+    short_since: float = 0.0
+    short_start_temp: Optional[float] = None
+    short_target: Optional[float] = None
     seen: bool = True
 
 
@@ -151,8 +159,14 @@ class ZoneWatcher:
             cold_threshold = float(settings.get("cold_threshold_c", 5.0))
             cold_for = float(settings.get("cold_for_minutes", 30)) * 60
             silent_after = float(settings.get("silent_after_minutes", 180)) * 60
+            off_for = float(settings.get("off_for_hours", 24)) * 3600
+            reach_after = float(settings.get("cannot_reach_hours", 48)) * 3600
+            reach_margin = float(settings.get("cannot_reach_margin_c", 3.0))
+            reach_rise = float(settings.get("cannot_reach_rise_c", 1.0))
         except Exception:
             cold_threshold, cold_for, silent_after = 5.0, 1800.0, 10800.0
+            off_for, reach_after = 86400.0, 172800.0
+            reach_margin, reach_rise = 3.0, 1.0
 
         now = self.now_fn()
         first_pass = not self._primed
@@ -189,6 +203,11 @@ class ZoneWatcher:
             mem.comfort = comfort
             mem.eco = eco
 
+            # -- switched off ------------------------------------------------
+            # Needs no thermometer, which is what makes it the useful one on a
+            # house full of NTB-2Rs and R80s.
+            self._check_off(zone_id, name, mem, zone, off_for, now)
+
             # -- temperature-driven conditions ------------------------------
             if temp is not None:
                 mem.ever_reported = True
@@ -196,19 +215,27 @@ class ZoneWatcher:
                 mem.temperature = temp
                 self._check_silent(zone_id, name, mem, silent_after, now, reporting=True)
                 self._check_cold(zone_id, name, mem, temp, zone, cold_threshold, cold_for, now)
+                self._check_cannot_reach(zone_id, name, mem, temp, zone,
+                                         reach_after, reach_margin, reach_rise, now)
             else:
                 # No reading. Either this room never had a sensor, or its
                 # sensor has stopped talking - only the latter is news.
                 if mem.ever_reported:
                     self._check_silent(zone_id, name, mem, silent_after, now, reporting=False)
-                # A room we cannot measure cannot be called cold.
+                # A room we cannot measure cannot be called cold, and cannot be
+                # judged on whether it is reaching its target.
                 self._clear_cold(zone_id, name, mem)
+                mem.short_since = 0.0
+                self.notifier.set_condition("cannot_reach", f"cannot_reach:{zone_id}", False)
 
         # A zone that vanished should not keep an alarm raised forever.
         for zone_id, mem in list(self._zones.items()):
             if not mem.seen:
-                self.notifier.set_condition("room_cold", f"room_cold:{zone_id}", False)
-                self.notifier.set_condition("sensor_silent", f"sensor_silent:{zone_id}", False)
+                for event, key in (("room_cold", "room_cold"),
+                                   ("sensor_silent", "sensor_silent"),
+                                   ("zone_off", "zone_off"),
+                                   ("cannot_reach", "cannot_reach")):
+                    self.notifier.set_condition(event, f"{key}:{zone_id}", False)
                 self._zones.pop(zone_id, None)
 
         self._primed = True
@@ -361,6 +388,128 @@ class ZoneWatcher:
             "eco": _as_float(zone.get("eco_temperature")),
             "away": _as_float(zone.get("away_temperature")),
         }.get(mode)
+
+    def _check_off(self, zone_id: str, name: str, mem: _ZoneMemory,
+                   zone: Dict[str, Any], off_for: float, now: float) -> None:
+        """
+        A room the schedule is holding Off, for long enough to be a mistake.
+
+        This is the one frost-related thing that can be seen on a house with no
+        thermometers anywhere, because it is a fact about the *configuration*
+        rather than about the building. It does not catch a thermostat switched
+        off at the wall — nothing can, the hub is never told — but it does catch
+        the same mistake made in software, which is the half that is visible.
+        """
+        key = f"zone_off:{zone_id}"
+        is_off = zone.get("current_mode") == "normal" and zone.get("schedule_mode") == "off"
+
+        if not is_off:
+            mem.off_since = 0.0
+            self.notifier.set_condition(
+                "zone_off", key, False,
+                recovery_subject=f"{name} is heating again",
+                recovery_body=f"{name} is no longer switched off by its schedule.",
+            )
+            return
+
+        if not mem.off_since:
+            mem.off_since = now
+        if (now - mem.off_since) < off_for and not self.notifier.is_raised(key):
+            return
+
+        hours = int((now - mem.off_since) / 3600)
+        self.notifier.set_condition(
+            "zone_off", key, True,
+            subject=f"{name} has been switched off for {hours} hours",
+            body=(
+                f"{name} is set to Off in its weekly schedule and has been for about\n"
+                f"{hours} hours.\n\n"
+                "Off means no heating at all — not even the 7°C anti-frost that Away\n"
+                "gives you. If there is water anywhere in this room, that is a risk.\n\n"
+                "If this is deliberate, you can turn this alert off under Settings."
+            ),
+            severity="critical",
+            recovery_subject=f"{name} is heating again",
+            recovery_body=f"{name} is no longer switched off by its schedule.",
+        )
+
+    def _check_cannot_reach(self, zone_id: str, name: str, mem: _ZoneMemory, temp: float,
+                            zone: Dict[str, Any], reach_after: float, margin: float,
+                            rise: float, now: float) -> None:
+        """
+        The room is far below its target and is not climbing.
+
+        This is the honest version of "the heater has been running flat out for
+        two days". The hub never reports whether an element is drawing power, so
+        that cannot be measured directly — but a room that is 8 degrees short of
+        its setpoint and no warmer than it was two days ago is the same fact
+        seen from the other side, and it does not care *why*.
+
+        The "not climbing" test is the important half. Coming back from Away in
+        deep cold, a room genuinely can take days to get from 7°C to 22°C. That
+        room is working, and it is gaining ground. A room with a window open is
+        not.
+        """
+        key = f"cannot_reach:{zone_id}"
+        target = self._expected_temp(zone)
+
+        # No target to miss, or close enough: nothing to report.
+        if target is None or temp >= target - margin:
+            mem.short_since = 0.0
+            mem.short_start_temp = None
+            self.notifier.set_condition(
+                "cannot_reach", key, False,
+                recovery_subject=f"{name} has reached its temperature",
+                recovery_body=(
+                    f"{name} is now {temp:.1f}°C, against a target of "
+                    f"{target:.0f}°C." if target is not None else
+                    f"{name} is now {temp:.1f}°C."
+                ),
+            )
+            return
+
+        # A new target restarts the clock: being 10 degrees short one second
+        # after asking for Comfort is not a fault, it is physics.
+        if mem.short_target is not None and target != mem.short_target:
+            mem.short_since = 0.0
+            mem.short_start_temp = None
+        mem.short_target = target
+
+        if not mem.short_since:
+            mem.short_since = now
+            mem.short_start_temp = temp
+            return
+
+        if (now - mem.short_since) < reach_after:
+            return
+
+        gained = temp - (mem.short_start_temp if mem.short_start_temp is not None else temp)
+        if gained >= rise:
+            # Still climbing. Slide the window forward so a long, genuine
+            # recovery keeps being judged on its most recent progress rather
+            # than against a reading from days ago.
+            mem.short_since = now
+            mem.short_start_temp = temp
+            return
+
+        hours = int((now - mem.short_since) / 3600)
+        self.notifier.set_condition(
+            "cannot_reach", key, True,
+            subject=f"{name} cannot get warm: {temp:.1f}°C, wants {target:.0f}°C",
+            body=(
+                f"{name} has been asking for {target:.0f}°C for about {hours} hours and is\n"
+                f"still only {temp:.1f}°C. Over that time it has gained "
+                f"{gained:+.1f}°C, so it is not\nslowly catching up — it is stuck.\n\n"
+                "The heater is almost certainly running continuously and losing. The usual\n"
+                "causes are a window or door left open, a heater that has failed, or a room\n"
+                "that simply has more heater asked of it than it has.\n\n"
+                "Note that a genuine warm-up from Away in hard frost can take days; that\n"
+                "case does not trigger this alert, because the temperature keeps rising."
+            ),
+            severity="critical",
+            recovery_subject=f"{name} has reached its temperature",
+            recovery_body=f"{name} is now {temp:.1f}°C, against a target of {target:.0f}°C.",
+        )
 
 
 def _as_float(value: Any) -> Optional[float]:

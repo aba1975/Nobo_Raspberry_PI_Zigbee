@@ -59,6 +59,17 @@ DEMO_SOFTWARE_VERSION = "1.4.0 (Simulated)"  # Software version shown in demo mo
 
 # Demo mode zone data - 8 grouped zones with realistic Norwegian indoor temperatures
 # Hardcoded defaults (used on first run or if the persisted file is missing/corrupt).
+#
+# The temperatures here are deliberately sparse, because that is the truth about
+# this hardware: of the 25 models pynobo knows, only the SW4 control panel has a
+# thermometer. An NTB-2R controls temperature perfectly well without ever telling
+# the hub what the room is. This file used to give every NTB-2R zone a reading,
+# which made the demo house look like a fully instrumented building and is not
+# what anybody's cabin looks like.
+#
+# One SW4 is included, in the Living Area, so the features that do need a reading
+# can still be seen working - and so the difference between a measured room and
+# an unmeasured one is visible side by side.
 _DEFAULT_DEMO_ZONES = [
     {
         "zone_id": "1",
@@ -67,7 +78,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Large Bathroom"],
         "components": ["210000016247"],  # NTB-2R device
         "component_names": ["Large Bathroom Heater"],
-        "current_temp": 24.2,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 24.0,
         "eco_temp": 21.0,
         "mode": "comfort",
@@ -80,7 +91,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Small Bathroom"],
         "components": ["210000016248"],  # NTB-2R device
         "component_names": ["Small Bathroom Heater"],
-        "current_temp": 23.8,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 23.5,
         "eco_temp": 20.5,
         "mode": "comfort",
@@ -93,7 +104,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Hallway"],
         "components": ["000000016249"],  # NTB-2R device (000-prefix)
         "component_names": ["Hallway Heater"],
-        "current_temp": 21.5,
+        "current_temp": None,  # NTB-2R controls temperature but never reports it
         "comfort_temp": 21.0,
         "eco_temp": 19.0,
         "mode": "normal",
@@ -117,9 +128,11 @@ _DEFAULT_DEMO_ZONES = [
         "name": "Living Area",
         "icon": "🍳🛋️",
         "rooms": ["Kitchen", "Living Room"],
-        "components": ["160004028114", "160004028115"],  # R80 RDC 700 devices
-        "component_names": ["Kitchen Heater", "Living Room Heater"],
-        "current_temp": None,  # R80 has no built-in temperature sensor
+        "components": ["160004028114", "160004028115", "234000012006"],  # 2x R80 RDC 700 + an SW4 panel
+        "component_names": ["Kitchen Heater", "Living Room Heater", "Living Room Panel"],
+        # The only measured room in the demo house, because the SW4 is the only
+        # model in the range that carries a thermometer.
+        "current_temp": 20.4,
         "comfort_temp": 21.0,
         "eco_temp": 19.0,
         "mode": "normal",
@@ -158,7 +171,7 @@ _DEFAULT_DEMO_ZONES = [
         "rooms": ["Laundry Room"],
         "components": ["000000016250", "160004028120"],  # Mixed: NTB-2R + R80 RDC 700
         "component_names": ["Laundry Heater", "Drying Area Controller"],
-        "current_temp": 18.5,  # NTB-2R provides temperature reading
+        "current_temp": None,  # neither model reports a temperature
         "comfort_temp": 22.0,
         "eco_temp": 18.0,
         "mode": "normal",
@@ -309,6 +322,28 @@ def detect_device_type(serial: str) -> tuple[str, bool, bool]:
     
     # Default for unknown models
     return ("Unknown", False, False)
+
+
+def model_has_temp_sensor(serial: str) -> bool:
+    """
+    Whether this model measures room temperature and reports it to the hub.
+
+    This is the difference between an alert that can fire and one that never
+    will, so it is read from pynobo's own model table rather than guessed.
+
+    It is worth knowing how lopsided the answer is: of the 25 models pynobo
+    knows, exactly one — the SW4 control panel — has a thermometer. Every
+    heater receiver and thermostat, including the NTB-2R and the R80 RDC 700,
+    controls temperature without ever measuring it for the hub. A house can
+    therefore be fully working and report no temperature at all, which is why
+    the temperature-based alerts have to be offered conditionally instead of
+    sitting there looking available.
+    """
+    serial_clean = str(serial).replace(' ', '').strip()
+    if len(serial_clean) < 3:
+        return False
+    model = pynobo.nobo.MODELS.get(serial_clean[:3])
+    return bool(model and getattr(model, "has_temp_sensor", False))
 
 
 # The hub protocol is space-delimited, so a space inside a name would break the
@@ -1496,6 +1531,10 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 'supports_eco': any_supports_temp,
                 'supports_temp_adjust': any_supports_temp,
                 'has_manual_devices': any_manual,
+                # Whether anything in this room can measure the temperature. The
+                # demo house deliberately contains both kinds, so the UI can be
+                # exercised without a hub.
+                'has_temp_sensor': any(model_has_temp_sensor(c) for c in demo_zone['components']),
             })
         return zones
     
@@ -1576,6 +1615,11 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 'supports_eco': any_supports_temp,
                 'supports_temp_adjust': any_supports_temp,
                 'has_manual_devices': any_manual,
+                # Read from the model table rather than from whether a reading
+                # has arrived, so a room is known to be unmeasurable straight
+                # away instead of after waiting for a temperature that is never
+                # coming.
+                'has_temp_sensor': any(model_has_temp_sensor(c) for c in zone_components),
             })
     except Exception as e:
         logger.error(f"Error getting zones data: {e}")
@@ -1891,6 +1935,10 @@ class NotificationUpdate(BaseModel):
     cold_for_minutes: Optional[int] = None
     silent_after_minutes: Optional[int] = None
     min_minutes_between: Optional[int] = None
+    off_for_hours: Optional[int] = None
+    cannot_reach_hours: Optional[int] = None
+    cannot_reach_margin_c: Optional[float] = None
+    cannot_reach_rise_c: Optional[float] = None
     quiet_hours: Optional[Dict[str, Any]] = None
 
 
@@ -1910,7 +1958,9 @@ def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
             if key in notifications.EVENT_TYPES:
                 current["events"][key] = bool(value)
     for field_name in ("cold_threshold_c", "cold_for_minutes",
-                       "silent_after_minutes", "min_minutes_between"):
+                       "silent_after_minutes", "min_minutes_between",
+                       "off_for_hours", "cannot_reach_hours",
+                       "cannot_reach_margin_c", "cannot_reach_rise_c"):
         value = getattr(body, field_name)
         if value is not None:
             current[field_name] = value
@@ -1928,12 +1978,42 @@ def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
     return current
 
 
+def _temperature_capability() -> Dict[str, Any]:
+    """
+    Whether this installation can measure temperature at all.
+
+    The answer decides whether three of the alerts are worth offering, so it is
+    computed from the device models rather than from whether a reading happens
+    to have arrived yet. On a house of NTB-2Rs and R80s the answer is no, and
+    the UI needs to say so plainly rather than leaving a frost alarm switched on
+    that can never fire.
+    """
+    try:
+        zones = get_zones_data()
+    except Exception:
+        zones = []
+    with_sensor = [z["name"] for z in zones if z.get("has_temp_sensor")]
+    return {
+        "available": bool(with_sensor),
+        "zones_with_sensor": with_sensor,
+        "zones_total": len(zones),
+        # Named so the UI can tell the user what would fix it. This is read from
+        # pynobo's model table, so it stays right if the table grows.
+        "sensor_models": sorted(
+            m.name for m in pynobo.nobo.MODELS.values()
+            if getattr(m, "has_temp_sensor", False)
+        ),
+    }
+
+
 @app.get("/api/notifications")
 async def get_notifications(request: Request):
     """The current notification settings, with the password redacted."""
     session = _get_session_or_401(request)
     _require_admin(session)
-    return notifications.public_settings()
+    out = notifications.public_settings()
+    out["temperature"] = _temperature_capability()
+    return out
 
 
 @app.put("/api/notifications")
@@ -1962,7 +2042,9 @@ async def update_notifications(request: Request, body: NotificationUpdate):
         command="notifications update",
         source="api",
     )
-    return notifications.public_settings(saved)
+    out = notifications.public_settings(saved)
+    out["temperature"] = _temperature_capability()
+    return out
 
 
 @app.post("/api/notifications/test")
