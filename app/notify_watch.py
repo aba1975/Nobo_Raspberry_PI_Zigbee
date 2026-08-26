@@ -33,11 +33,12 @@ the SW4 reports one, and it is no longer sold. They are not commented out or
 left switched off, because an alert that cannot fire is worse than none — the
 owner believes the cabin is watched when nothing is watching it.
 
-Nor is there any way to see a heater that has lost power. The radio to a
-receiver is one-way, with no acknowledgement and no keep-alive, and the
-component ``Status`` field is "not yet implemented, always 0". The keep-alive in
-this system runs between the Pi and the hub and nowhere else; see
-``notifications.py``.
+Nor is there any way to see a heater that has lost power. Not because the hub
+is deaf — it can hear components during a search (``X00`` / ``Y04``) — but
+because no liveness signal is ever exposed: the component ``Status`` field is
+"not yet implemented, always 0", nothing can be asked, and nothing is pushed
+when a device goes away. The keep-alive in this system runs between the Pi and
+the hub and nowhere else; see ``notifications.py``.
 """
 
 from __future__ import annotations

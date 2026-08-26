@@ -32,10 +32,17 @@ is worth writing them down because they decide the shape of everything here:
 4. **The keep-alive is between this Pi and the hub, and nowhere else.** The
    client sends ``HANDSHAKE`` every 14 seconds and the hub echoes it; if nothing
    comes back within 28 the link is declared dead. That covers the hub losing
-   power or the network dropping, and it is the ``hub_offline`` alert. It says
-   nothing whatsoever about the heaters: the radio to a receiver is one-way,
-   with no acknowledgement and no heartbeat, so a heater switched off at the
-   wall is invisible and always will be.
+   power or the network dropping, and it is the ``hub_offline`` alert.
+
+   It says nothing about the heaters, and the reason is worth stating precisely.
+   The hub is not deaf — ``X00`` starts a receiver search and the hub answers
+   with ``Y04`` for every component it hears, so devices do transmit during
+   pairing. But no *liveness* signal ever reaches this application: the
+   component ``Status`` field is "not yet implemented, always 0", there is no
+   command to ask whether a component is alive, and no unsolicited message
+   reports that one has gone away. Whether a paired NTB-2R beacons on the radio
+   is undocumented and unknowable from here; it also does not matter, because
+   there is no channel through which the answer could arrive.
 
 Which leaves an awkward truth: on this hardware the system cannot detect a cold
 room, a dead heater, or a heater running flat out. What it *can* do is be

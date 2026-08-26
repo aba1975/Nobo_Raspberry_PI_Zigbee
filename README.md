@@ -291,12 +291,34 @@ protection and is not.
 | Link | Keep-alive | So we can tell if… |
 | --- | --- | --- |
 | Pi ↔ hub (network) | **Yes, both ways.** The Pi sends `HANDSHAKE` every 14 s and the hub echoes it. Nothing back within 28 s and the link is declared dead. The hub also UDP-broadcasts every 2 s. | …the **hub** loses power or the network drops. **Within about 30 seconds.** |
-| Hub → heater (radio) | **None. One-way.** No acknowledgement, no heartbeat, and the component `Status` field is *"not yet implemented — always set to 0"*. | …nothing. A **heater** switched off at the wall or without power is **invisible**. |
+| Hub ↔ heater (radio) | **No liveness reporting of any kind.** | …nothing. A **heater** switched off at the wall or without power is **invisible**. |
 
-So your assumption is right for the hub and, unfortunately, wrong for the
-heaters — the hub broadcasts to receivers and never hears back. This is why
-there is no "heater has stopped responding" alert: there is no signal to listen
-for, and there is no way to add one from this end.
+The second row deserves precision, because it is the difference between "no
+heartbeat" and "no way to see a heartbeat", and only one of those is provable
+from the specification.
+
+The hub is **not** deaf. `X00` starts a *receiver search*, and the hub answers
+with a `Y04` for every component it hears. So the radio hardware can receive,
+and devices do transmit — during pairing.
+
+What does not exist is any way for that to reach this application during normal
+operation:
+
+- The component struct's `Status` field is *"not yet implemented — always set to
+  0"*, so the one field that could carry health never does.
+- `Active override Id` on a component is likewise *"not yet implemented — always
+  set to -1"*, and component-level overrides are *"not yet supported"*.
+- There is **no command to ask** whether a component is alive, and **no
+  unsolicited message** that reports one has gone away. The words "not
+  responding", "offline", "unreachable" and "battery" do not appear anywhere in
+  the specification. The only component messages the hub pushes are database
+  events — added, updated, removed — plus `Y02` temperature and `Y04` search
+  results.
+
+So whether a paired NTB-2R quietly beacons on the radio is undocumented and
+cannot be determined from here. It also does not matter: **there is no channel
+through which the hub could tell the Pi**, so a heater that has lost power
+cannot be reported, and no amount of work on this end changes that.
 
 **Nothing measures room temperature.** Of the 25 device models this software
 knows, only the SW4 control panel has a thermometer, and it is no longer sold.
