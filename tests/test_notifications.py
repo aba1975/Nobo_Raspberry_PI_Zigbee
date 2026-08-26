@@ -548,6 +548,49 @@ def test_the_catalogue_exposes_the_flag_to_the_ui():
     assert notifications.public_settings()["event_types"]["room_cold"]["needs_sensor"] is True
 
 
+def test_a_saved_demo_house_with_invented_temperatures_is_repaired():
+    """
+    Earlier versions gave every NTB-2R zone a reading it cannot produce. Anyone
+    who ran those has the fiction saved on disk, where it would outlive the fix
+    and contradict the capability the same zone now reports.
+    """
+    import server
+
+    zones = [
+        # NTB-2R: controls temperature, never reports it.
+        {"zone_id": "1", "components": ["210000016247"], "current_temp": 24.2},
+        # R80 RDC 700: same.
+        {"zone_id": "2", "components": ["160004028114"], "current_temp": 19.0},
+        # SW4: genuinely measures, so this one must survive.
+        {"zone_id": "3", "components": ["234000012006"], "current_temp": 20.4},
+        {"zone_id": "4", "components": ["210000016248"], "current_temp": None},
+    ]
+    repaired = server._drop_impossible_demo_temperatures(zones)
+
+    assert repaired == 2
+    assert zones[0]["current_temp"] is None
+    assert zones[1]["current_temp"] is None
+    assert zones[2]["current_temp"] == 20.4, "a real sensor reading must be kept"
+
+
+def test_the_shipped_demo_house_does_not_invent_temperatures():
+    """The demo data is where this misunderstanding started. It must not recur."""
+    import server
+
+    assert server._drop_impossible_demo_temperatures(
+        [dict(z) for z in server._DEFAULT_DEMO_ZONES]
+    ) == 0
+
+
+def test_the_demo_house_still_has_one_measured_room():
+    """Otherwise the sensor-dependent features cannot be demonstrated at all."""
+    import server
+
+    measured = [z for z in server._DEFAULT_DEMO_ZONES if z["current_temp"] is not None]
+    assert len(measured) == 1
+    assert any(server.model_has_temp_sensor(c) for c in measured[0]["components"])
+
+
 # ---------------------------------------------------------------------------
 # A room left switched off — the frost alert that needs no thermometer
 # ---------------------------------------------------------------------------

@@ -190,6 +190,28 @@ else:
     DEMO_ZONES = copy.deepcopy(_DEFAULT_DEMO_ZONES)
     logger.info("Demo zones: using hardcoded defaults (no persisted store found)")
 
+
+def _drop_impossible_demo_temperatures(zones: list) -> int:
+    """
+    Strip room temperatures from demo zones whose devices cannot measure one.
+
+    Earlier versions of this file gave every NTB-2R zone a reading, which is not
+    something an NTB-2R can produce. Anybody who ran those versions has that
+    fiction saved in ``data/demo_zones.json``, where it would outlive the fix and
+    contradict the capability the same zone now reports.
+
+    Cheap to repair and self-healing, so it is done on load rather than by
+    editing files on individual machines.
+    """
+    fixed = 0
+    for zone in zones:
+        if zone.get("current_temp") is None:
+            continue
+        if not any(model_has_temp_sensor(c) for c in zone.get("components", [])):
+            zone["current_temp"] = None
+            fixed += 1
+    return fixed
+
 # Away temperature (set by Nobø, not configurable)
 AWAY_TEMPERATURE = 7.0
 
@@ -344,6 +366,17 @@ def model_has_temp_sensor(serial: str) -> bool:
         return False
     model = pynobo.nobo.MODELS.get(serial_clean[:3])
     return bool(model and getattr(model, "has_temp_sensor", False))
+
+
+# Repair any saved demo house that predates the discovery above. Done here
+# rather than at the load site because it needs model_has_temp_sensor, and in
+# memory only - the corrected values persist the next time anything saves.
+_repaired = _drop_impossible_demo_temperatures(DEMO_ZONES)
+if _repaired:
+    logger.info(
+        "Demo zones: cleared %d invented room temperature(s) from devices that cannot measure one",
+        _repaired,
+    )
 
 
 # The hub protocol is space-delimited, so a space inside a name would break the
