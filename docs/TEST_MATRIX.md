@@ -33,6 +33,57 @@ more useful marked "not run" than quietly assumed to pass.
 
 ---
 
+## Before you start — finding the Pi
+
+The Pi under test is usually not the one you were last working on, and at a
+cabin its address is whatever the router handed out. Work this out first, before
+anything else, because everything below needs it.
+
+**On the Pi itself**, if you have a keyboard and screen on it:
+
+```bash
+hostname -I          # its addresses, the first is normally the one you want
+ip route get 1.1.1.1 # the address it uses to reach the world, and on which interface
+```
+
+**From another machine on the same network**, if the Pi is headless:
+
+```bash
+ping nobohub.local              # works if the router publishes mDNS names
+nmap -sn 192.168.1.0/24         # or whatever your subnet is
+arp -a | findstr /i "b8:27:eb dc:a6:32 e4:5f:01"   # Windows; Raspberry Pi MAC prefixes
+```
+
+Confirm you have the right machine before trusting it:
+
+```bash
+curl -s http://<ip>:8000/api/health
+# {"status":"ok", ...}  — the only endpoint that answers without a login
+```
+
+Then note these down, because every later phase refers to them:
+
+```
+Pi address:        ______________
+SSH user:          ______________
+Web login:         ______________
+Hub IP:            ______________
+Hub serial:        ______________
+Which Pi is this?  test / production
+```
+
+> **Make sure you are testing the machine you think you are.** If you run more
+> than one Pi, they serve identical-looking pages, and a test that "passed" on
+> the wrong one is worse than a test not run. The name at the top of the screen
+> is the quickest way to tell them apart — see
+> [Naming Your System](../README.md#naming-your-system). Give them different
+> names before you start.
+
+**A static address for the hub is worth setting up** while you are at the
+router. The hub re-runs DHCP after its roughly-18-hourly reboot, and if its
+address moves, the Pi cannot find it again until someone updates the setting.
+Test 6.6 covers this.
+
 ## Phase 0 — Ground rules
 
 - **The heating is real.** These tests change the temperature of a house that
@@ -195,6 +246,7 @@ updates ago is not a pass.
 ```
 Date:            ______________
 Version tested:  ______________  (git log --oneline -1)
+Pi address:      ______________
 Hub serial:      ______________
 Tester(s):       ______________
 
