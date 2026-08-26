@@ -281,6 +281,57 @@ class TestScheduleWriting:
                 for b in read_back[day]
             ] == blocks, day
 
+    def test_a_second_write_also_reads_back_immediately(self, client):
+        """The read-after-write promise has to hold on both code paths.
+
+        The first save takes the copy-on-write path: the zone shares the
+        factory profile, so it gets one of its own. The second takes the
+        edit-in-place path, because the zone now owns its profile. They are
+        different code with different waits, and only the first was exercised
+        by the test above.
+        """
+        first = self._week()
+        assert client.post(
+            "/api/zones/1/schedule", json={"schedule": first}
+        ).status_code == 200
+        assert client.get("/api/zones/1/schedule").json()["schedule"]["monday"][0]["mode"] == "eco"
+
+        second = self._week(monday=[{"start": "00:00", "end": "24:00", "mode": "comfort"}])
+        assert client.post(
+            "/api/zones/1/schedule", json={"schedule": second}
+        ).status_code == 200
+
+        monday = client.get("/api/zones/1/schedule").json()["schedule"]["monday"]
+        assert [
+            {"start": b["start"], "end": b["end"], "mode": b["mode"]} for b in monday
+        ] == second["monday"], "the second write was not visible when the call returned"
+
+    def test_saving_a_schedule_does_not_stall(self, client):
+        """The waits must actually match, not quietly run to their timeout.
+
+        Both waits compare against pynobo's own stored value. If the shape ever
+        stops matching — a tuple against a list, say — the comparison silently
+        never becomes true and every save turns into a five-second sleep that no
+        other test would notice.
+        """
+        started = time.monotonic()
+        assert client.post(
+            "/api/zones/1/schedule", json={"schedule": self._week()}
+        ).status_code == 200
+        assert client.post(
+            "/api/zones/1/schedule",
+            json={"schedule": self._week(monday=[
+                {"start": "00:00", "end": "24:00", "mode": "comfort"},
+            ])},
+        ).status_code == 200
+        elapsed = time.monotonic() - started
+
+        # Two saves against a local fake hub. The waits are 5s each, so anything
+        # near that means a comparison stopped matching.
+        assert elapsed < 4.0, (
+            f"two schedule saves took {elapsed:.1f}s — a wait is running to its timeout"
+        )
+
     def test_an_invalid_mode_is_rejected_before_it_reaches_the_hub(self, client, fake):
         commands_before = len(fake.received)
         response = client.post(

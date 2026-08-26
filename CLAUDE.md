@@ -127,16 +127,25 @@ Four rules, each learned from a bug:
    `zone_id` with `tempsensor_for_zone_id` when a component is only a
    temperature sensor, so echoing its dict back would move the device into that
    zone. Use `HubProtocolTap.component_row()`, which keeps the raw wire rows.
-4. **Never assign to `hub` without stopping what was there.** Connection
-   attempts are serialised by `hub_connect_lock`, skipped entirely when a
-   healthy client is already installed, and any client they displace is passed
-   to `stop_hub_client()`. Before that, a configuration change and the reconnect
-   loop could each start an attempt in the same five-second window; both
-   succeeded, the second won, and the first was left holding a socket with its
-   keep-alive still running — so the hub never timed it out either. With only
-   two LAN slots, two orphans lock the user out of their own heating, and the
-   handshake has no "busy" reject code to explain why. Found with `ss -tn`, not
-   by a test; `tests/test_connection_leak.py` covers it now.
+4. **Never assign to `hub` without stopping what was there, and never clear it
+   from a failure.** Connection attempts are serialised by `hub_connect_lock`,
+   skipped entirely when a healthy client is already installed, and any client
+   they displace is passed to `stop_hub_client()`. Before that, a configuration
+   change and the reconnect loop could each start an attempt in the same
+   five-second window; both succeeded, the second won, and the first was left
+   holding a socket with its keep-alive still running — so the hub never timed
+   it out either. With only two LAN slots, two orphans lock the user out of
+   their own heating, and the handshake has no "busy" reject code to explain
+   why. Found with `ss -tn`, not by a test; `tests/test_connection_leak.py`
+   covers it now.
+
+   The mirror image is just as bad: a *failed* attempt must not clear `hub`,
+   `hub_tap` or `hub_connected` if something else has connected since. An
+   attempt against an unreachable address sits in a TCP timeout for up to
+   thirty seconds, and if a working connection is made beside it, the eventual
+   failure used to disconnect a hub it never owned. The generation guard cannot
+   catch this — generation only moves when the *configuration* changes, and
+   here it has not — so the handler checks `hub is None` as well.
 
 Also worth knowing:
 

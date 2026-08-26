@@ -1138,11 +1138,25 @@ def connect_to_hub_sync():
         except Exception as e:
             logger.error(f"Failed to connect to Nobø Hub: {e}")
             with connection_lock:
-                # Only report the failure if it still refers to the current
-                # configuration. Without this, a doomed attempt against an old
-                # address could mark demo mode as disconnected seconds after the
-                # user switched to it, leaving the UI stuck on "Hub not connected".
-                if generation == hub_config_generation:
+                # Two things have to be true before a failure is allowed to
+                # declare the system disconnected.
+                #
+                # The configuration must still be the one this attempt was for.
+                # Without that, a doomed attempt against an old address marks
+                # demo mode as disconnected seconds after the user switched to
+                # it, leaving the UI stuck on "Hub not connected".
+                #
+                # And nothing else may have connected in the meantime. The
+                # generation only moves when the *configuration* changes, so it
+                # cannot see a hub installed by any other route — which is
+                # exactly what happens when an attempt against an unreachable
+                # address is still timing out while a working connection is
+                # established beside it. That live client is the truth; a stale
+                # failure must not contradict it, and clearing `hub` here would
+                # disconnect a hub this attempt never owned.
+                superseded = generation != hub_config_generation
+                someone_else_connected = hub is not None
+                if not superseded and not someone_else_connected:
                     hub_connected = False
                     hub = None
                     hub_tap = None
@@ -3298,6 +3312,18 @@ async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[st
     if exclusive and profile_id != DEFAULT_WEEK_PROFILE_ID:
         name = decode_hub_name(current_hub.week_profiles[profile_id].get('name', zone_name))
         await hub_command(current_hub.async_update_week_profile(profile_id, name, entries))
+        # Wait for the edit to land before reporting success. Without this the
+        # call returns while pynobo still holds the old entries, so a client
+        # that saves and immediately re-reads gets the schedule it just
+        # replaced — and believes the save failed.
+        #
+        # list() on both sides because pynobo's stored value is only ever read
+        # through list() elsewhere; comparing a tuple against a list would never
+        # match, and this would silently become a five-second sleep.
+        await wait_for_hub_state(
+            lambda: list(current_hub.week_profiles.get(profile_id, {}).get('profile') or [])
+            == list(entries)
+        )
         return profile_id
 
     # Give the zone a profile of its own. The hub assigns the id, so the new
@@ -3315,6 +3341,12 @@ async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[st
     new_id = sorted(new_ids)[0]
 
     await hub_command(current_hub.async_update_zone(zone_id, week_profile_id=new_id))
+    # And wait for the zone to actually carry it. The profile existing is not
+    # enough: until the zone points at it, reading the schedule back still
+    # returns the factory default this zone was sharing a moment ago.
+    await wait_for_hub_state(
+        lambda: current_hub.zones.get(zone_id, {}).get('week_profile_id') == new_id
+    )
     return new_id
 
 

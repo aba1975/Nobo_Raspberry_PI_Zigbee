@@ -244,3 +244,119 @@ class TestSupersededAttemptStillDiscarded:
 
         assert created[0].stopped.is_set(), "a superseded connection was left open"
         assert server.hub is None
+
+
+class TestALateFailureCannotDisconnectALiveHub:
+    """The bug behind a once-in-three-runs failure across the whole suite.
+
+    A connection attempt against an unreachable address does not fail quickly —
+    it sits in a TCP timeout for up to thirty seconds on a background thread,
+    long after the request that started it returned. Meanwhile the application
+    carries on, and something else establishes a working connection.
+
+    When the doomed attempt finally gives up, its error handler used to clear
+    ``hub``, ``hub_tap`` and ``hub_connected`` — disconnecting a hub it had
+    never owned. Every subsequent request answered ``503 Hub not connected``
+    until something reconnected.
+
+    The existing generation guard cannot catch this. Generation only moves when
+    the *configuration* changes, and here it has not: the user set one hub, it
+    was unreachable, and a connection to that same configuration succeeded by
+    another route. Both attempts carry the same generation, so the guard waves
+    the failure through.
+
+    In the test suite this showed up as an unrelated test failing at random,
+    because ``test_hub_config`` deliberately points the app at ``192.0.2.10``
+    (TEST-NET-1, guaranteed unroutable) and leaves the attempt timing out while
+    later tests run against a fake hub. In a cabin it shows up as heating that
+    reports itself offline while it is demonstrably online.
+    """
+
+    def test_a_doomed_attempt_does_not_clear_a_connection_made_beside_it(self):
+        server.DEMO_MODE = False
+        server.hub = None
+        server.hub_connected = False
+
+        started = threading.Event()
+        release = threading.Event()
+        created = []
+
+        def doomed(*args, **kwargs):
+            started.set()
+            release.wait(timeout=10)
+            raise OSError("no route to host")
+
+        with patch.object(server.pynobo, "nobo", side_effect=doomed):
+            worker = threading.Thread(target=_swallow(server.connect_to_hub_sync))
+            worker.start()
+            assert started.wait(timeout=5), "the doomed attempt never started"
+
+            # While it hangs, a working connection is established by another
+            # route — the fixture in test_real_hub_endpoints does exactly this.
+            live = FakeHub(created, "live")
+            with server.connection_lock:
+                server.hub = live
+                server.hub_connected = True
+
+            release.set()
+            worker.join(timeout=15)
+            assert not worker.is_alive()
+
+        assert server.hub is live, (
+            "a failed attempt disconnected a hub it never owned"
+        )
+        assert server.hub_connected is True, (
+            "a failed attempt reported the system offline while it was online"
+        )
+        assert not live.stopped.is_set(), "the live connection was stopped"
+
+    def test_the_tap_belonging_to_the_live_hub_survives(self):
+        """`hub_tap` is cleared on the same path and holds the raw wire rows.
+
+        Losing it silently breaks device editing, because component updates
+        would then be rebuilt from pynobo's mangled copy.
+        """
+        server.DEMO_MODE = False
+        server.hub = None
+        server.hub_connected = False
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def doomed(*args, **kwargs):
+            started.set()
+            release.wait(timeout=10)
+            raise OSError("no route to host")
+
+        with patch.object(server.pynobo, "nobo", side_effect=doomed):
+            worker = threading.Thread(target=_swallow(server.connect_to_hub_sync))
+            worker.start()
+            assert started.wait(timeout=5)
+
+            live_tap = server.HubProtocolTap()
+            with server.connection_lock:
+                server.hub = FakeHub([], "live")
+                server.hub_tap = live_tap
+                server.hub_connected = True
+
+            release.set()
+            worker.join(timeout=15)
+
+        assert server.hub_tap is live_tap, "the live hub's protocol tap was discarded"
+
+    def test_a_genuine_failure_with_nothing_connected_is_still_reported(self):
+        """The guard must not turn into "never report a failure".
+
+        If nothing is connected, a failure is the whole truth and the UI needs
+        to hear it.
+        """
+        server.DEMO_MODE = False
+        server.hub = None
+        server.hub_connected = True
+
+        with patch.object(server.pynobo, "nobo", side_effect=OSError("unreachable")):
+            with pytest.raises(OSError):
+                server.connect_to_hub_sync()
+
+        assert server.hub_connected is False
+        assert server.hub is None
