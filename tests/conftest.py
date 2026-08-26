@@ -55,12 +55,21 @@ def demo_hub_is_connected():
     """
     Keep every test starting from "demo hub connected".
 
-    test_hub_config.py deliberately points the app at an unreachable hub. That
-    connection attempt runs on a background thread and only gives up after a
-    five second timeout, long after the test that started it has finished. When
-    it does, it sets ``hub_connected = False`` on the module, and whichever
-    unrelated test happened to be running at that moment got a surprise 503.
-    That produced a single, randomly-placed failure roughly one run in three.
+    test_hub_config.py deliberately points the app at 192.0.2.10 (TEST-NET-1,
+    guaranteed unroutable). That connection attempt runs on a background thread
+    and sits in a TCP timeout long after the test that started it has finished.
+    It used to clear ``hub_connected`` when it finally gave up, and whichever
+    unrelated test happened to be running at that moment got a surprise 503 —
+    a single, randomly-placed failure roughly one run in three.
+
+    That is fixed at the source: a failed attempt now refuses to clear state
+    belonging to a connection it did not create (see
+    ``tests/test_connection_leak.py::TestALateFailureCannotDisconnectALiveHub``,
+    and the handler in ``connect_to_hub_sync``). This fixture is kept because
+    resetting one flag is cheap and several tests legitimately leave the module
+    disconnected, but it is no longer load-bearing against that race — if the
+    randomly-placed failures ever come back, the bug is in the handler, not
+    here.
     """
     import server
 
