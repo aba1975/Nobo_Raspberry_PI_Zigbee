@@ -9,6 +9,7 @@ in a state where it would silently never deliver anything.
 
 import os
 import sys
+import time
 
 os.environ.setdefault("NOBO_DEMO", "true")
 
@@ -37,6 +38,7 @@ GOOD_EMAIL = {
 def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(notifications, "DATA_DIR", tmp_path)
     monkeypatch.setattr(notifications, "NOTIFICATIONS_FILE", tmp_path / "notifications.json")
+    monkeypatch.setattr(notifications, "STATE_FILE", tmp_path / "notify_state.json")
     # A fresh notifier per test, so state cannot leak between them.
     monkeypatch.setattr(server, "notifier", notifications.Notifier())
     yield
@@ -88,14 +90,22 @@ def test_an_ordinary_user_cannot_silence_the_alarms(client, as_ordinary_user):
 def test_defaults_are_returned(client):
     body = client.get("/api/notifications").json()
     assert body["enabled"] is False
-    assert "room_cold" in body["events"]
+    assert "zone_off" in body["events"]
 
 
 def test_the_event_catalogue_is_offered_to_the_ui(client):
     """So the UI never has to hardcode the list or its wording."""
     body = client.get("/api/notifications").json()
-    assert body["event_types"]["room_cold"]["label"]
-    assert body["event_types"]["room_cold"]["help"]
+    assert body["event_types"]["zone_off"]["label"]
+    assert body["event_types"]["zone_off"]["help"]
+
+
+def test_no_temperature_alert_is_offered(client):
+    """They need an SW4, which is no longer sold, so they were removed."""
+    body = client.get("/api/notifications").json()
+    for gone in ("room_cold", "sensor_silent", "cannot_reach"):
+        assert gone not in body["events"]
+        assert gone not in body["event_types"]
 
 
 def test_the_password_is_not_in_the_response(client):
@@ -162,14 +172,24 @@ def test_saving_applies_immediately(client):
     assert server.notifier.settings["enabled"] is True
 
 
-def test_the_cold_threshold_can_be_set(client):
-    r = client.put("/api/notifications", json={"cold_threshold_c": 8})
-    assert r.json()["cold_threshold_c"] == 8
+def test_the_off_threshold_can_be_set(client):
+    r = client.put("/api/notifications", json={"off_for_hours": 8})
+    assert r.json()["off_for_hours"] == 8
 
 
 def test_an_absurd_threshold_is_ignored(client):
-    client.put("/api/notifications", json={"cold_threshold_c": 900})
-    assert notifications.load_settings()["cold_threshold_c"] == 5.0
+    client.put("/api/notifications", json={"off_for_hours": 9000})
+    assert notifications.load_settings()["off_for_hours"] == 24
+
+
+def test_the_heartbeat_interval_can_be_set(client):
+    r = client.put("/api/notifications", json={"heartbeat_days": 3})
+    assert r.json()["heartbeat_days"] == 3
+
+
+def test_the_last_heartbeat_is_reported(client):
+    notifications.save_state({"last_heartbeat": 999.0})
+    assert client.get("/api/notifications").json()["last_heartbeat"] == 999.0
 
 
 # ---------------------------------------------------------------------------
@@ -214,3 +234,78 @@ def test_an_ordinary_user_cannot_send_test_mail(client, as_ordinary_user):
     """It reaches an external server, so it is not left open to any account."""
     r = client.post("/api/notifications/test", json={"email": GOOD_EMAIL})
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# The heartbeat, end to end through the server
+# ---------------------------------------------------------------------------
+# This is the one alert whose value is in its *absence*: if the Pi loses power
+# it cannot warn anybody, but a check-in that stops arriving does the job for
+# it. So the tests care that it goes out, that it does not repeat, and that a
+# broken mail server cannot wedge it.
+
+def test_the_heartbeat_describes_the_house(client, monkeypatch):
+    # monkeypatch, not assignment: this is module state, and leaking it into
+    # later tests is how a suite becomes order-dependent.
+    monkeypatch.setattr(server, "hub_connected", True)
+    body = server.build_heartbeat()
+    assert "Hub:" in body
+    assert "Rooms (" in body
+    # Structural rather than a hard-coded room name, because other tests rename
+    # and delete demo zones.
+    listed = server.get_zones_data()
+    assert f"Rooms ({len(listed)})" in body
+    if listed:
+        assert listed[0]["name"] in body
+
+
+def test_the_heartbeat_explains_why_silence_matters(client, monkeypatch):
+    """Otherwise it reads as junk mail and gets filtered."""
+    monkeypatch.setattr(server, "hub_connected", True)
+    assert "stop arriving" in server.build_heartbeat()
+
+
+def test_the_heartbeat_reports_a_lost_hub(client, monkeypatch):
+    """The check-in is most valuable precisely when something is wrong."""
+    monkeypatch.setattr(server, "hub_connected", False)
+    assert "NOT CONNECTED" in server.build_heartbeat()
+
+
+def test_the_heartbeat_is_sent_when_due(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(server.notifier, "send_impl",
+                        lambda cfg, subject, body: sent.append(subject))
+    client.put("/api/notifications", json={"enabled": True, "email": GOOD_EMAIL})
+    server.notifier.reload(notifications.load_settings())
+
+    assert server.maybe_send_heartbeat() is True
+    time.sleep(0.2)
+    assert sent and "Still here" in sent[0]
+
+
+def test_the_heartbeat_does_not_repeat_every_minute(client, monkeypatch):
+    """The watch loop runs each minute; the interval has to do the gating."""
+    monkeypatch.setattr(server.notifier, "send_impl", lambda cfg, s, b: None)
+    client.put("/api/notifications", json={"enabled": True, "email": GOOD_EMAIL})
+    server.notifier.reload(notifications.load_settings())
+
+    assert server.maybe_send_heartbeat() is True
+    assert server.maybe_send_heartbeat() is False
+
+
+def test_a_broken_mail_server_does_not_cause_a_retry_storm(client, monkeypatch):
+    """The send is stamped before it is attempted, not after."""
+    def explode(cfg, subject, body):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(server.notifier, "send_impl", explode)
+    client.put("/api/notifications", json={"enabled": True, "email": GOOD_EMAIL})
+    server.notifier.reload(notifications.load_settings())
+
+    server.maybe_send_heartbeat()
+    time.sleep(0.2)
+    assert server.maybe_send_heartbeat() is False
+
+
+def test_nothing_is_sent_while_alerts_are_off(client):
+    assert server.maybe_send_heartbeat() is False

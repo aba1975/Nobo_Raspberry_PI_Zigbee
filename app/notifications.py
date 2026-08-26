@@ -10,8 +10,8 @@ something; it just never did.
 
 What the hub can and cannot tell us
 -----------------------------------
-This module is built around three hard limits in the Nobø Hub API (v1.1), and
-it is worth writing them down because they decide the shape of everything here:
+This module is built around four hard limits in the Nobø Hub API (v1.1), and it
+is worth writing them down because they decide the shape of everything here:
 
 1. **An override carries no source.** The struct is
    ``<Id> <Mode> <Type> <End> <Start> <Target> <TargetID>``. Nothing says who
@@ -20,30 +20,38 @@ it is worth writing them down because they decide the shape of everything here:
 
 2. **A component's ``Status`` field is "not yet implemented, always 0"**, and
    component-level overrides are "not yet supported". There is therefore *no*
-   direct signal when somebody presses the button on an NTB-2R. Not delayed,
-   not unreliable — absent.
+   signal when somebody presses the button on a thermostat, and none when a
+   heater loses power.
 
-3. **But temperature is pushed, and it can go stale.** ``Y02 <serial> <temp>``
-   arrives unsolicited whenever the hub has new data, and ``temp`` is the
-   literal string ``N/A`` when "the temperature value stored at the Hub has
-   become too old and outdated". A thermostat that has been switched off, has
-   lost power, or has fallen off the radio stops reporting and goes ``N/A``.
+3. **Almost nothing measures temperature.** Of the 25 models pynobo knows, only
+   the SW4 control panel carries a thermometer, and it is no longer sold. Every
+   heater receiver — NTB-2R, R80 RDC 700 and the rest — controls temperature
+   without ever reporting it. Alerts that need a room temperature were removed
+   rather than left switched on looking useful.
 
-So a switched-off NTB-2R is caught *indirectly*, two different ways: the device
-goes quiet (3), and the room it was heating gets cold (measured temperature).
-The second matters more, because it also catches a tripped breaker, a window
-left open, a failed element and a device that was never paired properly — none
-of which any amount of protocol would have told us about.
+4. **The keep-alive is between this Pi and the hub, and nowhere else.** The
+   client sends ``HANDSHAKE`` every 14 seconds and the hub echoes it; if nothing
+   comes back within 28 the link is declared dead. That covers the hub losing
+   power or the network dropping, and it is the ``hub_offline`` alert. It says
+   nothing whatsoever about the heaters: the radio to a receiver is one-way,
+   with no acknowledgement and no heartbeat, so a heater switched off at the
+   wall is invisible and always will be.
+
+Which leaves an awkward truth: on this hardware the system cannot detect a cold
+room, a dead heater, or a heater running flat out. What it *can* do is be
+honest about the things it does see, and — through the heartbeat — make its own
+silence meaningful, so that a Pi which has lost power still tells you something
+by failing to write.
 
 Design rules
 ------------
 - **Never block the heating.** Every send happens on a worker thread with a
   timeout, and every failure is swallowed and logged. A broken mail server must
   not stop an away period from being applied.
-- **Say it once.** Conditions are level-triggered, not edge-triggered: a cold
-  room is *continuously* cold, and re-sending that every 30 seconds would train
-  the user to ignore the alerts. Each condition alerts on the way in, stays
-  quiet while it persists, and alerts again on recovery.
+- **Say it once.** Conditions are level-triggered, not edge-triggered: a room
+  left off is *continuously* off, and re-sending that every 30 seconds would
+  train the user to ignore the alerts. Each condition alerts on the way in,
+  stays quiet while it persists, and alerts again on recovery.
 - **Never log or return the password.**
 """
 
@@ -66,6 +74,7 @@ logger = logging.getLogger(__name__)
 # Redirected by tests, in the same way as the other persistence modules.
 DATA_DIR = Path(__file__).resolve().parent / "data"
 NOTIFICATIONS_FILE = DATA_DIR / "notifications.json"
+STATE_FILE = DATA_DIR / "notify_state.json"
 
 SMTP_TIMEOUT_SECONDS = 20
 
@@ -79,13 +88,12 @@ SEND_TIMEOUT_SECONDS = 45
 # ---------------------------------------------------------------------------
 # key -> (label, default_on, explanation shown in the UI)
 #
-# ``needs_sensor`` matters more than it looks. Of the 25 Nobø models pynobo
-# knows, exactly one — the SW4 control panel — measures room temperature. Every
-# heater receiver and thermostat, the NTB-2R and R80 RDC 700 included, controls
-# temperature without ever reporting it. So on a typical installation the
-# temperature-based alerts can never fire, and offering them as if they could is
-# worse than not offering them at all: the owner believes the cabin is watched
-# when nothing is watching it.
+# Every alert here works on ordinary Nobø hardware. There used to be three more
+# — a cold-room alarm, a silent-thermostat alarm and a cannot-get-warm alarm —
+# and they were removed rather than left switched on: all three need a room
+# temperature, only the SW4 reports one, and the SW4 is no longer sold. An alert
+# that cannot fire is worse than no alert, because the owner believes the cabin
+# is watched when nothing is watching it.
 #
 # Defaults are chosen for a cabin that is empty most of the year: the things
 # that mean "go and look" are on, and the things that happen many times a day
@@ -94,60 +102,40 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
     "hub_offline": {
         "label": "Hub goes offline",
         "default": True,
-        "needs_sensor": False,
-        "help": "The Pi can no longer reach the hub, so nothing can be controlled remotely.",
+        "help": "The Pi has lost contact with the hub — the hub has lost power, or the "
+                "network is down. Noticed within about half a minute.",
     },
     "hub_online": {
         "label": "Hub comes back",
         "default": True,
-        "needs_sensor": False,
         "help": "Sent after an offline alert so you know it fixed itself.",
+    },
+    "heartbeat": {
+        "label": "A regular “still here” email",
+        "default": True,
+        "help": "Sent on a schedule whether or not anything is wrong, so that silence "
+                "means something. If the Pi loses power it cannot warn you — but a "
+                "heartbeat that stops arriving does.",
     },
     "zone_off": {
         "label": "A room is left switched off",
         "default": True,
-        "needs_sensor": False,
         "help": "A room whose schedule holds it Off will not heat at all, whatever the "
-                "weather. This is the frost risk that can be seen without a thermometer.",
-    },
-    "room_cold": {
-        "label": "A room is too cold",
-        "default": True,
-        "needs_sensor": True,
-        "help": "The frost alarm. Catches a switched-off heater, a tripped breaker, "
-                "a window left open and a failed element alike.",
-    },
-    "cannot_reach": {
-        "label": "A room cannot get warm",
-        "default": True,
-        "needs_sensor": True,
-        "help": "The room has been well below its target for a long time and is not "
-                "climbing — a window left open, or a heater that has stopped working. "
-                "Warming up slowly from Away in deep cold does not count.",
-    },
-    "sensor_silent": {
-        "label": "A thermostat stops reporting",
-        "default": True,
-        "needs_sensor": True,
-        "help": "The hub has stopped receiving temperatures from a device that used to send "
-                "them — typically switched off at the wall, out of power, or off the radio.",
+                "weather. Off is below Away: no anti-frost either.",
     },
     "changed_elsewhere": {
         "label": "Something is changed from another app",
         "default": True,
-        "needs_sensor": False,
         "help": "A zone's mode or temperature changed and it was not this system that did it.",
     },
     "away_period": {
         "label": "An away period starts or ends",
         "default": True,
-        "needs_sensor": False,
         "help": "Confirms the planned trip actually took effect.",
     },
     "schedule_event": {
         "label": "A weekly schedule event starts",
         "default": False,
-        "needs_sensor": False,
         "help": "Every comfort/eco switch, in every room. Many a day — off unless you want a diary.",
     },
 }
@@ -166,29 +154,13 @@ _DEFAULTS: Dict[str, Any] = {
         "to_addrs": [],
     },
     "events": {k: v["default"] for k, v in EVENT_TYPES.items()},
-    # 5 °C is below any sane eco setting and above the 4 °C at which water
-    # starts to be a real risk, so it gives a margin to react in.
-    "cold_threshold_c": 5.0,
-    # A room cools slowly. Requiring the condition to hold avoids alerting on a
-    # door held open while unloading the car.
-    "cold_for_minutes": 30,
-    # A thermostat may miss a reading without anything being wrong. Hours, not
-    # minutes, so a brief radio glitch stays quiet.
-    "silent_after_minutes": 180,
     # A room left switched off will not heat whatever the weather. A day is long
     # enough that turning a room off to air it is not an incident.
     "off_for_hours": 24,
-    # How long a room may sit below its target before it counts as unable to
-    # reach it. Two days, because coming back from Away in deep cold genuinely
-    # can take that long - the "and not climbing" test below is what actually
-    # separates a slow warm-up from a fault.
-    "cannot_reach_hours": 48,
-    # How far below target counts as "not there yet".
-    "cannot_reach_margin_c": 3.0,
-    # A room that gained at least this much over the window is warming up, so it
-    # is working, just slowly. This is what stops a legitimate 7 -> 22 recovery
-    # from being reported as a fault.
-    "cannot_reach_rise_c": 1.0,
+    # How often the "still here" email goes out. Weekly suits a cabin: often
+    # enough that a dead Pi is noticed within days, rare enough to stay read.
+    "heartbeat_days": 7,
+    "heartbeat_hour": 9,
     "quiet_hours": {"enabled": False, "start": "23:00", "end": "07:00"},
     # A floor on how often the same condition may speak, whatever happens.
     "min_minutes_between": 10,
@@ -244,20 +216,16 @@ def _merge(stored: Any) -> Dict[str, Any]:
                 cfg["events"][key] = bool(events[key])
 
     for key, lo, hi in (
-        ("cold_threshold_c", -20.0, 30.0),
-        ("cold_for_minutes", 0, 24 * 60),
-        ("silent_after_minutes", 5, 7 * 24 * 60),
         ("min_minutes_between", 0, 24 * 60),
         ("off_for_hours", 1, 30 * 24),
-        ("cannot_reach_hours", 1, 30 * 24),
-        ("cannot_reach_margin_c", 0.5, 20.0),
-        ("cannot_reach_rise_c", 0.0, 20.0),
+        ("heartbeat_days", 1, 90),
+        ("heartbeat_hour", 0, 23),
     ):
         if key in stored:
             try:
                 val = float(stored[key])
                 if lo <= val <= hi:
-                    cfg[key] = val if key.endswith("_c") else int(val)
+                    cfg[key] = int(val)
             except (TypeError, ValueError):
                 pass
 
@@ -330,11 +298,57 @@ def public_settings(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     out["email"].pop("password", None)
     out["email"]["password_set"] = bool(cfg["email"].get("password"))
     out["event_types"] = {
-        k: {"label": v["label"], "help": v["help"], "default": v["default"],
-            "needs_sensor": v.get("needs_sensor", False)}
+        k: {"label": v["label"], "help": v["help"], "default": v["default"]}
         for k, v in EVENT_TYPES.items()
     }
+    out["last_heartbeat"] = load_state().get("last_heartbeat")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Runtime state
+# ---------------------------------------------------------------------------
+# Kept apart from the settings so that saving preferences cannot disturb it, and
+# so that a corrupt settings file cannot cost the heartbeat its history. It has
+# to survive a restart: a Pi that reboots weekly would otherwise never reach the
+# interval and never send, which is the one failure this feature must not have.
+
+def load_state() -> Dict[str, Any]:
+    try:
+        with STATE_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_state(state: Dict[str, Any]) -> None:
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+        tmp.replace(STATE_FILE)
+    except Exception as exc:
+        logger.warning("Could not save notification state: %s", exc)
+
+
+def heartbeat_due(now: float, settings: Dict[str, Any],
+                  state: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Whether the "still here" email is due.
+
+    First run counts as due, so the user finds out immediately that it works
+    rather than waiting a week to discover the mail settings were wrong.
+    """
+    if not settings.get("enabled") or not settings.get("events", {}).get("heartbeat"):
+        return False
+    state = state if state is not None else load_state()
+    last = state.get("last_heartbeat")
+    if not isinstance(last, (int, float)):
+        return True
+    interval = max(1, int(settings.get("heartbeat_days", 7))) * 86400
+    return (now - last) >= interval
 
 
 # ---------------------------------------------------------------------------

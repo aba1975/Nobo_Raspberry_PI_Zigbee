@@ -1825,6 +1825,7 @@
     if (!box) return;
     try {
       state.notify = await Nobo.api.notifications();
+      state.notifyExpanded = !!state.notify.enabled;
       renderNotifications(isAdmin);
     } catch (e) {
       // An ordinary user is not allowed to read these, which is not an error
@@ -1846,91 +1847,57 @@
     }
 
     const types = n.event_types || {};
-    const temp = n.temperature || { available: false, zones_with_sensor: [], sensor_models: [] };
-    // Three of the alerts need a room temperature, and most Nobø hardware never
-    // reports one. Offering them anyway would leave the owner believing the
-    // cabin is watched when nothing is watching it, so they are disabled and
-    // the reason is stated.
-    const sensorNote = temp.available
-      ? `<div class="note">Temperature is measured in:
-         ${esc(temp.zones_with_sensor.join(', '))}. Alerts marked
-         <em>needs a thermometer</em> work in those rooms only.</div>`
-      : `<div class="note note-warn">
-         <strong>None of your devices measure room temperature.</strong>
-         Nobø heater receivers and thermostats — the NTB-2R and R80 RDC 700 among them —
-         control the temperature without ever reporting it to the hub. Of the models this
-         software knows, only ${esc((temp.sensor_models || []).join(', ') || 'the SW4')}
-         has a thermometer.<br><br>
-         So the three alerts below marked <em>needs a thermometer</em> cannot fire here,
-         and are switched off. Everything else works normally — in particular
-         <strong>“A room is left switched off”</strong>, which is the frost risk that can be
-         seen without one.</div>`;
 
-    const evKeys = Object.keys(types);
+    // Everything below the master switch is hidden until alerts are actually
+    // on. Asked for, and right: a page of mail-server fields is noise to
+    // somebody who has not decided they want alerts yet.
+    //
+    // The exception is the moment of turning them on. The settings have to be
+    // fillable *before* they can be enabled - the server refuses to enable a
+    // configuration that could not deliver - so pressing the switch reveals the
+    // form even though nothing is saved yet.
+    if (!n.enabled && !state.notifyExpanded) {
+      box.innerHTML = `
+        <p class="zd-sub">Turn <strong>Send alerts</strong> on to choose what to be
+        told about and where to send it.</p>`;
+      return;
+    }
+
+    const pending = !n.enabled;
+
+    const last = n.last_heartbeat
+      ? new Date(n.last_heartbeat * 1000).toLocaleString()
+      : 'not yet sent';
+
     box.innerHTML = `
-      ${sensorNote}
+      ${pending ? `<div class="note">Fill these in and press <strong>Save alerts</strong>
+        to switch them on. Nothing is sent until then.</div>` : ''}
       <h3 class="notify-head">What to tell me about</h3>
       <div class="exc-list">
-        ${evKeys.map(key => {
-          const blocked = types[key].needs_sensor && !temp.available;
-          return `
-          <label class="exc-row notify-row${blocked ? ' is-blocked' : ''}">
+        ${Object.keys(types).map(key => `
+          <label class="exc-row notify-row">
             <input type="checkbox" data-ev="${esc(key)}"
-                   ${n.events[key] && !blocked ? 'checked' : ''}
-                   ${dis || (blocked ? 'disabled' : '')}>
+                   ${n.events[key] ? 'checked' : ''} ${dis}>
             <span class="exc-name">${esc(types[key].label)}
-              ${types[key].needs_sensor
-                ? `<span class="badge badge-need">needs a thermometer</span>` : ''}
               <small class="field-hint">${esc(types[key].help)}</small>
             </span>
-          </label>`;
-        }).join('')}
+          </label>`).join('')}
       </div>
 
-      <h3 class="notify-head">A room left switched off</h3>
+      <h3 class="notify-head">Timing</h3>
       <div class="notify-grid">
         <label class="field">
-          <span>Warn after</span>
+          <span>Warn about a room left off after</span>
           <input type="number" id="ntOffFor" min="1" max="720" step="1"
                  value="${esc(String(n.off_for_hours))}" ${dis}>
           <small class="field-hint">Hours. Off means no heating at all, not even
           the ${AWAY_TEMP_LABEL()} that Away gives you.</small>
         </label>
-      </div>
-
-      <h3 class="notify-head">When to call a room cold <span class="badge badge-need">needs a thermometer</span></h3>
-      <div class="notify-grid">
         <label class="field">
-          <span>Warn below</span>
-          <input type="number" id="ntCold" min="-20" max="30" step="0.5"
-                 value="${esc(String(n.cold_threshold_c))}" ${dis}>
-          <small class="field-hint">Degrees. Away holds ${AWAY_TEMP_LABEL()}, so
-          anything under that means the heating is not working.</small>
-        </label>
-        <label class="field">
-          <span>…for at least</span>
-          <input type="number" id="ntColdFor" min="0" max="1440" step="5"
-                 value="${esc(String(n.cold_for_minutes))}" ${dis}>
-          <small class="field-hint">Minutes. Stops a door held open counting as a fault.</small>
-        </label>
-        <label class="field">
-          <span>Thermostat silent for</span>
-          <input type="number" id="ntSilent" min="5" max="10080" step="15"
-                 value="${esc(String(n.silent_after_minutes))}" ${dis}>
-          <small class="field-hint">Minutes without a reading before saying so.</small>
-        </label>
-        <label class="field">
-          <span>Cannot get warm after</span>
-          <input type="number" id="ntReach" min="1" max="720" step="1"
-                 value="${esc(String(n.cannot_reach_hours))}" ${dis}>
-          <small class="field-hint">Hours short of target. Only counts if the room
-          is <em>not</em> climbing, so a slow warm-up from Away is never reported.</small>
-        </label>
-        <label class="field">
-          <span>…and more than</span>
-          <input type="number" id="ntReachMargin" min="0.5" max="20" step="0.5"
-                 value="${esc(String(n.cannot_reach_margin_c))}" ${dis}>
-          <small class="field-hint">Degrees below the target.</small>
+          <span>Send “still here” every</span>
+          <input type="number" id="ntBeat" min="1" max="90" step="1"
+                 value="${esc(String(n.heartbeat_days))}" ${dis}>
+          <small class="field-hint">Days. Last sent: ${esc(last)}.</small>
         </label>
       </div>
 
@@ -1982,7 +1949,7 @@
         <input type="checkbox" id="ntQuiet" ${n.quiet_hours.enabled ? 'checked' : ''} ${dis}>
         <span class="exc-name">Stay quiet overnight
           <small class="field-hint">From ${esc(n.quiet_hours.start)} to ${esc(n.quiet_hours.end)}.
-          A frost warning is still sent — it would be no use in the morning.</small>
+          Anything urgent is still sent — it would be no use in the morning.</small>
         </span>
       </label>
 
@@ -2014,12 +1981,8 @@
     });
     const body = {
       events,
-      cold_threshold_c: num('#ntCold', n.cold_threshold_c),
-      cold_for_minutes: num('#ntColdFor', n.cold_for_minutes),
-      silent_after_minutes: num('#ntSilent', n.silent_after_minutes),
       off_for_hours: num('#ntOffFor', n.off_for_hours),
-      cannot_reach_hours: num('#ntReach', n.cannot_reach_hours),
-      cannot_reach_margin_c: num('#ntReachMargin', n.cannot_reach_margin_c),
+      heartbeat_days: num('#ntBeat', n.heartbeat_days),
       quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
       email: {
         host: val('#ntHost'),
@@ -2039,10 +2002,14 @@
 
   async function saveNotifications(enabledOverride) {
     const body = readNotifyForm();
-    if (enabledOverride !== undefined) body.enabled = enabledOverride;
+    // Saving from the expanded form means "I want these on", which is the only
+    // way to enable them: the toggle alone cannot, because the server rightly
+    // refuses a configuration that could not deliver.
+    body.enabled = enabledOverride !== undefined ? enabledOverride : true;
     try {
       state.notify = await Nobo.api.setNotifications(body);
-      Nobo.toast(state.notify.enabled ? 'Alerts are on' : 'Alerts saved');
+      state.notifyExpanded = !!state.notify.enabled;
+      Nobo.toast(state.notify.enabled ? 'Alerts are on' : 'Alerts are off');
       renderNotifications(true);
     } catch (e) {
       Nobo.toast(e.message, 'error');
@@ -2052,8 +2019,15 @@
   function toggleNotifications() {
     const n = state.notify;
     if (!n) return;
-    if (n.enabled) { saveNotifications(false); return; }
-    saveNotifications(true);
+    if (n.enabled) {
+      state.notifyExpanded = false;
+      saveNotifications(false);
+      return;
+    }
+    // Reveal the form rather than trying to save straight away, which would
+    // fail for anybody who has not entered a mail server yet.
+    state.notifyExpanded = true;
+    renderNotifications(true);
   }
 
   async function testNotifications() {
