@@ -37,6 +37,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
+| **Alerts by email** | Tells you when the hub goes offline, a room gets cold, a thermostat stops reporting, or something is changed from another app. Every event has its own on/off switch. See [Alerts](#alerts). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -236,6 +237,83 @@ Two things worth knowing:
 The list is stored in `data/away_exceptions.json` and is included in a backup.
 If a zone in the list is deleted, it is ignored rather than causing an error,
 and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
+
+### Alerts
+
+A cabin stands empty. Nobody is there to notice that a thermostat was switched
+off in November and never switched back on, and the first sign of trouble is a
+burst pipe in March. The application already knew enough to have said something;
+now it does.
+
+Alerts go out by **email**, over plain SMTP, so any free mailbox works. Turn
+them on under **Settings → Telling you when something is wrong**, and use
+**Send a test email** before saving — if the mail server refuses, you get its
+actual words back, because "authentication failed" and "no such host" need
+different fixes.
+
+Every event has its own switch:
+
+| Event | On by default | What it means |
+| --- | --- | --- |
+| **Hub goes offline** | Yes | The Pi cannot reach the hub. Nothing can be controlled, by any app, until it returns. |
+| **Hub comes back** | Yes | Sent after an offline alert, so you know it fixed itself. |
+| **A room is too cold** | Yes | The frost alarm. Threshold and duration are yours to set. |
+| **A thermostat stops reporting** | Yes | The hub has stopped hearing from a device that used to report. |
+| **Something changed from another app** | Yes | A zone changed and it was not this system that did it. |
+| **An away period starts or ends** | Yes | Confirms a planned trip actually took effect. |
+| **A weekly schedule event starts** | **No** | Every comfort/eco switch in every room. Many a day — a diary, not an alarm. |
+
+Two settings exist purely so the alerts stay worth reading. **Quiet hours**
+holds back routine news overnight — but never a frost warning, which would be
+no use in the morning. And each condition speaks **once** on the way in and once
+on recovery, never repeatedly while it persists.
+
+#### What it can and cannot know
+
+This is worth being precise about, because the limits are the hub's and no
+amount of software removes them.
+
+**Who changed a temperature** is answered *by elimination*. The Nobø override
+struct is `<Id> <Mode> <Type> <End> <Start> <Target> <TargetID>` — there is no
+field for the source. So the server records every write it makes, and anything
+that arrives without a matching record came from somewhere else. The alert says
+"it was not changed from here" and stops there; it cannot tell the official Nobø
+app from another browser, and it does not pretend to.
+
+**Somebody pressing the button on a thermostat** is not reported at all. The
+component `Status` field is *"not yet implemented — always set to 0"* in the API
+spec, and component-level overrides are *"not yet supported"*. There is no
+signal to listen for.
+
+**But a switched-off thermostat is still caught**, two ways round:
+
+1. `Y02` carries a temperature *or the string `N/A`*, which the hub sends once
+   its stored value "has become too old and outdated". A thermostat that is
+   switched off, loses power or drops off the radio stops reporting and goes
+   `N/A` — that is the **thermostat stops reporting** alert.
+2. The room it was heating gets cold — that is the **room is too cold** alert.
+
+The second matters more, because it also catches a tripped breaker, a window
+left open, a failed element and a device that was never paired properly. None of
+those would ever appear in any protocol field.
+
+Rooms that have **never** reported a temperature — a dial-only R80, say — are
+excluded from both, because for them silence is normal rather than a fault.
+
+#### Settings
+
+`data/notifications.json`, included in a backup. The mail password is stored in
+it and the file is written `0600`. **It is never returned by the API**: reading
+the settings gives you `password_set: true` instead, so it cannot leak through a
+screenshot, a proxy log or a support bundle. Leave the password box empty when
+saving to keep the one already stored.
+
+All three notification endpoints are **admin only** — the settings decide where
+alerts about your building are sent, and who can silence them.
+
+A mail server that is down, slow or misconfigured can never affect the heating:
+sending happens on a worker thread with a timeout, and every failure is logged
+and swallowed rather than raised.
 
 ## Prerequisites
 
@@ -1307,6 +1385,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
 | `GET /api/global-mode/away-exceptions` | Zones held on Eco during Away, plus the fixed away temperature |
+| `GET /api/notifications` | Alert settings. Admin only. The mail password is replaced by `password_set` |
 | `WS /ws` | Live updates. Pushes the current zones on connect, then again whenever anything changes. |
 
 ### Controlling
@@ -1320,6 +1399,8 @@ Note that `/auth/login` takes form fields, not JSON.
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
+| `PUT /api/notifications` | Change alert settings. Admin only. Partial: omitted fields keep their value, and an omitted password keeps the stored one. Refuses to enable alerts that could not be delivered. |
+| `POST /api/notifications/test` | Send a test email, optionally using settings in the body that have not been saved yet. Admin only. Returns the mail server's own error on failure. |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
 
 ### Zones and devices

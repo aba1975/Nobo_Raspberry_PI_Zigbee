@@ -30,6 +30,8 @@ import pynobo
 import auth
 import away_schedule
 import config_persistence
+import notifications
+import notify_watch
 
 # Configure logging
 logging.basicConfig(
@@ -219,6 +221,13 @@ main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 websocket_lock = asyncio.Lock()  # Lock for thread-safe websocket list access
 connection_lock = threading.Lock()  # Lock for thread-safe hub_connected access
 log_lock = threading.Lock()  # Lock for thread-safe command log access
+
+# Notifications. The notifier decides what is worth saying and sends it on a
+# worker thread; the watcher turns a stream of zone snapshots into events. Both
+# are created here so every code path can reach them, and both are harmless
+# until the user turns notifications on in Settings.
+notifier = notifications.Notifier()
+zone_watcher = notify_watch.ZoneWatcher(notifier=notifier)
 
 # Command log buffer — keeps the last 500 entries
 command_log: deque = deque(maxlen=500)
@@ -434,6 +443,12 @@ async def lifespan(app: FastAPI):
         local_timezone_name(),
     )
     main_event_loop = asyncio.get_running_loop()
+
+    # Wire up notifications. Done here rather than at import time so that tests
+    # importing the module do not pick up whatever is in the real data dir.
+    notifier.log_hook = add_log_entry
+    refresh_notifier_identity()
+
     try:
         await connect_to_hub()
     except Exception as e:
@@ -444,12 +459,17 @@ async def lifespan(app: FastAPI):
     reconnect_task = asyncio.create_task(reconnect_loop())
     # Start background away-schedule checker
     schedule_task = asyncio.create_task(away_schedule_loop())
+    # Watches for cold rooms and silent thermostats. Separate from the hub push
+    # because both are conditions that persist rather than events that arrive -
+    # a room that stopped reporting sends nothing to react to.
+    watch_task = asyncio.create_task(notification_watch_loop())
 
     yield
     
     # Shutdown
     reconnect_task.cancel()
     schedule_task.cancel()
+    watch_task.cancel()
     logger.info("Shutting down server...")
     # Close all websocket connections
     for ws in connected_websockets:
@@ -1196,6 +1216,24 @@ async def reconnect_loop():
             attempt += 1
             logger.warning(f"Hub disconnected — reconnect attempt #{attempt} (next retry in {interval}s)")
             add_log_entry("error", f"Hub disconnected — reconnect attempt #{attempt} (delay: {interval}s)", source="hub")
+
+            # Alert once, on the way down, not on every retry. Deliberately not
+            # on the first attempt: a hub that blinks and comes straight back is
+            # not worth an email, and the retry is usually quicker than the mail.
+            if attempt >= 2:
+                notifier.set_condition(
+                    "hub_offline", "hub_offline", True,
+                    subject="Lost contact with the hub",
+                    body=(
+                        "The Raspberry Pi can no longer reach the Nobø hub.\n\n"
+                        "While this lasts, nothing can be switched or scheduled — not by this\n"
+                        "system and not by the Nobø app. Any override already on the hub stays\n"
+                        "in force, and heaters keep following whatever they were last told.\n\n"
+                        "Usually this is the hub losing power or the network going down.\n\n"
+                        "Reconnection is being retried automatically."
+                    ),
+                    severity="critical",
+                )
             try:
                 await connect_to_hub()
                 with connection_lock:
@@ -1203,6 +1241,16 @@ async def reconnect_loop():
                 if reconnected:
                     logger.info(f"Hub reconnected successfully after {attempt} attempt(s)")
                     add_log_entry("received", f"Hub reconnected after {attempt} attempt(s)", source="hub")
+                    if notifier.is_raised("hub_offline"):
+                        notifier.set_condition(
+                            "hub_offline", "hub_offline", False,
+                            recovery_event_type="hub_online",
+                            recovery_subject="The hub is back",
+                            recovery_body=(
+                                f"Contact with the Nobø hub was restored after {attempt} attempt(s).\n"
+                                "Everything can be controlled again."
+                            ),
+                        )
                     interval = MIN_INTERVAL  # Reset on success
                     attempt = 0
                     await broadcast_zone_update()
@@ -1243,6 +1291,15 @@ async def broadcast_zone_update():
     
     try:
         zones_data = get_zones_data()
+
+        # Every hub push is also the chance to notice that somebody else moved
+        # something. Guarded, because a fault in the notifier must never stop
+        # the browsers from being updated.
+        try:
+            zone_watcher.observe(zones_data)
+        except Exception as exc:
+            logger.error("Notification watcher failed on a hub update: %s", exc)
+
         message = {
             "type": "zones_update",
             "data": zones_data,
@@ -1266,6 +1323,60 @@ async def broadcast_zone_update():
                 
     except Exception as e:
         logger.error(f"Error broadcasting zone update: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def refresh_notifier_identity() -> None:
+    """Give the notifier the name the user chose, so alerts are recognisable."""
+    try:
+        site = config_persistence.load_site()
+        name = (site.get("name") or "").strip()
+        notifier.site_name = name or "Nobø Control"
+    except Exception:
+        notifier.site_name = "Nobø Control"
+
+
+def note_local_write(zone_id: Any, field_name: str, value: Any) -> None:
+    """
+    Record that this application made a change, before it is sent.
+
+    This is the whole basis of "somebody else changed it": the hub tells us what
+    changed but never who, so the only way to recognise our own echo is to have
+    written it down first. Called before the hub command, because the push can
+    come back faster than the call returns.
+    """
+    try:
+        zone_watcher.record_local_write(str(zone_id), field_name, value)
+    except Exception as exc:
+        logger.debug("Could not record a local write: %s", exc)
+
+
+async def notification_watch_loop():
+    """
+    Re-examine the house every minute for conditions rather than events.
+
+    A cold room and a silent thermostat are both states, not messages: nothing
+    arrives to react to, and the hub push that would have carried the news is
+    precisely what stops when a device goes quiet. So this polls.
+    """
+    INTERVAL = 60
+    while True:
+        await asyncio.sleep(INTERVAL)
+        try:
+            if not notifier.settings.get("enabled"):
+                continue
+            with connection_lock:
+                connected = hub_connected
+            if not connected:
+                continue
+            zone_watcher.observe(get_zones_data())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Notification watch loop error: %s", exc)
 
 
 def get_current_schedule_mode(zone_id: str) -> str:
@@ -1744,12 +1855,158 @@ async def update_site(request: Request, body: SiteUpdate):
 
     config_persistence.save_site({"name": cleaned, "show_on_login": show})
 
+    # Alerts are signed with the system name, so keep the notifier in step.
+    refresh_notifier_identity()
+
     add_log_entry(
         "sent",
         f"System renamed to '{cleaned}'" if cleaned else "System name cleared",
         source="api",
     )
     return site_settings()
+
+
+# ---------------------------------------------------------------------------
+# Notification settings
+# ---------------------------------------------------------------------------
+# Admin only, all three. The settings hold a mail password and decide where
+# alerts about this building are sent, which is not something an ordinary
+# account should be able to read, redirect or silence.
+
+class NotificationEmail(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    security: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    from_addr: Optional[str] = None
+    to_addrs: Optional[List[str]] = None
+
+
+class NotificationUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    email: Optional[NotificationEmail] = None
+    events: Optional[Dict[str, bool]] = None
+    cold_threshold_c: Optional[float] = None
+    cold_for_minutes: Optional[int] = None
+    silent_after_minutes: Optional[int] = None
+    min_minutes_between: Optional[int] = None
+    quiet_hours: Optional[Dict[str, Any]] = None
+
+
+def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
+    """
+    Fold a partial update onto what is stored.
+
+    Absent fields keep their value so a client can flip one toggle without
+    having to resend the whole configuration — and, crucially, without having
+    to know the password, which it is never given.
+    """
+    current = notifications.load_settings()
+    if body.enabled is not None:
+        current["enabled"] = bool(body.enabled)
+    if body.events:
+        for key, value in body.events.items():
+            if key in notifications.EVENT_TYPES:
+                current["events"][key] = bool(value)
+    for field_name in ("cold_threshold_c", "cold_for_minutes",
+                       "silent_after_minutes", "min_minutes_between"):
+        value = getattr(body, field_name)
+        if value is not None:
+            current[field_name] = value
+    if body.quiet_hours is not None:
+        current["quiet_hours"] = body.quiet_hours
+    if body.email is not None:
+        for field_name in ("host", "port", "security", "username", "from_addr", "to_addrs"):
+            value = getattr(body.email, field_name)
+            if value is not None:
+                current["email"][field_name] = value
+        # An omitted password means "keep the one you have". An empty string is
+        # an explicit clear, which is how the user removes it.
+        if body.email.password is not None:
+            current["email"]["password"] = body.email.password
+    return current
+
+
+@app.get("/api/notifications")
+async def get_notifications(request: Request):
+    """The current notification settings, with the password redacted."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    return notifications.public_settings()
+
+
+@app.put("/api/notifications")
+async def update_notifications(request: Request, body: NotificationUpdate):
+    """Save notification settings and apply them immediately."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    merged = _merge_notification_body(body)
+
+    # Turning it on with settings that cannot deliver would look like it worked
+    # and then quietly never send anything, which is the worst outcome for a
+    # feature whose entire job is to speak up.
+    if merged.get("enabled"):
+        problems = notifications.validate_email_config(merged)
+        if problems:
+            raise HTTPException(status_code=400, detail=" ".join(problems))
+
+    saved = notifications.save_settings(merged)
+    notifier.reload(saved)
+    refresh_notifier_identity()
+
+    add_log_entry(
+        "sent",
+        "Notifications turned on" if saved["enabled"] else "Notifications turned off",
+        command="notifications update",
+        source="api",
+    )
+    return notifications.public_settings(saved)
+
+
+@app.post("/api/notifications/test")
+async def test_notification(request: Request, body: Optional[NotificationUpdate] = None):
+    """
+    Send a test email, reporting the real reason if it fails.
+
+    Accepts the settings in the body so the user can test before saving — the
+    alternative is making them save a broken configuration to find out it is
+    broken. The error text comes straight from the mail server, because
+    "authentication failed" and "name or service not known" need different
+    fixes and a generic failure message helps nobody.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+
+    cfg = _merge_notification_body(body) if body is not None else notifications.load_settings()
+
+    try:
+        await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                None, notifications.send_test, cfg, notifier.site_name
+            ),
+            timeout=notifications.SEND_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        add_log_entry("error", "Test notification timed out", source="api")
+        raise HTTPException(
+            status_code=504,
+            detail=f"The mail server did not answer within {notifications.SEND_TIMEOUT_SECONDS} seconds. "
+                   "Check the server address and port.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        # Deliberate status codes must reach the browser as themselves, not be
+        # flattened into a 500 by the catch-all below.
+        raise
+    except Exception as exc:
+        add_log_entry("error", f"Test notification failed: {exc}", source="api")
+        raise HTTPException(status_code=502, detail=f"The mail server refused it: {exc}")
+
+    add_log_entry("sent", "Test notification sent", command="notifications test", source="api")
+    return {"status": "success", "sent_to": cfg["email"]["to_addrs"]}
 
 
 @app.get("/manifest.webmanifest")
@@ -2114,6 +2371,11 @@ async def set_zone_override(zone_id: str, mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
+    # Written down before the command goes out, because the hub can push the
+    # change back to us faster than this function returns. Without this, every
+    # change we make would be reported as "changed from another app".
+    note_local_write(zone_id, "mode", mode)
+
     try:
         # Demo mode - update simulated data
         if DEMO_MODE:
@@ -2248,6 +2510,12 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
     if not connected:
         raise HTTPException(status_code=503, detail="Hub not connected")
     
+    # Recorded up front so our own change is not mistaken for somebody else's.
+    if temps.comfort is not None:
+        note_local_write(zone_id, "comfort", temps.comfort)
+    if temps.eco is not None:
+        note_local_write(zone_id, "eco", temps.eco)
+
     try:
         # Demo mode - validate device type from DEMO_ZONES
         if DEMO_MODE:
@@ -2369,6 +2637,9 @@ async def set_global_override(mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
+    # One record covering every zone, since a global override moves them all.
+    note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
     try:
         # Demo mode - update all simulated zones
         if DEMO_MODE:
@@ -2686,6 +2957,10 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         logger.warning(f"Cannot apply global mode '{mode}': hub not connected")
         return
 
+    # The scheduler changes every zone too, so the same record is needed here or
+    # a planned away period would arrive as "somebody changed it".
+    note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
     if DEMO_MODE:
         for demo_zone in DEMO_ZONES:
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
@@ -2785,6 +3060,14 @@ async def away_schedule_loop():
                     await _apply_global_mode_internal("home", source="schedule")
                     global_mode_source = "manual"
                     config_persistence.save_server_state({"global_mode_source": global_mode_source})
+                    notifier.notify(
+                        "away_period",
+                        "The away period has ended",
+                        "The planned away period is over. Every room is back on its normal\n"
+                        "weekly schedule, so the place will be warming up again.",
+                        severity="info",
+                        key="away_period_end",
+                    )
                 except Exception as e:
                     logger.error(f"Error applying Home on schedule expiry: {e}")
             last_active = False
@@ -2800,6 +3083,16 @@ async def away_schedule_loop():
                 await _apply_global_mode_internal("away", source="schedule")
                 global_mode_source = "schedule"
                 config_persistence.save_server_state({"global_mode_source": global_mode_source})
+                kept = config_persistence.load_away_exceptions()
+                notifier.notify(
+                    "away_period",
+                    "The away period has started",
+                    "The planned away period has begun. Every room has gone to Away, which\n"
+                    f"is a fixed {AWAY_TEMPERATURE:.0f}°C anti-frost setting.\n"
+                    + (f"\n{len(kept)} room(s) are held on Eco instead, as configured.\n" if kept else ""),
+                    severity="info",
+                    key="away_period_start",
+                )
             except Exception as e:
                 logger.error(f"Error applying Away on schedule activation: {e}")
 

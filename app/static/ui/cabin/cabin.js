@@ -160,6 +160,12 @@
 
   const SITE    = () => (state.site && state.site.display_name) || 'Cabin';
   const SITE_IN = () => (state.site && state.site.inline_name) || 'the cabin';
+  // "The cabin stands empty" at the start of a sentence. Only the first letter
+  // is touched, so a real name like "Mostugu" is left exactly as typed.
+  const SITE_IN_CAP = () => {
+    const s = SITE_IN();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
 
   function applySiteName() {
     document.title = `${SITE()} - Nobø Control`;
@@ -1719,6 +1725,27 @@
       </section>
 
       <section class="card">
+        <h2>Telling you when something is wrong</h2>
+        <p class="zd-sub">${SITE_IN_CAP()} stands empty most of the year, so nothing
+        here is noticed unless it comes and finds you. Alerts are sent by email.</p>
+
+        <div class="switch">
+          <div class="switch-text">
+            <strong>Send alerts</strong>
+            <span>Off until a mail server and a recipient are set below.</span>
+          </div>
+          <button class="btn" type="button" data-act="toggle-notify"
+            aria-pressed="false" ${isAdmin ? '' : 'disabled'}>Off</button>
+        </div>
+
+        <div id="notifyBox" class="notify-box">
+          <p class="zd-sub">Loading…</p>
+        </div>
+
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      </section>
+
+      <section class="card">
         <h2>Your account</h2>
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
@@ -1763,6 +1790,224 @@
     root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/classic#settings'; };
     root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
     loadAwayExceptions();
+    const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
+    if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
+    loadNotifications(isAdmin);
+  }
+
+  /* ------------------------------------------------------------------
+   * Notifications
+   *
+   * What can honestly be detected, and what cannot, is decided by the Nobø
+   * protocol rather than by us:
+   *
+   *   - An override carries no source, so "who changed this?" is answered by
+   *     elimination. The server records its own writes; anything else came
+   *     from somewhere else, and the wording never guesses which app.
+   *   - A component's Status field is "not yet implemented", so there is no
+   *     signal at all when somebody presses the button on a thermostat.
+   *   - But a temperature can arrive as "N/A" once the hub's stored value goes
+   *     stale, which is what a switched-off thermostat eventually looks like.
+   *
+   * So the two alerts that matter for a cabin - a cold room and a thermostat
+   * that has gone quiet - are both inferred, and the copy here says so rather
+   * than implying the system knows more than it does.
+   * ---------------------------------------------------------------- */
+
+  const NOTIFY_SECURITY = [
+    ['starttls', 'STARTTLS (port 587)'],
+    ['ssl', 'SSL/TLS (port 465)'],
+    ['none', 'None (not recommended)'],
+  ];
+
+  async function loadNotifications(isAdmin) {
+    const box = $('#notifyBox');
+    if (!box) return;
+    try {
+      state.notify = await Nobo.api.notifications();
+      renderNotifications(isAdmin);
+    } catch (e) {
+      // An ordinary user is not allowed to read these, which is not an error
+      // worth shouting about - just hide the panel.
+      box.closest('.card').hidden = true;
+    }
+  }
+
+  function renderNotifications(isAdmin) {
+    const box = $('#notifyBox');
+    const n = state.notify;
+    if (!box || !n) return;
+    const dis = isAdmin ? '' : 'disabled';
+
+    const toggle = $('[data-act="toggle-notify"]');
+    if (toggle) {
+      toggle.textContent = n.enabled ? 'On' : 'Off';
+      toggle.setAttribute('aria-pressed', String(!!n.enabled));
+    }
+
+    const types = n.event_types || {};
+    box.innerHTML = `
+      <h3 class="notify-head">What to tell me about</h3>
+      <div class="exc-list">
+        ${Object.keys(types).map(key => `
+          <label class="exc-row notify-row">
+            <input type="checkbox" data-ev="${esc(key)}"
+                   ${n.events[key] ? 'checked' : ''} ${dis}>
+            <span class="exc-name">${esc(types[key].label)}
+              <small class="field-hint">${esc(types[key].help)}</small>
+            </span>
+          </label>`).join('')}
+      </div>
+
+      <h3 class="notify-head">When to call a room cold</h3>
+      <div class="notify-grid">
+        <label class="field">
+          <span>Warn below</span>
+          <input type="number" id="ntCold" min="-20" max="30" step="0.5"
+                 value="${esc(String(n.cold_threshold_c))}" ${dis}>
+          <small class="field-hint">Degrees. Away holds ${AWAY_TEMP_LABEL()}, so
+          anything under that means the heating is not working.</small>
+        </label>
+        <label class="field">
+          <span>…for at least</span>
+          <input type="number" id="ntColdFor" min="0" max="1440" step="5"
+                 value="${esc(String(n.cold_for_minutes))}" ${dis}>
+          <small class="field-hint">Minutes. Stops a door held open counting as a fault.</small>
+        </label>
+        <label class="field">
+          <span>Thermostat silent for</span>
+          <input type="number" id="ntSilent" min="5" max="10080" step="15"
+                 value="${esc(String(n.silent_after_minutes))}" ${dis}>
+          <small class="field-hint">Minutes without a reading before saying so.</small>
+        </label>
+      </div>
+
+      <h3 class="notify-head">Where to send it</h3>
+      <div class="notify-grid">
+        <label class="field">
+          <span>Send to</span>
+          <input type="text" id="ntTo" value="${esc((n.email.to_addrs || []).join(', '))}"
+                 placeholder="you@example.com" autocomplete="off" ${dis}>
+          <small class="field-hint">Separate several addresses with commas.</small>
+        </label>
+        <label class="field">
+          <span>Mail server</span>
+          <input type="text" id="ntHost" value="${esc(n.email.host || '')}"
+                 placeholder="smtp.gmail.com" autocomplete="off" ${dis}>
+        </label>
+        <label class="field">
+          <span>Port</span>
+          <input type="number" id="ntPort" value="${esc(String(n.email.port || 587))}" ${dis}>
+        </label>
+        <label class="field">
+          <span>Encryption</span>
+          <select id="ntSec" ${dis}>
+            ${NOTIFY_SECURITY.map(([v, l]) =>
+              `<option value="${v}"${n.email.security === v ? ' selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="ntUser" value="${esc(n.email.username || '')}"
+                 autocomplete="off" ${dis}>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="ntPass" value="" autocomplete="new-password"
+                 placeholder="${n.email.password_set ? 'Unchanged' : ''}" ${dis}>
+          <small class="field-hint">${n.email.password_set
+            ? 'Leave empty to keep the password you already saved.'
+            : 'With Gmail this is an app password, not your normal one.'}</small>
+        </label>
+        <label class="field">
+          <span>From</span>
+          <input type="text" id="ntFrom" value="${esc(n.email.from_addr || '')}"
+                 placeholder="pi@example.com" autocomplete="off" ${dis}>
+        </label>
+      </div>
+
+      <label class="exc-row notify-row">
+        <input type="checkbox" id="ntQuiet" ${n.quiet_hours.enabled ? 'checked' : ''} ${dis}>
+        <span class="exc-name">Stay quiet overnight
+          <small class="field-hint">From ${esc(n.quiet_hours.start)} to ${esc(n.quiet_hours.end)}.
+          A frost warning is still sent — it would be no use in the morning.</small>
+        </span>
+      </label>
+
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="test-notify" ${dis}>Send a test email</button>
+        <button class="btn btn-primary" type="button" data-act="save-notify" ${dis}>Save alerts</button>
+      </div>`;
+
+    if (!isAdmin) return;
+    box.querySelector('[data-act="save-notify"]').onclick = () => saveNotifications();
+    box.querySelector('[data-act="test-notify"]').onclick = testNotifications;
+  }
+
+  function readNotifyForm() {
+    const val = (id) => { const el = $(id); return el ? el.value.trim() : ''; };
+    const num = (id, fallback) => {
+      const el = $(id);
+      const v = el ? Number(el.value) : NaN;
+      return Number.isFinite(v) ? v : fallback;
+    };
+    const n = state.notify;
+    const events = {};
+    document.querySelectorAll('#notifyBox [data-ev]').forEach(cb => {
+      events[cb.dataset.ev] = cb.checked;
+    });
+    const body = {
+      events,
+      cold_threshold_c: num('#ntCold', n.cold_threshold_c),
+      cold_for_minutes: num('#ntColdFor', n.cold_for_minutes),
+      silent_after_minutes: num('#ntSilent', n.silent_after_minutes),
+      quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
+      email: {
+        host: val('#ntHost'),
+        port: num('#ntPort', 587),
+        security: val('#ntSec') || 'starttls',
+        username: val('#ntUser'),
+        from_addr: val('#ntFrom'),
+        to_addrs: val('#ntTo').split(',').map(s => s.trim()).filter(Boolean),
+      },
+    };
+    // An empty box means "keep what is saved", not "clear it" - the browser is
+    // never given the password, so it cannot send it back.
+    const pass = val('#ntPass');
+    if (pass) body.email.password = pass;
+    return body;
+  }
+
+  async function saveNotifications(enabledOverride) {
+    const body = readNotifyForm();
+    if (enabledOverride !== undefined) body.enabled = enabledOverride;
+    try {
+      state.notify = await Nobo.api.setNotifications(body);
+      Nobo.toast(state.notify.enabled ? 'Alerts are on' : 'Alerts saved');
+      renderNotifications(true);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+    }
+  }
+
+  function toggleNotifications() {
+    const n = state.notify;
+    if (!n) return;
+    if (n.enabled) { saveNotifications(false); return; }
+    saveNotifications(true);
+  }
+
+  async function testNotifications() {
+    const btn = $('#notifyBox [data-act="test-notify"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    try {
+      const res = await Nobo.api.testNotification(readNotifyForm());
+      Nobo.toast(`Sent to ${(res.sent_to || []).join(', ')}. Check your inbox.`);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Send a test email'; }
+    }
   }
 
   /* ------------------------------------------------------------------
