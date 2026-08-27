@@ -1071,6 +1071,203 @@ can register a device by serial number and organise zones, but the app remains
 the tool for the initial pairing of the system. Keeping both connected means you
 never have to disconnect one to use the other.
 
+## HTTPS on Your Own Network
+
+By default the web interface answers plain HTTP on port 8000. That is fine on a
+home network, but your password crosses the network in clear text and the
+browser warns you about it every visit.
+
+This is optional and off unless you ask for it. It gives you
+`https://nobo.example.com` with a padlock and no warnings.
+
+> **This is not remote access.** It encrypts traffic on your own network.
+> Nothing here opens a port to the internet, and you should think hard before
+> publishing a heating system that is defended by one password. To reach it
+> from outside, use a VPN — see [Reaching It From Outside](#reaching-it-from-outside).
+
+### First, two things you need either way
+
+- **A hostname.** Pick one, for example `nobo.home.arpa` or a name in a domain
+  you already own.
+- **A local DNS record** pointing that name at the Pi's LAN address, so it
+  resolves inside the house. Most routers can do this; on UniFi it is
+  Settings → Networks → your network → DNS.
+
+Then choose how the certificate is issued.
+
+### Option A: Caddy's own certificate authority (default)
+
+Caddy runs a small private CA on the Pi, issues itself a certificate and renews
+it for ever. **Nothing to register, no DNS records, no third party, and no
+expiry date to forget.** It works with any hostname, including invented ones
+like `nobo.home.arpa`.
+
+The price: browsers do not know that CA, so you install its root certificate
+once on each device. After that, no warnings.
+
+Set two things in `.env`:
+
+```bash
+NOBO_DOMAIN=nobo.home.arpa
+NOBO_BIND=127.0.0.1
+```
+
+`NOBO_BIND=127.0.0.1` makes the application answer only the proxy, so the
+unencrypted port stops answering the network altogether.
+
+Start it:
+
+```bash
+cd /opt/nobo-control
+sudo docker compose --profile tls up -d
+```
+
+Then export the root certificate:
+
+```bash
+sudo docker compose --profile tls exec caddy \
+  cat /data/caddy/pki/authorities/local/root.crt > nobo-root.crt
+```
+
+Copy `nobo-root.crt` to each device and install it:
+
+| Device | How |
+| --- | --- |
+| **Windows** | Double-click → Install Certificate → Local Machine → place in **Trusted Root Certification Authorities** |
+| **macOS** | Double-click → Keychain Access → find it → Get Info → Trust → **Always Trust** |
+| **iPhone / iPad** | AirDrop or email it to yourself → Settings → Profile Downloaded → Install. **Then** Settings → General → About → Certificate Trust Settings → switch it on. That second step is easy to miss and nothing works without it |
+| **Android** | Settings → Security → Encryption & credentials → Install a certificate → **CA certificate** |
+| **Linux** | `sudo cp nobo-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates` |
+
+Firefox keeps its own trust store on every platform, so add it there too if you
+use Firefox: Settings → Privacy & Security → Certificates → View Certificates →
+Authorities → Import.
+
+> **Keep the `caddy-data` volume.** The CA lives in it. Delete it and Caddy
+> generates a brand new root, and every device you installed the old one on
+> starts warning again. It is included in `scripts/backup.sh`.
+
+The certificate the browser sees lasts about twelve hours and is renewed
+automatically — that is normal for a local CA. The root you install is the one
+that lasts ten years.
+
+### Option B: a Let's Encrypt certificate
+
+Use this if you would rather not install anything on your devices — for example
+if guests use the interface, or there are many devices.
+
+You need **a real domain you own** (a certificate cannot be issued for
+`nobo.home.arpa` or an IP address) and a way to write a DNS TXT record
+automatically. Certificates last 90 days and the challenge token changes every
+time, so this has to be automated or you will be editing DNS by hand six times
+a year.
+
+The challenge used is **DNS-01**, which proves you own the name by writing a DNS
+record rather than by answering a connection — so this still needs no port open
+to the internet.
+
+**If your DNS host has an API** (Cloudflare, Route53, deSEC, DigitalOcean and
+many more), use it directly. In `.env`:
+
+```bash
+NOBO_CADDYFILE=./tls/Caddyfile.acme
+CADDY_BINARY_SOURCE=caddy-plugins
+CADDY_DNS_PLUGIN=github.com/caddy-dns/cloudflare
+NOBO_TLS_EMAIL=you@example.com
+```
+
+then follow that plugin's README for its credentials and edit the `tls` block in
+`tls/Caddyfile.acme` to match.
+
+**If your DNS host has no API** (one.com and many others), use
+[acme-dns](https://github.com/joohoi/acme-dns). Register once:
+
+```bash
+curl -sX POST https://auth.acme-dns.io/register
+```
+
+Add a **CNAME** at your DNS host pointing the challenge name at the `fulldomain`
+from the reply:
+
+```
+_acme-challenge.nobo.example.com.   CNAME   <fulldomain-from-the-reply>.
+```
+
+The record Let's Encrypt looks up is still a TXT — the CNAME simply points that
+lookup somewhere that can be written automatically. It is static and never
+changes again.
+
+Then in `.env`:
+
+```bash
+NOBO_CADDYFILE=./tls/Caddyfile.acme
+CADDY_BINARY_SOURCE=caddy-plugins
+NOBO_BIND=127.0.0.1
+NOBO_DOMAIN=nobo.example.com
+NOBO_TLS_EMAIL=you@example.com
+ACMEDNS_USERNAME=...
+ACMEDNS_PASSWORD=...
+ACMEDNS_SUBDOMAIN=...      # the "subdomain" field, not your hostname
+```
+
+```bash
+sudo docker compose --profile tls up -d --build
+```
+
+The first build compiles Caddy with the DNS plugin and takes several minutes on
+a Pi. Watch it with `sudo docker compose logs -f caddy`;
+`certificate obtained successfully` means it worked.
+
+### Check it worked
+
+```bash
+# who issued the certificate, and for what
+echo | openssl s_client -connect nobo.example.com:443 -servername nobo.example.com 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates
+
+# the plain-HTTP port should now be refused from another machine
+curl -sS --max-time 5 http://<pi-lan-ip>:8000/api/health
+```
+
+That last command **failing** is the point: with `NOBO_BIND=127.0.0.1` the
+application no longer answers the network directly, only through Caddy.
+
+### If it goes wrong
+
+SSH still works and the application is still running, so you are never locked
+out of the Pi. To go back to plain HTTP:
+
+```bash
+sudo docker compose --profile tls down
+# set NOBO_BIND=0.0.0.0 in .env
+sudo docker compose up -d
+```
+
+| Symptom | Cause |
+| --- | --- |
+| Warning on every device | Expected with Option A until the root certificate is installed — and on iOS, until it is switched on in Certificate Trust Settings as well |
+| Warnings came back after a rebuild | The `caddy-data` volume was deleted, so the CA was regenerated. Export and install the new root |
+| `502 Bad Gateway` | The application is not on the port Caddy expects. `NOBO_PORT` must match on both sides |
+| Certificate fine, page does not load | `NOBO_BIND` was changed but the application container was not restarted |
+| `no such module dns.providers.*` | Option B without `CADDY_BINARY_SOURCE=caddy-plugins`, or the image was not rebuilt — add `--build` |
+| Stuck retrying the challenge | Option B: the CNAME is missing or wrong. Check with `dig _acme-challenge.nobo.example.com CNAME` |
+
+### Reaching It From Outside
+
+HTTPS on the LAN does not make the heating reachable from elsewhere, and that is
+deliberate. The safer way in is a VPN back into your own network: nothing is
+published, and the same certificate keeps working because as far as the Pi is
+concerned you are on the LAN.
+
+- **UniFi Teleport** (Dream Router and similar) — easiest by a distance. One
+  click, and family scan a QR code in the WiFiman app.
+- **WireGuard** — built into most routers now, clients for every platform.
+- **Tailscale** — no router configuration at all, runs on the Pi itself.
+
+If you publish it anyway, at minimum: change the default password, put the Pi on
+an isolated VLAN that can still reach the hub on TCP 27779, and understand that
+you are exposing your heating to the whole internet.
+
 ## Updating the Software
 
 To update to the latest version:
@@ -1643,15 +1840,21 @@ overrides the mounted files, which is exactly the bug this avoids.
 
 ## Security Notes
 
-- **This system is for a trusted local network only.** There is no HTTPS: the
-  login password and session cookie travel across your network in plain text.
-  Anyone able to watch that traffic can read them. On a home network behind a
-  router this is a normal trade-off; on a shared or public network it is not.
+- **HTTPS is available but off by default.** Out of the box the login password
+  and session cookie travel across your network in plain text, and anyone able
+  to watch that traffic can read them. On a home network behind a router that
+  is a normal trade-off; on a shared or public network it is not. See
+  [HTTPS on Your Own Network](#https-on-your-own-network) to turn it on — it
+  needs no port open to the internet.
 - **Do not forward port 8000 from your router.** If you need access from
   outside the house, use a VPN back into your network, or put a reverse proxy
   such as Caddy or nginx in front of it to terminate TLS and reach the
   application over `http://localhost:8000`. Exposing it directly puts your
   heating, and a plain-text password, on the public internet.
+- **The login lockout is sized for a LAN, not the internet.** Five failed
+  attempts lock an account for a minute, which is ample against someone
+  guessing on your own network and thin against a determined attacker with a
+  list. It is another reason not to publish this.
 - **Change the default `admin` / `nobohub` password immediately.** It is
   published here and in every copy of this repository.
 - Every API address and the live-update connection require a login, unless you

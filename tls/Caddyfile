@@ -1,0 +1,49 @@
+# Caddy configuration for Nobø Control — Caddy's own certificate authority.
+#
+# This is the default because it depends on nothing outside your house: no DNS
+# records, no ports open to the internet, no third party, and no expiry date to
+# forget. Caddy runs a small private CA, issues itself a certificate for your
+# hostname, and renews it automatically for ever.
+#
+# The price is that browsers do not know that CA, so you install its root
+# certificate once on each device you use. After that you get a padlock and no
+# warnings. See "HTTPS on Your Own Network" in the README for how to export the
+# root and install it.
+#
+# If you would rather have a certificate the whole world already trusts, use
+# Caddyfile.acme instead — same proxy, Let's Encrypt over DNS-01.
+
+{
+	# Caddy tries to add its root to the trust store of whatever it is running
+	# on. Inside a container that achieves nothing and just logs a failure, and
+	# the root is exported by hand anyway.
+	skip_install_trust
+}
+
+{$NOBO_DOMAIN} {
+	# Issue from Caddy's local CA rather than a public one.
+	tls internal
+
+	encode zstd gzip
+
+	header {
+		# The site is HTTPS-only, so tell browsers not to try plain HTTP again.
+		# Scoped to this hostname: reaching the Pi by IP still works if you ever
+		# need to get in without the proxy.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Do not advertise the server software.
+		-Server
+	}
+
+	# The application. It listens on the loopback address only when TLS is in
+	# use (NOBO_BIND=127.0.0.1), so this proxy is the only way in and the
+	# plain-HTTP port is not reachable from the network.
+	#
+	# Caddy upgrades WebSocket connections through reverse_proxy automatically,
+	# which /ws needs for live updates, and sets X-Forwarded-Proto, which is
+	# what makes the application mark its session cookie Secure.
+	reverse_proxy 127.0.0.1:{$NOBO_PORT:8000}
+}

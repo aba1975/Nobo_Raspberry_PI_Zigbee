@@ -4955,10 +4955,17 @@ async def read_classic():
 # ===== Main Entry Point =====
 if __name__ == "__main__":
     import uvicorn
-    
+
+    bind = os.getenv("NOBO_BIND", "0.0.0.0")
+    port = int(os.getenv("NOBO_PORT", "8000"))
+
     logger.info("Starting Nobø Web Control Server...")
     logger.info(f"Hub Serial: {NOBO_SERIAL}")
     logger.info(f"Hub IP: {NOBO_IP}")
-    logger.info("Access the web interface at http://localhost:8000")
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    if bind == "127.0.0.1":
+        # Reachable only through a reverse proxy on this machine. Saying so
+        # avoids a confusing "the site is down" when it is in fact deliberate.
+        logger.info(f"Listening on 127.0.0.1:{port} — local connections only")
+    else:
+        logger.info(f"Access the web interface at http://localhost:{port}")
+    uvicorn.run(app, host=bind, port=port, log_level="info")

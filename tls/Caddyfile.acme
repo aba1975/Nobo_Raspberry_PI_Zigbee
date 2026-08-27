@@ -1,0 +1,50 @@
+# Caddy configuration for Nobø Control.
+#
+# This terminates HTTPS on the Pi and passes the request to the application on
+# 127.0.0.1. The certificate is a real, publicly-trusted one from Let's
+# Encrypt, obtained over DNS-01 — so it works on a machine that is not
+# reachable from the internet at all, and there is nothing to install on
+# phones or laptops.
+#
+# Nothing here needs a port open to the internet. DNS-01 proves you control the
+# name by writing a TXT record, not by answering a connection.
+
+{
+	# Let's Encrypt emails this address before a certificate expires, which is
+	# the only warning you get if renewal has been failing.
+	email {$NOBO_TLS_EMAIL}
+}
+
+{$NOBO_DOMAIN} {
+	tls {
+		dns acmedns {
+			username {$ACMEDNS_USERNAME}
+			password {$ACMEDNS_PASSWORD}
+			subdomain {$ACMEDNS_SUBDOMAIN}
+			server_url {$ACMEDNS_SERVER_URL:https://auth.acme-dns.io}
+		}
+	}
+
+	encode zstd gzip
+
+	header {
+		# The site is HTTPS-only, so tell browsers not to try plain HTTP again.
+		# This is scoped to this hostname: reaching the Pi by IP still works if
+		# you ever need to get in without the proxy.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Do not advertise the server software.
+		-Server
+	}
+
+	# The application. It listens on the loopback address only when TLS is in
+	# use (NOBO_BIND=127.0.0.1), so this proxy is the only way in and the
+	# plain-HTTP port is not reachable from the network.
+	#
+	# Caddy upgrades WebSocket connections through reverse_proxy automatically,
+	# which /ws needs for live updates, and sets X-Forwarded-Proto, which is
+	# what makes the application mark its session cookie Secure.
+	reverse_proxy 127.0.0.1:{$NOBO_PORT:8000}
+}
