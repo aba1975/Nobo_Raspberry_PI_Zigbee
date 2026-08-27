@@ -13,6 +13,14 @@ services:
       # reachable at /cabin and /classic, so switching back is this one line
       # plus a restart - no rebuild, and no loss of any other fix.
       - NOBO_UI=${NOBO_UI:-cabin}
+      # Where the application listens.
+      #
+      # 0.0.0.0 (the default) means anyone on your network can reach it on
+      # port 8000 over plain HTTP. Set this to 127.0.0.1 when you run the TLS
+      # proxy below: the application is then reachable only through Caddy, and
+      # the unencrypted port stops answering the network entirely.
+      - NOBO_BIND=${NOBO_BIND:-0.0.0.0}
+      - NOBO_PORT=${NOBO_PORT:-8000}
     volumes:
       - nobo-data:/app/data
       # Containers default to UTC, but week schedules are wall-clock times, so
@@ -26,12 +34,62 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('NOBO_PORT', '8000') + '/api/health')"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
 
+  # HTTPS, for people who would rather not send their password across the
+  # network in clear text. Off unless you ask for it:
+  #
+  #   docker compose --profile tls up -d
+  #
+  # By default Caddy issues the certificate from its own private CA: nothing to
+  # register, no DNS records, no ports open to the internet, and no expiry to
+  # forget. You install its root certificate once per device. Set
+  # NOBO_CADDYFILE to ./tls/Caddyfile.acme instead if you want a Let's Encrypt
+  # certificate that every device already trusts.
+  #
+  # See "HTTPS on Your Own Network" in the README.
+  caddy:
+    profiles: ["tls"]
+    build:
+      context: ./tls
+      args:
+        # caddy-stock is the official binary and needs no compiling. Only the
+        # ACME path needs caddy-plugins, which rebuilds Caddy from source with
+        # a DNS provider — several minutes on a Pi. BuildKit skips the stage it
+        # is not asked for, so the default costs nothing.
+        CADDY_BINARY_SOURCE: ${CADDY_BINARY_SOURCE:-caddy-stock}
+        CADDY_DNS_PLUGIN: ${CADDY_DNS_PLUGIN:-github.com/caddy-dns/acmedns}
+    container_name: nobo-caddy
+    # Host networking for the same reason the application uses it: this is a
+    # LAN service, reached by a name that resolves to the Pi's own address.
+    network_mode: host
+    restart: always
+    depends_on:
+      - nobo-web-control
+    environment:
+      - NOBO_DOMAIN=${NOBO_DOMAIN:-}
+      - NOBO_TLS_EMAIL=${NOBO_TLS_EMAIL:-}
+      - NOBO_PORT=${NOBO_PORT:-8000}
+      - ACMEDNS_USERNAME=${ACMEDNS_USERNAME:-}
+      - ACMEDNS_PASSWORD=${ACMEDNS_PASSWORD:-}
+      - ACMEDNS_SUBDOMAIN=${ACMEDNS_SUBDOMAIN:-}
+      - ACMEDNS_SERVER_URL=${ACMEDNS_SERVER_URL:-https://auth.acme-dns.io}
+    volumes:
+      - ${NOBO_CADDYFILE:-./tls/Caddyfile}:/etc/caddy/Caddyfile:ro
+      # The CA and the certificates live here. If this is not persisted, every
+      # restart generates a brand new root — and every device you installed the
+      # old one on starts warning again.
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   nobo-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
     driver: local

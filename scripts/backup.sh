@@ -75,6 +75,34 @@ if [ ! -d "$TMPDIR/backup/data" ]; then
     fi
 fi
 
+# Back up Caddy's certificate store, if HTTPS is in use.
+#
+# This matters more than it looks. With Caddy's own CA, the private root lives
+# in here — and that root is what you installed on every phone and laptop in the
+# house. Lose it and Caddy generates a new one, and every device starts warning
+# again until somebody installs the replacement on each of them.
+#
+# Optional on purpose: most installations never turn HTTPS on, and a missing
+# Caddy volume is not a reason to fail a backup that has the heating data in it.
+CADDY_VOLUME=$(docker inspect nobo-caddy \
+    --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' \
+    2>/dev/null || true)
+
+if [ -z "$CADDY_VOLUME" ]; then
+    MATCHES=$(docker volume ls -q 2>/dev/null | grep -E '(^|_)caddy-data$' || true)
+    if [ "$(echo "$MATCHES" | grep -c .)" = "1" ]; then
+        CADDY_VOLUME="$MATCHES"
+    fi
+fi
+
+if [ -n "$CADDY_VOLUME" ]; then
+    MOUNT=$(docker volume inspect "$CADDY_VOLUME" --format '{{.Mountpoint}}' 2>/dev/null || true)
+    if [ -n "$MOUNT" ] && [ -d "$MOUNT" ]; then
+        cp -r "$MOUNT" "$TMPDIR/backup/caddy-data"
+        echo "  Backed up: TLS certificates and CA ($CADDY_VOLUME)"
+    fi
+fi
+
 # Create tarball
 tar -czf "$BACKUP_FILE" -C "$TMPDIR" backup
 rm -rf "$TMPDIR"

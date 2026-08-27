@@ -4,3 +4,6 @@
 pytest>=7.0.0
 httpx>=0.24.0
 pytest-asyncio>=0.21.0
+# Reads compose.yml in tests/test_deployment_config.py, which checks that
+# compose, the Caddyfile and .env.example still agree with each other.
+PyYAML>=6.0
