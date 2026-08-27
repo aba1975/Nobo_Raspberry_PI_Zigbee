@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
 from pydantic import BaseModel
@@ -574,6 +574,22 @@ auth.init_user_store()
 # public so container healthchecks and monitoring keep working without a login.
 PUBLIC_PATHS = frozenset({"/login", "/auth/login", "/favicon.ico", "/api/health"})
 
+# The sign-in page's own artwork. These have to be readable without a session
+# for the obvious reason: they appear *on* the sign-in page, which is shown to
+# somebody who by definition has not logged in yet. Behind the wall they answer
+# 302 to /login, the browser gets HTML where it expected an image, and falls
+# back to drawing a letter from the hostname — which is where the mysterious
+# "N" came from.
+#
+# Listed one by one rather than opening /static/ui/, so this stays a decision
+# about two specific files and not a hole that grows quietly. The sign-in pages
+# are otherwise entirely self-contained — their CSS is inline — so this is the
+# whole list, and a test keeps it matching what the page actually asks for.
+PUBLIC_ASSET_PATHS = frozenset({
+    "/static/ui/cabin/icon.svg",
+    "/static/ui/cabin/icon-180.png",
+})
+
 # Escape hatch for headless integrations. Off unless explicitly enabled.
 ALLOW_ANON_API = os.environ.get('NOBO_ALLOW_ANON_API', '').lower() in ('true', '1', 'yes')
 if ALLOW_ANON_API:
@@ -599,7 +615,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path in PUBLIC_PATHS:
+        if path in PUBLIC_PATHS or path in PUBLIC_ASSET_PATHS:
             return await call_next(request)
 
         if ALLOW_ANON_API and (path.startswith("/api/") or path == "/ws"):
@@ -2154,6 +2170,31 @@ async def site_manifest():
     return JSONResponse(
         content=base,
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Serve the interface's icon at the address browsers ask for by default.
+
+    ``/favicon.ico`` has been on the public allow-list all along but nothing
+    ever answered it, so it returned 404. Browsers request it unprompted for
+    any page that does not declare an icon — the classic interface declares
+    none — and on a 404 they draw a letter from the hostname instead.
+
+    An SVG is returned rather than a real .ico. The extension in the URL is a
+    convention, not a promise; every browser that still asks for this path
+    honours the Content-Type. Serving the same file the interface already uses
+    means there is one icon to keep, not two.
+    """
+    icon = STATIC_DIR / "ui" / ACTIVE_UI / "icon.svg"
+    if not icon.is_file():
+        # A missing icon is not worth an error page.
+        return Response(status_code=204)
+    return FileResponse(
+        icon,
+        media_type="image/svg+xml",
         headers={"Cache-Control": "no-cache"},
     )
 
