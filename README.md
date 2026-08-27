@@ -1110,22 +1110,29 @@ Set two things in `.env`:
 ```bash
 NOBO_DOMAIN=nobo.home.arpa
 NOBO_BIND=127.0.0.1
+COMPOSE_PROFILES=tls
 ```
 
 `NOBO_BIND=127.0.0.1` makes the application answer only the proxy, so the
 unencrypted port stops answering the network altogether.
 
+`COMPOSE_PROFILES=tls` is the one that is easy to skip and should not be. It
+makes the proxy part of the normal stack, so `docker compose up`,
+`scripts/update.sh` and the **systemd service** all start Caddy too. Without it
+the service starts the application alone — and with `NOBO_BIND=127.0.0.1` that
+leaves nothing answering the network after a reboot.
+
 Start it:
 
 ```bash
 cd /opt/nobo-control
-sudo docker compose --profile tls up -d
+sudo docker compose up -d
 ```
 
 Then export the root certificate:
 
 ```bash
-sudo docker compose --profile tls exec caddy \
+sudo docker compose exec caddy \
   cat /data/caddy/pki/authorities/local/root.crt > nobo-root.crt
 ```
 
@@ -1205,13 +1212,14 @@ CADDY_BINARY_SOURCE=caddy-plugins
 NOBO_BIND=127.0.0.1
 NOBO_DOMAIN=nobo.example.com
 NOBO_TLS_EMAIL=you@example.com
+COMPOSE_PROFILES=tls
 ACMEDNS_USERNAME=...
 ACMEDNS_PASSWORD=...
 ACMEDNS_SUBDOMAIN=...      # the "subdomain" field, not your hostname
 ```
 
 ```bash
-sudo docker compose --profile tls up -d --build
+sudo docker compose up -d --build
 ```
 
 The first build compiles Caddy with the DNS plugin and takes several minutes on
@@ -1238,13 +1246,15 @@ SSH still works and the application is still running, so you are never locked
 out of the Pi. To go back to plain HTTP:
 
 ```bash
-sudo docker compose --profile tls down
-# set NOBO_BIND=0.0.0.0 in .env
+# stop the proxy and remove it from the normal stack
+sudo docker compose down
+# in .env: set NOBO_BIND=0.0.0.0 and comment out COMPOSE_PROFILES
 sudo docker compose up -d
 ```
 
 | Symptom | Cause |
 | --- | --- |
+| Nothing answers at all after a reboot | `COMPOSE_PROFILES=tls` is missing from `.env`, so the service started the application alone while `NOBO_BIND=127.0.0.1` kept it off the network |
 | Warning on every device | Expected with Option A until the root certificate is installed — and on iOS, until it is switched on in Certificate Trust Settings as well |
 | Warnings came back after a rebuild | The `caddy-data` volume was deleted, so the CA was regenerated. Export and install the new root |
 | `502 Bad Gateway` | The application is not on the port Caddy expects. `NOBO_PORT` must match on both sides |
@@ -1494,6 +1504,10 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 - `.env` — your hub configuration (serial, IP)
 - `data/` volume — user accounts, away schedules, demo zone state, zone icons
   (`zone_icons.json`), the system name (`site.json`) and server state
+- `caddy-data` volume — TLS certificates and, if you use Caddy's own CA, its
+  private root. Only present when HTTPS is switched on. Worth having: that root
+  is the one you installed on every phone and laptop, and losing it means
+  installing a new one on all of them.
 
 Zone icons are worth calling out: the hub has no icon field, so they exist only
 on the Pi. The same goes for the system name. Everything else about a real hub's

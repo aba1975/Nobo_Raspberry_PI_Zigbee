@@ -188,6 +188,69 @@ class TestCertificatesSurviveARestart:
         assert any("/etc/caddy/Caddyfile:ro" in m for m in mounts), mounts
 
 
+class TestTheProxyStartsWithTheRestOfTheStack:
+    """A reboot must not leave nothing answering.
+
+    The systemd unit runs a plain ``docker compose up``, with no ``--profile``.
+    So a profiled service is invisible to it — and to ``scripts/update.sh``, and
+    to every command a user types out of habit. Combined with
+    ``NOBO_BIND=127.0.0.1`` that is the worst possible pairing: the application
+    comes back listening only on loopback, the proxy never starts, and the
+    heating is unreachable until somebody SSHes in.
+
+    ``COMPOSE_PROFILES`` in ``.env`` is what makes the profile part of the
+    normal stack, so every one of those paths picks it up without being taught
+    about profiles individually. Verified by rebooting the Pi: both containers
+    returned and HTTPS answered unattended.
+    """
+
+    def test_the_env_file_documents_the_profile_switch(self, env_example):
+        assert re.search(r"^#?COMPOSE_PROFILES=tls\s*$", env_example, re.M), (
+            "COMPOSE_PROFILES is not in .env.example, so turning HTTPS on "
+            "leaves the systemd service starting the application alone"
+        )
+
+    def test_it_ships_commented_out(self, env_example):
+        """It must not be on by default, or a fresh install starts a proxy it
+        has no certificate settings for."""
+        assert re.search(r"^#COMPOSE_PROFILES=tls\s*$", env_example, re.M), (
+            "COMPOSE_PROFILES should ship commented out"
+        )
+
+    def test_the_readme_tells_people_to_set_it(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        assert "COMPOSE_PROFILES=tls" in readme
+
+    def test_the_service_does_not_hard_code_a_profile(self):
+        """The unit stays profile-agnostic on purpose: .env decides. Putting
+        --profile tls here would start a proxy for people who never asked."""
+        unit = (ROOT / "deploy" / "systemd" / "nobo-control.service").read_text(encoding="utf-8")
+        assert "--profile" not in unit
+        assert "docker compose up" in unit
+
+
+class TestTheBackupCoversWhatTheReadmeClaims:
+    def test_the_certificate_store_is_backed_up(self):
+        """The README says the CA is included. It has to actually be.
+
+        With Caddy's own CA the private root lives in that volume, and it is
+        the one installed on every device in the house. A backup that silently
+        omits it is worse than one that never claimed to have it.
+        """
+        backup = (ROOT / "scripts" / "backup.sh").read_text(encoding="utf-8")
+        assert "caddy" in backup.lower(), "backup.sh never looks at the Caddy volume"
+        assert "caddy-data" in backup
+
+    def test_a_missing_caddy_volume_does_not_fail_the_backup(self):
+        """Most installations never turn HTTPS on. Their backup must still
+        succeed, and must still contain the heating data."""
+        backup = (ROOT / "scripts" / "backup.sh").read_text(encoding="utf-8")
+        caddy_section = backup[backup.index("CADDY_VOLUME"):]
+        assert "exit 1" not in caddy_section, (
+            "a missing Caddy volume aborts the backup"
+        )
+
+
 class TestTheApplicationCanHideBehindTheProxy:
     def test_the_container_honours_the_bind_address(self):
         """Hard-coding 0.0.0.0 in the image would leave the plain-HTTP port
