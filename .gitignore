@@ -48,6 +48,14 @@ Thumbs.db
 
 # Environment and secrets
 .env
+# Credentials for a DNS provider, if HTTPS is set up the Let's Encrypt way.
+.acmedns.json
+*.acmedns.json
+
+# Exported by the README's HTTPS instructions, into the install directory.
+# Not a secret — it is a public certificate — but it belongs to one machine
+# and should never be committed.
+nobo-root.crt
 
 # User data (runtime state, created by the app)
 data/
