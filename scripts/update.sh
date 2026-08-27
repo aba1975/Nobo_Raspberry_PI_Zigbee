@@ -57,4 +57,16 @@ sleep 3
 systemctl status "$SERVICE_NAME" --no-pager
 
 echo ""
-echo "Update complete. Web interface: http://$(hostname -I | awk '{print $1}'):8000"
+
+# Print the address that actually works. With the TLS proxy in front, the
+# application is bound to loopback and port 8000 answers nothing, so the old
+# unconditional http://<ip>:8000 sent people to a dead address every time.
+NOBO_DOMAIN=$(grep -E '^NOBO_DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+NOBO_BIND=$(grep -E '^NOBO_BIND=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+NOBO_PORT=$(grep -E '^NOBO_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+
+if [ "$NOBO_BIND" = "127.0.0.1" ] && [ -n "$NOBO_DOMAIN" ]; then
+    echo "Update complete. Web interface: https://$NOBO_DOMAIN"
+else
+    echo "Update complete. Web interface: http://$(hostname -I | awk '{print $1}'):${NOBO_PORT:-8000}"
+fi
