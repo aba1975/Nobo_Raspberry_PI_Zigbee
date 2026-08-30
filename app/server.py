@@ -723,6 +723,7 @@ class SiteUpdate(BaseModel):
     """What this place is called, and whether to say so before sign-in."""
     name: Optional[str] = None
     show_on_login: Optional[bool] = None
+    locale: Optional[str] = None
 
 
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away', 'off'}
@@ -1924,6 +1925,15 @@ def site_settings() -> dict:
         "inline_name": name or SITE_INLINE_FALLBACK,
         "is_named": bool(name),
         "max_length": config_persistence.SITE_NAME_MAX,
+        # "" means "follow the browser". Sent to every interface so dates are
+        # written the same way on every device in the house.
+        "locale": site.get("locale") or "",
+        # Stated rather than offered as choices. Times are 24-hour because the
+        # hub's own week profiles are "HHMM" and its handshake is
+        # "yyyyMMddHHmmss"; temperatures are Celsius because API_Nobo.pdf says
+        # "temperatures are in celsius" and there is no other unit to ask for.
+        "clock": "24h",
+        "temperature_unit": "C",
     }
 
 
@@ -1935,7 +1945,7 @@ async def get_site():
 
 @app.put("/api/site")
 async def update_site(request: Request, body: SiteUpdate):
-    """Rename the system.
+    """Rename the system, or change how dates are written.
 
     Admin only, for the same reason as the hub settings: it changes what every
     user of this installation sees, including on the sign-in page, so it is not
@@ -1950,6 +1960,7 @@ async def update_site(request: Request, body: SiteUpdate):
     # without having to know or resend the login-page preference.
     name = current["name"] if body.name is None else body.name
     show = current["show_on_login"] if body.show_on_login is None else bool(body.show_on_login)
+    locale = current.get("locale", "") if body.locale is None else body.locale
 
     cleaned = config_persistence._clean_site_name(name)
     if body.name is not None and name.strip() and not cleaned:
@@ -1959,16 +1970,34 @@ async def update_site(request: Request, body: SiteUpdate):
             detail="That name contains no usable characters. Try letters, numbers or spaces.",
         )
 
-    config_persistence.save_site({"name": cleaned, "show_on_login": show})
+    cleaned_locale = config_persistence._clean_locale(locale)
+    if body.locale is not None and locale.strip() and not cleaned_locale:
+        raise HTTPException(
+            status_code=400,
+            detail="That is not a valid language tag. Use something like nb-NO, sv-SE or en-GB.",
+        )
+
+    previous_locale = current.get("locale", "")
+    config_persistence.save_site(
+        {"name": cleaned, "show_on_login": show, "locale": cleaned_locale}
+    )
 
     # Alerts are signed with the system name, so keep the notifier in step.
     refresh_notifier_identity()
 
-    add_log_entry(
-        "sent",
-        f"System renamed to '{cleaned}'" if cleaned else "System name cleared",
-        source="api",
-    )
+    if body.name is not None and cleaned != current["name"]:
+        add_log_entry(
+            "sent",
+            f"System renamed to '{cleaned}'" if cleaned else "System name cleared",
+            source="api",
+        )
+    if cleaned_locale != previous_locale:
+        add_log_entry(
+            "sent",
+            f"Date format set to {cleaned_locale}" if cleaned_locale
+            else "Date format now follows the browser",
+            source="api",
+        )
     return site_settings()
 
 
@@ -4665,7 +4694,7 @@ async def login_page():
 
     The name is substituted server-side rather than fetched by script. The
     sign-in page is the first thing anyone sees, and a page that renders "the
-    cabin" and then blinks to "Mostugu" looks broken. It also keeps the site
+    cabin" and then blinks to "Lakeside" looks broken. It also keeps the site
     settings off the list of things readable without a session.
     """
     site = site_settings()

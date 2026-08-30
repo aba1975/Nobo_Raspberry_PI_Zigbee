@@ -444,6 +444,46 @@ const Nobo = (() => {
    * date handling rather than free-text parsing.
    * ------------------------------------------------------------- */
 
+  /* ---------------------------------------------------------------
+   * Dates and times
+   *
+   * One rule, applied everywhere: the clock is 24-hour, always. The hub's own
+   * week profiles are "HHMM" strings and its handshake is "yyyyMMddHHmmss", so
+   * 24-hour is the protocol's format, not a preference. Offering a 12-hour
+   * display would invent an ambiguity the system does not have — and "7:30"
+   * against a heating schedule is a genuinely dangerous thing to misread.
+   *
+   * Everything else about a date — the order of day and month, and the
+   * language of their names — comes from the installation's locale, so a
+   * household sees the same format on every device rather than whatever each
+   * browser happens to be set to. Intl does the work: no hand-maintained table
+   * of month names to fall out of date, and every language is supported rather
+   * than the handful somebody remembered to add.
+   * ------------------------------------------------------------- */
+
+  let LOCALE = null;   // null = follow the browser
+
+  function setLocale(tag) {
+    LOCALE = tag || null;
+  }
+
+  /** Locale tags for Intl. undefined lets the browser choose. */
+  function localeArg() {
+    return LOCALE || undefined;
+  }
+
+  function intlFormat(options) {
+    // hourCycle h23 is what pins this to 00–23 even in locales that would
+    // otherwise use AM/PM.
+    const opts = { hourCycle: 'h23', ...options };
+    try {
+      return new Intl.DateTimeFormat(localeArg(), opts);
+    } catch (_) {
+      // An unusable tag must not take the page down with it.
+      return new Intl.DateTimeFormat(undefined, opts);
+    }
+  }
+
   /**
    * Turn an <input type="date"> value and an <input type="time"> value,
    * both of which are LOCAL wall-clock, into an absolute ISO instant.
@@ -459,7 +499,13 @@ const Nobo = (() => {
     return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
   }
 
-  /** Split an ISO instant back into local date and time input values. */
+  /**
+   * Split an ISO instant back into local date and time input values.
+   *
+   * These feed <input type="date"> and <input type="time">, whose values are
+   * defined by HTML as yyyy-mm-dd and HH:MM whatever the user sees on screen.
+   * They are deliberately NOT localised — the browser handles the display.
+   */
   function fromIsoInstant(iso) {
     if (!iso) return { date: '', time: '' };
     const dt = new Date(iso);
@@ -471,16 +517,39 @@ const Nobo = (() => {
     };
   }
 
-  /** "Sun 24 Aug, 18:00" - short, unambiguous, no locale surprises. */
+  /** A date and time to read: "søn. 30. aug. 2026, 18:00" / "Sun 30 Aug 2026, 18:00". */
   function fmtWhen(iso) {
     if (!iso) return '';
     const dt = new Date(iso);
     if (Number.isNaN(dt.getTime())) return '';
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const p = (n) => String(n).padStart(2, '0');
-    return `${days[dt.getDay()]} ${dt.getDate()} ${months[dt.getMonth()]}, ${p(dt.getHours())}:${p(dt.getMinutes())}`;
+    return intlFormat({
+      weekday: 'short', day: 'numeric', month: 'short',
+      hour: '2-digit', minute: '2-digit',
+    }).format(dt);
+  }
+
+  /** Just the clock part of an instant, always 24-hour. */
+  function fmtTimeOfDay(value) {
+    const dt = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dt.getTime())) return '';
+    return intlFormat({ hour: '2-digit', minute: '2-digit' }).format(dt);
+  }
+
+  /** Day and month only: "30. aug." / "30 Aug" / "Aug 30". */
+  function fmtDayMonth(value) {
+    const dt = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(dt.getTime())) return '';
+    return intlFormat({ day: 'numeric', month: 'short' }).format(dt);
+  }
+
+  /** Day names for the schedule editor, in the installation's language. */
+  function dayNames(style = 'short') {
+    const fmt = intlFormat({ weekday: style });
+    // 2024-01-01 was a Monday; DAY_KEYS starts at Sunday, so start a day back.
+    return DAY_KEYS.map((key, i) => {
+      const d = new Date(2023, 11, 31 + i);   // 31 Dec 2023 = Sunday
+      return [key, fmt.format(d)];
+    });
   }
 
   /** "in 6 days" / "in 4 hours" / "now". Always relative to the real clock. */
@@ -514,5 +583,6 @@ const Nobo = (() => {
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
     toIsoInstant, fromIsoInstant, fmtWhen, fmtUntil, isManualDevice,
+    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth,
   };
 })();

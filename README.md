@@ -57,7 +57,7 @@ interface says so rather than pretending the change worked.
 
 | Feature | What it does |
 | --- | --- |
-| **Name your system** | Call it what you call the place — "Mostugu", "Storslåvegen 42" — and the whole app follows, sign-in page included. See [Naming Your System](#naming-your-system). |
+| **Name your system** | Call it what you call the place — "The Lodge", "Main Street 12" — and the whole app follows, sign-in page included. See [Naming Your System](#naming-your-system). |
 | **Hub settings in the browser** | Switch between demo mode and your real hub, and set the hub serial and IP, without editing files or using SSH. See [Changing Hub Settings From the Web Interface](#changing-hub-settings-from-the-web-interface). |
 | **Demo mode** | A full simulated house with eight zones, so you can try everything before a hub is connected. |
 | **Automatic start** | Starts on boot and restarts by itself if it stops. |
@@ -881,7 +881,7 @@ Ends your session and returns you to the login page.
 
 Out of the box the app calls itself **Cabin**. That is the name of the
 *interface*, not of anybody's house, so you can change it to whatever you call
-the place: a nickname like `Mostugu`, a street address like `Storslåvegen 42`,
+the place: a nickname like `Lakeside`, a street address like `Main Street 12`,
 or something plain like `The flat`.
 
 ### How to do it
@@ -895,13 +895,13 @@ The change takes effect immediately, everywhere:
 
 | Where | Before | After |
 | --- | --- | --- |
-| Header | Cabin | Mostugu |
-| Sign-in page | Heating control for the cabin. | Heating control for Mostugu. |
-| Trip card | Cabin | Mostugu |
-| Whole-house modes | All of the cabin | All of Mostugu |
-| Confirmations | Warm all of the cabin? | Warm all of Mostugu? |
-| Browser tab | Cabin - Nobø Control | Mostugu - Nobø Control |
-| Home-screen icon | Cabin | Mostugu |
+| Header | Cabin | Lakeside |
+| Sign-in page | Heating control for the cabin. | Heating control for Lakeside. |
+| Trip card | Cabin | Lakeside |
+| Whole-house modes | All of the cabin | All of Lakeside |
+| Confirmations | Warm all of the cabin? | Warm all of Lakeside? |
+| Browser tab | Cabin - Nobø Control | Lakeside - Nobø Control |
+| Home-screen icon | Cabin | Lakeside |
 
 Leave the field empty to go back to **Cabin**.
 
@@ -918,7 +918,7 @@ Turn it off and the sign-in page goes back to the generic wording while the rest
 of the app still uses your name.
 
 This is worth thinking about for about five seconds and then forgetting: if you
-are naming it `Mostugu`, leave it on.
+are naming it `Lakeside`, leave it on.
 
 ### Notes
 
@@ -934,6 +934,59 @@ are naming it `Mostugu`, leave it on.
   goes in page titles and headings. Anything longer is trimmed rather than
   refused.
 - Non-ASCII is fine — `æ`, `ø` and `å` are stored and displayed as typed.
+
+## Dates, Times and Temperature
+
+Nobø is sold mainly in Norway and the rest of the Nordics, so the defaults lean
+that way — but the format is yours to choose.
+
+### Date format
+
+**Settings → Date format.** It decides how dates are written and in what
+language the days of the week appear:
+
+| Setting | A date reads |
+| --- | --- |
+| Norsk (bokmål) | `søn. 30. aug., 18:00` |
+| Svenska | `sön 30 aug. 18:00` |
+| Suomi | `su 30.8. klo 18.00` |
+| English (UK) | `Sun 30 Aug, 18:00` |
+| Follow each browser | whatever each device is set to |
+
+It is stored **on the system, not per browser**, so the tablet in the hall and
+a phone in the kitchen show the same thing. Any
+[BCP 47](https://en.wikipedia.org/wiki/IETF_language_tag) tag is accepted, not
+just the ones in the list — the list is there to save you looking one up.
+
+This changes the *format*, not the language of the interface. Buttons and
+explanations are in English throughout.
+
+### The clock is always 24-hour
+
+Not a setting, and deliberately so. The hub's own weekly schedules are `HHMM`
+strings and its handshake timestamp is `yyyyMMddHHmmss`, so 24-hour is the
+protocol's format rather than a preference. Offering a 12-hour display would
+invent an ambiguity the system does not have — and misreading `7:30` on a
+heating schedule is the kind of mistake that costs a frozen pipe.
+
+Times you type are 24-hour too. `<input type="time">` sends `HH:MM` whatever
+your browser draws around it, so a phone showing an AM/PM picker still stores
+the right value.
+
+### Temperatures are always Celsius
+
+Also not a setting. `API_Nobo.pdf` states it plainly, in the section describing
+the zone structure:
+
+> Temperatures are in celsius. — page 11
+
+and again for each setpoint: *"Comfort temperature. Degrees Celsius. Expected
+to be an integer in the range 7 to 30."*
+
+There is no other unit to ask the hub for. A Fahrenheit option would mean
+either sending a number the hub reads as Celsius, or converting on the way in
+and out — one more thing to get wrong, for hardware that cannot use it. Nobø
+heaters are not sold with Fahrenheit dials.
 
 ## Changing Hub Settings From the Web Interface
 
@@ -1672,7 +1725,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/devices` | All devices, with their friendly names and zone assignment |
 | `GET /api/devices/search` | What a running device search has heard so far (real hub only) |
 | `GET /api/hub/config` | Current hub connection settings |
-| `GET /api/site` | What this installation is called, with both display forms resolved |
+| `GET /api/site` | What this installation is called and how it writes dates, with both display forms resolved |
 | `GET /manifest.webmanifest` | The installed-app manifest, carrying the chosen name |
 | `GET /api/log` | Recent commands sent to and received from the hub |
 | `GET /api/global-mode/away-schedule` | The current holiday period, if any |
@@ -1724,7 +1777,7 @@ confirm. `502` means the hub answered but refused or said nothing useful;
 | `POST /auth/change-password`, `POST /auth/rename` | Your own account |
 | `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
 | `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
-| `PUT /api/site` | Rename the installation (admins only). Body `{"name": "Mostugu", "show_on_login": true}` — either field may be omitted to leave it unchanged. |
+| `PUT /api/site` | Rename the installation, or set its date format (admins only). Body `{"name": "Lakeside", "show_on_login": true, "locale": "nb-NO"}` — any field may be omitted to leave it unchanged. |
 
 ### If a request fails
 
@@ -1790,6 +1843,7 @@ application's own behaviour.
 | `tests/test_real_hub_endpoints.py` | The full HTTP API driven against the fake hub: schedules, zones, devices, discovery and pairing. |
 | `tests/test_connection_leak.py` | That overlapping connection attempts leave exactly one open client. The hub allows two connections, so a leak here locks you out. |
 | `tests/test_mode_switch_recovery.py` | That switching between demo mode and a real hub cannot get stuck "not connected". |
+| `tests/test_datetime_format.py` | That the clock stays 24-hour and dates follow the chosen locale. **Needs `node`** — it runs the real browser code rather than a Python reimplementation of it, and skips if node is missing. |
 
 This cannot catch a hub that behaves differently from its specification, because
 the fake encodes the same reading of the specification the application does, and
@@ -1811,11 +1865,21 @@ cd /opt/nobo-control
 docker compose build
 docker run --rm --user root -v "$PWD":/src -w /src \
   nobo-control-nobo-web-control:latest \
-  sh -c 'pip install -q -r requirements-dev.txt && python -m pytest'
+  sh -c 'apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs
+         pip install -q -r requirements-dev.txt && python -m pytest'
 ```
 
 `--user root` is needed because the image runs as an unprivileged user that
 does not own your checkout.
+
+`nodejs` is installed because `tests/test_datetime_format.py` runs the real
+browser code rather than a Python imitation of it — testing a reimplementation
+would prove nothing about what the browser actually does. It adds about
+half a minute on a Pi. Leave it out and those tests **skip**, which is worth
+knowing: a skipped test looks like a passing one in the summary line.
+
+The application image itself does not contain node; this installs it into the
+throwaway test container only.
 
 ### Testing a real installation
 
