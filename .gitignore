@@ -62,3 +62,9 @@ data/
 
 # Docker
 docker-compose.override.yml
+
+# Scratch space for ad-hoc deployment and debugging scripts. Kept out of the
+# repository because these tend to carry host addresses and passwords typed in
+# for one session, which is exactly the sort of thing that gets committed by
+# accident.
+.pi/

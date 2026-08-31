@@ -620,7 +620,12 @@ function updateHubInfo() {
 function updateLastUpdated() {
     const lastUpdatedEl = document.getElementById('lastUpdated');
     const now = new Date();
-    lastUpdatedEl.textContent = now.toLocaleTimeString();
+    // Always 24-hour. toLocaleTimeString() follows the browser, so on a US
+    // locale this read "7:30:15 PM" while every other time in the app was
+    // 24-hour — and the hub's own schedules are HHMM, so 24-hour is the
+    // system's format rather than a preference.
+    const p = (n) => String(n).padStart(2, '0');
+    lastUpdatedEl.textContent = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
 }
 
 function updateGlobalModeButtons() {

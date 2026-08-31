@@ -161,6 +161,22 @@
   const SITE    = () => (state.site && state.site.display_name) || 'Cabin';
   const SITE_IN = () => (state.site && state.site.inline_name) || 'the cabin';
 
+  /* Offered in Settings. Not a limit — the server accepts any language tag —
+     but a list saves people looking one up. Nordic first: this is a Nobø
+     system, and Nobø is sold mainly in Norway and the rest of the Nordics. */
+  const LOCALE_CHOICES = [
+    ['nb-NO', 'Norsk (bokmål) — 30. aug. 2026'],
+    ['nn-NO', 'Norsk (nynorsk) — 30. aug. 2026'],
+    ['sv-SE', 'Svenska — 30 aug. 2026'],
+    ['da-DK', 'Dansk — 30. aug. 2026'],
+    ['fi-FI', 'Suomi — 30.8.2026'],
+    ['is-IS', 'Íslenska — 30. ágú. 2026'],
+    ['de-DE', 'Deutsch — 30. Aug. 2026'],
+    ['en-GB', 'English (UK) — 30 Aug 2026'],
+    ['en-US', 'English (US) — Aug 30, 2026'],
+    ['', 'Follow each browser'],
+  ];
+
   function applySiteName() {
     document.title = `${SITE()} - Nobø Control`;
     // iOS reads this when the user adds the app to the home screen, which
@@ -175,6 +191,9 @@
       const t = $('#topTitle');
       if (t) t.textContent = SITE();
     }
+    // Dates are written the installation's way, not each browser's, so the
+    // same schedule reads identically on every device in the house.
+    Nobo.setLocale(state.site && state.site.locale);
   }
 
   const away = () => (state.status && state.status.away_schedule) || { enabled: false };
@@ -828,10 +847,18 @@
       </li>`;
   }
 
+  /* Monday first: the week starts on Monday everywhere this is sold, and a
+     heating schedule reads oddly beginning on Sunday. Nobo.dayNames() returns
+     the labels in the installation's own language. */
+  function scheduleDays() {
+    const byKey = Object.fromEntries(Nobo.dayNames('short'));
+    return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+      .map(key => [key, byKey[key] || key]);
+  }
+
   function renderSchedule() {
     if (!state.schedule) return `<p class="zd-sub">Loading the weekly schedule…</p>`;
-    const days = [['monday', 'Mon'], ['tuesday', 'Tue'], ['wednesday', 'Wed'], ['thursday', 'Thu'],
-                  ['friday', 'Fri'], ['saturday', 'Sat'], ['sunday', 'Sun']];
+    const days = scheduleDays();
     const rows = days.map(([key, label]) => {
       const blocks = state.schedule[key] || [];
       const segs = blocks.map(b => {
@@ -841,7 +868,7 @@
         return `<span class="sched-seg m-${esc(b.mode)}" style="width:${w}%"
           title="${esc(b.start)}-${esc(b.end)} ${esc(b.mode)}"></span>`;
       }).join('');
-      return `<div class="sched-day"><span>${label}</span><div class="sched-bar">${segs}</div></div>`;
+      return `<div class="sched-day"><span>${esc(label)}</span><div class="sched-bar">${segs}</div></div>`;
     }).join('');
 
     const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
@@ -873,10 +900,13 @@
    * the payload is derived on save.
    * ---------------------------------------------------------------- */
 
-  const SCHED_DAYS = [
-    ['monday', 'Mon'], ['tuesday', 'Tue'], ['wednesday', 'Wed'], ['thursday', 'Thu'],
-    ['friday', 'Fri'], ['saturday', 'Sat'], ['sunday', 'Sun'],
+  /* Monday first, so the weekday/weekend slices below stay meaningful.
+     Labels come from the installation's locale, resolved at call time so a
+     change in Settings takes effect without a reload. */
+  const SCHED_DAY_KEYS = [
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   ];
+  const schedDays = () => scheduleDays();
   const SCHED_MODES = [['comfort', 'Comfort'], ['eco', 'Eco'], ['away', 'Away'], ['off', 'Off']];
 
   /** Blocks -> switch points. Only the start of each block carries meaning. */
@@ -907,8 +937,8 @@
     if (!state.schedule) { Nobo.toast('The weekly schedule has not loaded yet', 'error'); return; }
 
     const draft = {};
-    SCHED_DAYS.forEach(([key]) => { draft[key] = pointsOfDay(state.schedule[key]); });
-    let day = SCHED_DAYS[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1][0];
+    SCHED_DAY_KEYS.forEach((key) => { draft[key] = pointsOfDay(state.schedule[key]); });
+    let day = SCHED_DAY_KEYS[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
 
     const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
 
@@ -919,8 +949,8 @@
       change. The day always starts at 00:00, so there can never be a gap.</p>
 
       <div class="day-tabs" role="tablist" aria-label="Day of the week">
-        ${SCHED_DAYS.map(([k, l]) => `<button class="day-tab" type="button" role="tab"
-          data-day="${k}" aria-selected="false">${l}</button>`).join('')}
+        ${schedDays().map(([k, l]) => `<button class="day-tab" type="button" role="tab"
+          data-day="${k}" aria-selected="false">${esc(l)}</button>`).join('')}
       </div>
 
       <div class="sched-bar sched-preview" id="weekPreview"></div>
@@ -1037,9 +1067,9 @@
         const which = e.target.value;
         e.target.value = '';
         if (!which) return;
-        const targets = which === 'week' ? SCHED_DAYS.slice(0, 5).map(d => d[0])
-          : which === 'weekend' ? SCHED_DAYS.slice(5).map(d => d[0])
-          : SCHED_DAYS.map(d => d[0]);
+        const targets = which === 'week' ? SCHED_DAY_KEYS.slice(0, 5)
+          : which === 'weekend' ? SCHED_DAY_KEYS.slice(5)
+          : SCHED_DAY_KEYS.slice();
         targets.forEach(t => { draft[t] = draft[day].map(p => ({ at: p.at, mode: p.mode })); });
         Nobo.toast('Copied to ' + targets.length + ' days');
         paint();
@@ -1048,7 +1078,7 @@
       root.querySelector('[data-act="dismiss"]').onclick = closeSheet;
       root.querySelector('[data-act="save"]').onclick = async () => {
         const payload = {};
-        for (const [key, label] of SCHED_DAYS) {
+        for (const [key, label] of schedDays()) {
           const pts = draft[key];
           const times = pts.map(p => p.at);
           if (new Set(times).size !== times.length) {
@@ -1194,7 +1224,8 @@
   /**
    * The server writes its timestamps in the Pi's own timezone with no offset,
    * so they must not be treated as UTC. Read the fields out of the string
-   * rather than letting Date guess.
+   * rather than letting Date guess, then rebuild a local Date from those exact
+   * parts — which is safe, because the local constructor does no conversion.
    */
   function fmtLogTime(ts) {
     const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(ts || ''));
@@ -1204,7 +1235,12 @@
     const sameDay = today.getFullYear() === +y
       && today.getMonth() + 1 === +mo
       && today.getDate() === +d;
-    return sameDay ? `${hh}:${mm}:${ss}` : `${d}/${mo} ${hh}:${mm}:${ss}`;
+    // Seconds matter in a diagnostic log, and Intl would drop them from the
+    // short forms, so the clock is built by hand. It is 24-hour regardless.
+    const clock = `${hh}:${mm}:${ss}`;
+    if (sameDay) return clock;
+    const local = new Date(+y, +mo - 1, +d, +hh, +mm, +ss);
+    return `${Nobo.fmtDayMonth(local)} ${clock}`;
   }
 
   /* ------------------------------------------------------------------
@@ -1647,7 +1683,8 @@
       <section class="card">
         <h2>What this place is called</h2>
         <p class="zd-sub">Used across the app and on the sign-in page. A nickname,
-        an address, whatever you call it — "Mostugu", "Storslåvegen 42", "The flat".</p>
+        a street address, whatever you call it — "The Lodge", "Lakeside",
+        "Main Street 12".</p>
         <label class="field">
           <span>Name</span>
           <input type="text" id="stSiteName" value="${esc(site.name || '')}"
@@ -1663,11 +1700,29 @@
         <small class="field-hint">The sign-in page is shown to anyone who can reach
         this Pi, before any password. Fine for a nickname; turn this off if the name
         is your address and the network is shared.</small>
+
+        <label class="field" style="margin-top:1rem">
+          <span>Date format</span>
+          <select id="stSiteLocale" ${isAdmin ? '' : 'disabled'}>
+            ${LOCALE_CHOICES.map(([tag, label]) => `
+              <option value="${esc(tag)}" ${(site.locale || '') === tag ? 'selected' : ''}>${esc(label)}</option>
+            `).join('')}
+          </select>
+          <small class="field-hint">Decides how dates are written and in what
+          language the days of the week appear. Set on the system rather than per
+          browser, so every device in the house shows the same thing.
+          Example: <strong id="stDateSample">${esc(Nobo.fmtWhen(new Date().toISOString()))}</strong></small>
+        </label>
+        <small class="field-hint">The clock is always 24-hour and temperatures are
+        always Celsius. Neither is a preference: the hub's own schedules are
+        "HHMM" and its specification states temperatures are in Celsius, so there
+        is nothing else to choose.</small>
+
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-site"
-            ${isAdmin ? '' : 'disabled'}>Save name</button>
+            ${isAdmin ? '' : 'disabled'}>Save</button>
         </div>
-        ${isAdmin ? '' : '<div class="note">Only an administrator can change the name.</div>'}
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       </section>
 
       <section class="card">
@@ -1786,6 +1841,18 @@
     // would simply reload Cabin.
     root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/classic#settings'; };
     root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
+    // Show the chosen format before it is saved, so picking one is not a guess.
+    const localeSel = root.querySelector('#stSiteLocale');
+    const sample = root.querySelector('#stDateSample');
+    if (localeSel && sample) {
+      localeSel.onchange = () => {
+        const chosen = state.site && state.site.locale;
+        Nobo.setLocale(localeSel.value);
+        sample.textContent = Nobo.fmtWhen(new Date().toISOString());
+        // Put it back until Save, so nothing else on screen changes yet.
+        Nobo.setLocale(chosen);
+      };
+    }
     loadAwayExceptions();
     const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
@@ -2107,18 +2174,20 @@
   async function saveSite() {
     const nameEl = $('#stSiteName');
     const loginEl = $('#stSiteLogin');
+    const localeEl = $('#stSiteLocale');
     if (!nameEl) return;
     try {
       state.site = await Nobo.api.setSite({
         name: nameEl.value,
         show_on_login: !!(loginEl && loginEl.checked),
+        locale: localeEl ? localeEl.value : undefined,
       });
       // Re-label everything immediately. The name appears in the header, the
-      // trip card and half the confirmations, so waiting for a reload would
-      // leave the app half-renamed.
+      // trip card and half the confirmations, and the locale changes every
+      // date on screen, so waiting for a reload would leave the app half done.
       applySiteName();
       renderSettings();
-      Nobo.toast(state.site.is_named ? `Now called ${state.site.name}` : 'Name cleared');
+      Nobo.toast(state.site.is_named ? `Now called ${state.site.name}` : 'Settings saved');
     } catch (e) { Nobo.toast(e.message, 'error'); }
   }
 

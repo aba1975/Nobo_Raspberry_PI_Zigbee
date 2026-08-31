@@ -16,6 +16,7 @@ monkeypatch (same pattern as away_schedule.DATA_DIR / SCHEDULE_FILE).
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -325,9 +326,9 @@ def load_away_exceptions() -> list:
 
 
 # ---------------------------------------------------------------------------
-# Site identity
+# Site identity and regional format
 # ---------------------------------------------------------------------------
-# What the household calls this place: "Mostugu", "Storslåvegen 42", "The flat".
+# What the household calls this place: a nickname, a street address, "The flat".
 # Purely cosmetic — the hub neither knows nor cares — but it is the difference
 # between an app that belongs to you and one that calls your home "the cabin".
 #
@@ -337,10 +338,47 @@ def load_away_exceptions() -> list:
 # is the user's call to make, not ours, so it is a setting rather than an
 # assumption. It defaults to on, because a name nobody chose to hide is a name
 # they wanted shown.
+#
+# ``locale`` decides how dates are written: the order of day and month, and the
+# language of day and month names. It is stored per installation rather than
+# read from each browser, because a household should not see "Sun 30 Aug" on
+# one device and "søn. 30. aug." on another.
+#
+# Two things it deliberately does NOT control:
+#
+#   * The clock. Times are always 24-hour. The hub's own week profiles are
+#     "HHMM" strings and its handshake is "yyyyMMddHHmmss", so 24-hour is the
+#     protocol's own format; offering a 12-hour display would invent an
+#     ambiguity the system does not have.
+#   * The temperature unit. ``API_Nobo.pdf`` states plainly that "temperatures
+#     are in celsius". Fahrenheit is not a unit the hub can be asked for, so a
+#     setting would be a lie — the number would be wrong or the conversion
+#     would be ours to get wrong.
 
 SITE_NAME_MAX = 40
 
-_DEFAULT_SITE: dict = {"name": "", "show_on_login": True}
+# Empty means "follow the browser". Anything else is a BCP 47 tag passed
+# straight to Intl.DateTimeFormat, so this list is a convenience rather than a
+# limit — the check below only rejects strings that cannot be a language tag.
+_LOCALE_RE = re.compile(r"^[A-Za-z]{2,8}(-[A-Za-z0-9]{2,8})*$")
+LOCALE_MAX = 35
+
+_DEFAULT_SITE: dict = {"name": "", "show_on_login": True, "locale": ""}
+
+
+def _clean_locale(value: object) -> str:
+    """Normalise a locale tag, or return "" for "follow the browser".
+
+    Anything that is not shaped like a language tag becomes "" rather than an
+    error: the consequence is dates in the browser's own format, which is a
+    reasonable outcome and not worth blocking a settings save over.
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()[:LOCALE_MAX]
+    if not cleaned:
+        return ""
+    return cleaned if _LOCALE_RE.match(cleaned) else ""
 
 
 def _clean_site_name(value: object) -> str:
@@ -365,6 +403,7 @@ def save_site(site: dict) -> None:
             {
                 "name": _clean_site_name(site.get("name", "")),
                 "show_on_login": bool(site.get("show_on_login", True)),
+                "locale": _clean_locale(site.get("locale", "")),
             },
         )
     except Exception as exc:
@@ -392,6 +431,9 @@ def load_site() -> dict:
         return {
             "name": _clean_site_name(data.get("name", "")),
             "show_on_login": bool(data.get("show_on_login", True)),
+            # Absent in files written before this setting existed, which is the
+            # same as "follow the browser".
+            "locale": _clean_locale(data.get("locale", "")),
         }
     except FileNotFoundError:
         return dict(_DEFAULT_SITE)

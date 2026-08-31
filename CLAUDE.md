@@ -58,6 +58,11 @@ docker run --rm -v "$PWD":/src -w /src \
 so `docker compose exec ... pytest` will not work — the tests are not in the
 running container. Mount the repository as above instead.
 
+`tests/test_datetime_format.py` runs the real browser code in `node`, so it
+needs node on the path. Without it those tests **skip** rather than fail, which
+is easy to miss — see the container command in the README for how to include
+it.
+
 Most tests run in demo mode, so they never touch a real Nobø Hub. The real-hub
 code paths are covered separately, against `tests/fake_hub.py`:
 
@@ -103,7 +108,7 @@ about *how many* connections exist, or how long they live, needs real sockets or
   the app and the tests behave the same wherever they are started from
 - The installation's name (`data/site.json`) is Pi-only — the hub has no such
   field. It resolves to **two** forms, and they are not interchangeable:
-  `display_name` stands alone ("Mostugu", default `Cabin`) and `inline_name`
+  `display_name` stands alone ("Lakeside", default `Cabin`) and `inline_name`
   goes mid-sentence ("all of the cabin", default `the cabin`). Write new strings
   to *take* a name rather than to *be* one, or the unnamed default reads as
   "Warm all of Cabin?". `site_settings()` resolves both; never re-derive them.
@@ -111,6 +116,13 @@ about *how many* connections exist, or how long they live, needs real sockets or
   `html.escape` and gated behind `show_on_login`. A user may reasonably name the
   system after their street address; that must not be readable to anyone who can
   reach the Pi unless they chose it
+- **The clock is 24-hour and the unit is Celsius, everywhere, and neither is a
+  setting.** The hub's week profiles are `HHMM` and its handshake is
+  `yyyyMMddHHmmss`; `API_Nobo.pdf` p11 says "temperatures are in celsius". Only
+  the *date* format is configurable (`site.json` → `locale`), and it is applied
+  through `Intl` in `core.js` with `hourCycle: 'h23'` forced — so a locale that
+  would normally use AM/PM still renders 24-hour. Never format a date by hand
+  with a table of month names; that is what this replaced.
 
 ## Talking to a Real Hub
 
