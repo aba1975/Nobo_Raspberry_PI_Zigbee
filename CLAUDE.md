@@ -6,23 +6,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Raspberry Pi 4B (ARM64 / Ubuntu Server) deployment of [nobo-web-control](https://github.com/aba1975/nobo-web-control). The application code in `app/` is a direct copy from the source repo — identical Python + frontend.
 
+## Where This Has Got To
+
+Read this before offering to "add tests" or "verify" something. It is the
+difference between what has been proven and what has only been reasoned about.
+
+**Proven against real hardware.** The application has been connected to a real
+Nobø Hub and read it correctly: zones, devices, week profiles, and non-ASCII
+names. A mode change made in the official phone app arrived on the Pi
+unprompted a few seconds later, with both connected at once. The connection
+held for eighteen minutes with no drops.
+
+**Never run against real hardware.** Everything in Phase 5 of
+`docs/TEST_MATRIX.md`: **device discovery, pairing, and editing a week
+profile**. Those paths are written from `API_Nobo.pdf` and from pynobo's
+handling, and they are exercised only against `tests/fake_hub.py` — which
+encodes the same reading of the specification the application does, so it
+cannot disagree with it. Expect surprises there, and do not describe those
+paths as verified.
+
+**Proven only in demo mode.** Everything else, including the whole interface.
+
+**The honest limit of the fake hub.** It answers each connection faithfully,
+but nothing in a functional test counts open sockets or measures how long they
+live. Two real bugs were found with `ss -tn` after the fake-hub suite passed —
+see rule 4 under "Talking to a Real Hub". Anything about *how many* connections
+exist needs real sockets.
+
+`docs/TEST_MATRIX.md` is the checklist for closing that gap. It is ordered so
+the read-only checks come first, and every step that changes something says how
+to undo it. Test 4.2 — standing next to the heater — is the only one that
+proves the hub reached the hardware; everything else proves a message reached
+the hub.
+
 ## Architecture
 
 - **Backend:** FastAPI (Python 3.12) using `pynobo` for TCP communication with the Nobo Eco Hub
-- **Frontend:** Single-page app with WebSocket live updates (`app/static/`)
+- **Frontend:** Two interfaces sharing one backend (`app/static/`), with live updates over a WebSocket
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
-- **Configuration:** `.env` file (NOBO_SERIAL, NOBO_IP, NOBO_DEMO)
-- **Data persistence:** Docker named volume mounted at `/app/data` (users.json, away_schedule.json, demo state)
+- **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`) and optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`)
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`) and `caddy-data` (TLS certificates and, with the internal CA, its private root)
 
 ## Key Files
 
-- `app/server.py` — main FastAPI application (~2500 lines), all API endpoints
-- `app/auth.py` — session-based auth with bcrypt, brute-force protection
-- `app/away_schedule.py` — scheduled away mode persistence
-- `app/config_persistence.py` — atomic JSON file persistence for demo zones, schedules, server state
-- `Dockerfile` — Python 3.12-slim base, ARM64-compatible
-- `compose.yml` — single-service stack with host networking
+- `app/server.py` — the FastAPI application (~4,300 lines), every API endpoint, and both interfaces' HTML for the sign-in page
+- `app/auth.py` — session auth with bcrypt. Five failed attempts lock a username for 60s, which is sized for a LAN and thin for the internet
+- `app/away_schedule.py` — the scheduled away window. `away_schedule_loop()` is the only thing that writes to the hub unprompted, and both its paths require `enabled: true`
+- `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, away exceptions, site identity
+- `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
+- `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
+- `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
+- `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01
+- `Dockerfile` — Python 3.12-slim, ARM64. `compose.yml` — the app, plus Caddy behind the `tls` profile
 
 ## Build and Run
 
@@ -31,6 +67,11 @@ docker compose up --build -d         # build and start
 docker compose logs -f               # follow logs
 docker compose down                  # stop
 ```
+
+With HTTPS enabled, `COMPOSE_PROFILES=tls` in `.env` makes those same commands
+include the proxy. Do not rely on `--profile tls` on the command line: the
+systemd unit does not pass it, so a reboot would start the application alone —
+and with `NOBO_BIND=127.0.0.1` that leaves nothing answering the network.
 
 ## Running Tests
 
@@ -162,11 +203,10 @@ Four rules, each learned from a bug:
 Also worth knowing:
 
 - pynobo has no handling for `Y00`/`Y01`/`Y03`/`Y04`, so device search and
-  pairing go entirely through `HubProtocolTap`.
-- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
+  pairing go entirely through `HubProtocolTap`.- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
   not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.
 - Week profile states are `0=Comfort, 1=Eco, 2=Away, 4=Off`. `API_Nobo.pdf`
-  page 6 says "3: Off" and is wrong � pynobo's `validate_week_profile` accepts
+  page 6 says "3: Off" and is wrong — pynobo's `validate_week_profile` accepts
   only `0124`, and it is pynobo that talks to the hub.
 - Ids for new zones and week profiles are assigned by the hub, not the client.
   Send a placeholder and find the real one by diffing state before and after.
@@ -179,3 +219,57 @@ Also worth knowing:
   that do measure (for example thermostats reporting via `Y02`) populate it
   normally. Do not "fix" a null by substituting the setpoint — that would show a
   number the hardware never measured.
+
+## Working on a Running Pi
+
+Things that cost time to rediscover, in the order they usually bite.
+
+**A code change needs a rebuild.** `COPY app/ .` bakes the interface into the
+image, so restarting the container serves the old assets. Always
+`sudo bash scripts/update.sh`, never just `systemctl restart`.
+
+**Check which branch the Pi is on before trusting an update.** `git pull` on a
+Pi left on an old branch updates that branch and reports success. `update.sh`
+warns about this now; `git status -sb` confirms it.
+
+**Calling the API by hand:**
+
+| | |
+| --- | --- |
+| `POST /auth/login` | **form-encoded**, not JSON |
+| `POST /api/zones/{id}/temperature` | body is `{"comfort": N, "eco": N}` — *not* `comfort_temp`/`eco_temp`, which returns 400 |
+| `POST /api/hub/config` | deliberately signs you out; log in again after a few seconds |
+| `GET /api/log` | in-memory, so **empty after every restart**. Not a bug |
+| everything else | needs the session cookie; only `/login`, `/auth/login`, `/favicon.ico`, `/api/health` and the two sign-in icons are public |
+
+**Demo mode rounds temperatures to whole degrees**, so a test that sets 23.5
+and reads back 24 has not found a bug.
+
+**Static assets are served with `Cache-Control: no-cache`** by
+`RevalidatingStaticFiles`. Plain `StaticFiles` sends `ETag` but no
+`Cache-Control`, so browsers applied heuristic caching and shipped new HTML with
+stale JavaScript — buttons that did nothing. `no-cache` means "revalidate", not
+"do not store"; the ETag still makes it a 304.
+
+**The sign-in page's own artwork must stay public.** It is displayed to somebody
+who has not logged in, so anything it references has to be in
+`PUBLIC_ASSET_PATHS` or the browser gets a 302 to `/login` where it expected an
+image — and draws a letter from the hostname instead.
+
+## If You Are Picking This Up Fresh
+
+Likely next task: **`docs/TEST_MATRIX.md` against real hardware**, Phase 5
+especially. Ask which Pi is being tested and get its address — there are
+usually two, and they serve identical-looking pages, so a test that "passed" on
+the wrong one is worse than a test not run. Giving them different names under
+Settings makes the header say which is which.
+
+Before starting, confirm rather than assume:
+
+```bash
+git rev-parse --abbrev-ref HEAD && git log --oneline -1   # is this Pi current?
+curl -s localhost:8000/api/health                         # or https://<name>/api/health
+```
+
+The full suite, with node so the browser-code tests actually run rather than
+skip, is in the README under Testing.

@@ -3,11 +3,11 @@
 This is the checklist for the things automated tests cannot reach: a real hub, a
 real phone, a real browser, a real power cut.
 
-The unit and integration suite (`python -m pytest`, 453 tests) already covers the
-application's own logic against a fake hub. What it cannot cover is whether the
-hub behaves as documented, whether the radio actually switches a heater on,
-whether the Pi survives its own power supply, and how many TCP connections are
-open. That is what this document is for.
+The unit and integration suite already covers the application's own logic
+against a fake hub. What it cannot cover is whether the hub behaves as
+documented, whether the radio actually switches a heater on, whether the Pi
+survives its own power supply, and how many TCP connections are open. That is
+what this document is for.
 
 ## How to use it
 
@@ -16,20 +16,30 @@ Each test says who does it. Most need both of us:
 | Symbol | Meaning |
 |---|---|
 | 👤 | You — needs a phone, a physical heater, or eyes on the room |
-| 🤖 | Me — SSH, API calls, log and socket inspection |
+| 🤖 | The assistant — SSH, API calls, log and socket inspection |
 | 👥 | Both, at the same time |
+
+The 🤖 rows assume the assistant can reach the Pi. If it cannot, run them
+yourself and paste the output — every one is a shell command or a `curl`, and
+nothing here needs a tool you do not already have.
 
 Work top to bottom. The order is deliberate: everything in phase 1 and 2 is
 read-only, so if something is wrong we find out before anything has been
 changed. Phase 3 onwards writes to the hub, and every step says how to undo it.
 
-**Before starting anything that writes, take a snapshot.** I can capture the
-full hub state to a file, and diff it at the end to prove we left the house as we
-found it. Ask for it — it takes a few seconds and it is the difference between
-"I think we put it back" and knowing.
+**Before starting anything that writes, take a snapshot** of the hub's full
+state, and diff it at the end to prove the house was left as it was found. It
+takes seconds and it is the difference between "I think we put it back" and
+knowing.
 
 Record results in the table at the bottom. A test that has never been run is
 more useful marked "not run" than quietly assumed to pass.
+
+> **If you are the assistant and starting cold:** read `CLAUDE.md` first,
+> particularly "Where This Has Got To". It says which paths have been proven
+> against real hardware and which have never run outside a fake — Phase 5 below
+> is entirely in the second category, and should not be described as verified
+> until it has been done.
 
 ---
 
@@ -61,6 +71,9 @@ curl -s http://<ip>:8000/api/health
 # {"status":"ok", ...}  — the only endpoint that answers without a login
 ```
 
+If HTTPS is set up on that Pi, port 8000 will be closed on purpose and the
+address is `https://<name>/api/health` instead.
+
 Then note these down, because every later phase refers to them:
 
 ```
@@ -71,6 +84,37 @@ Hub IP:            ______________
 Hub serial:        ______________
 Which Pi is this?  test / production
 ```
+
+## Then — make sure it is running the current code
+
+Easy to skip, and it invalidates everything below. A Pi left on an old branch
+pulls that branch and reports success, so "I updated it" is not evidence.
+
+```bash
+cd /opt/nobo-control
+git rev-parse --abbrev-ref HEAD     # should be main
+git log --oneline -1                # and match the newest commit on GitHub
+```
+
+If it is on something else, move it across — your accounts, schedules, system
+name and certificates are all in Docker volumes, so only the code changes:
+
+```bash
+sudo git fetch origin
+sudo git checkout -B main origin/main
+sudo git branch --set-upstream-to=origin/main main
+sudo bash scripts/update.sh
+```
+
+Then confirm the suite passes on that machine before testing hardware with it.
+The command is in the README under Testing; include `nodejs` or fifteen tests
+skip, which reads like a pass:
+
+```
+654 passed, 3 skipped
+```
+
+Anything else and stop — a failing suite makes every result below ambiguous.
 
 > **Make sure you are testing the machine you think you are.** If you run more
 > than one Pi, they serve identical-looking pages, and a test that "passed" on
