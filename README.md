@@ -1351,6 +1351,40 @@ docker compose build
 sudo systemctl restart nobo-control
 ```
 
+### If the Pi is on an old branch
+
+`git pull` updates whatever branch the checkout is on. A Pi left on a feature
+branch will pull *that* branch, report success, and stay on old code — the
+update looks like it worked and nothing changed. `scripts/update.sh` prints a
+warning when it notices, but it is worth checking directly:
+
+```bash
+cd /opt/nobo-control
+git rev-parse --abbrev-ref HEAD     # which branch am I on?
+git log --oneline -1                # and at which commit?
+```
+
+If that is not `main`, move it across:
+
+```bash
+cd /opt/nobo-control
+sudo git fetch origin
+sudo git checkout -B main origin/main
+sudo git branch --set-upstream-to=origin/main main
+sudo bash scripts/update.sh
+```
+
+Nothing you care about lives in the working tree, so this is safe: `.env` is
+gitignored and your accounts, schedules, system name and certificates are in
+Docker volumes. Only the code changes.
+
+Check it took:
+
+```bash
+git status -sb                      # should say "## main...origin/main"
+curl -s localhost:8000/api/health   # or https://<your-name>/api/health
+```
+
 ## Troubleshooting
 
 ### Web page loads but no zones appear ("connecting" forever)

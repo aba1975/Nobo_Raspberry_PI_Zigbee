@@ -23,7 +23,32 @@ fi
 cd "$INSTALL_DIR"
 
 echo "[1/5] Pulling latest code..."
+
+# Which branch is this checkout actually on? A Pi left on an old feature branch
+# pulls that branch, reports success, and stays on old code — the update looks
+# like it worked and nothing changed. Worth saying out loud rather than leaving
+# somebody to wonder why a fix they can see on GitHub is not on the machine.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+
+if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
+    echo ""
+    echo "  NOTE: this checkout is on '$BRANCH', not '$DEFAULT_BRANCH'."
+    echo "  Pulling will update '$BRANCH' only. To move to the released code:"
+    echo ""
+    echo "      cd $INSTALL_DIR"
+    echo "      sudo git fetch origin"
+    echo "      sudo git checkout -B $DEFAULT_BRANCH origin/$DEFAULT_BRANCH"
+    echo "      sudo git branch --set-upstream-to=origin/$DEFAULT_BRANCH $DEFAULT_BRANCH"
+    echo "      sudo bash scripts/update.sh"
+    echo ""
+    echo "  Your .env and data volume are untouched by that."
+    echo ""
+fi
+
 git pull
+echo "  Now at: $(git log --oneline -1)"
 
 echo "[2/5] Rebuilding Docker image..."
 docker compose build
