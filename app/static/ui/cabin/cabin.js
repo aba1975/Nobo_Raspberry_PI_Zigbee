@@ -33,7 +33,7 @@
   const AWAY_TEMP_LABEL = () => `${AWAY_TEMP}°C`;
   const AWAY_EXPLAINER = () =>
     `Away is a fixed ${AWAY_TEMP}°C anti-frost setting from Nobø and cannot be raised. ` +
-    `To keep a room warmer than that, use Eco and set its Eco temperature.`;
+    `To keep a zone warmer than that, use Eco and set its Eco temperature.`;
 
   /* ------------------------------------------------------------------
    * State
@@ -215,7 +215,7 @@
     if (state.hub && state.hub.demo_mode) {
       el.classList.add('is-demo');
       text.textContent = 'Demo';
-      el.title = 'Demo mode - example rooms and devices, no hub connected.';
+      el.title = 'Demo mode - example zones and devices, no hub connected.';
     } else if (state.status && state.status.connected) {
       el.classList.add('is-ok');
       text.textContent = 'Hub';
@@ -247,7 +247,7 @@
     if (a.enabled && a.currently_active) {
       card.classList.add('is-away');
       stateEl.textContent = 'Empty until ' + Nobo.fmtWhen(a.end_at);
-      detail.textContent  = `Every room is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
+      detail.textContent  = `Every zone is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
       drawTimeline(a.start_at, a.end_at);
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
@@ -257,7 +257,7 @@
     } else if (a.enabled && a.start_at) {
       card.classList.add('is-away');
       stateEl.textContent = 'Away from ' + Nobo.fmtWhen(a.start_at);
-      detail.textContent  = `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then rooms follow their normal schedules.`;
+      detail.textContent  = `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then zones follow their normal schedules.`;
       drawTimeline(a.start_at, a.end_at);
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="plan" type="button">Change plan</button>
@@ -269,7 +269,7 @@
            It never ends by itself, so the way out has to be on this card. */
         card.classList.add('is-away');
         stateEl.textContent = 'Away until you say otherwise';
-        detail.textContent  = 'Every room is on away and nothing will bring the heating back automatically. Set a return date and it will warm up before you arrive.';
+        detail.textContent  = 'Every zone is on away and nothing will bring the heating back automatically. Set a return date and it will warm up before you arrive.';
         actions.innerHTML = `
           <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
           <button class="btn" data-act="plan" type="button">Set a return date</button>`;
@@ -278,16 +278,16 @@
       } else if (mode === 'comfort') {
         card.classList.add('is-heat');
         stateEl.textContent = `Warming all of ${SITE_IN()}`;
-        detail.textContent  = 'Every room is held at its comfort temperature until you change it.';
+        detail.textContent  = 'Every zone is held at its comfort temperature until you change it.';
       } else if (mode === 'eco') {
         stateEl.textContent = 'Ticking over on eco';
-        detail.textContent  = 'Every room is held at its eco temperature.';
+        detail.textContent  = 'Every zone is held at its eco temperature.';
       } else if (mode === 'mixed') {
-        stateEl.textContent = 'Rooms set individually';
-        detail.textContent  = 'Some rooms are overridden and some are following their schedule.';
+        stateEl.textContent = 'Zones set individually';
+        detail.textContent  = 'Some zones are overridden and some are following their schedule.';
       } else {
         stateEl.textContent = "Someone's here";
-        detail.textContent  = 'Rooms are following their normal schedules.';
+        detail.textContent  = 'Zones are following their normal schedules.';
       }
       actions.innerHTML = `<button class="btn btn-primary" data-act="leave" type="button">I'm leaving &rarr;</button>`;
     }
@@ -355,9 +355,9 @@
     const leavingNow = !a.enabled || !a.start_at || new Date(a.start_at) <= now;
 
     openSheet(a.enabled ? 'Change your away period' : "You're leaving", `
-      <p class="zd-sub">Every room drops to Away — a fixed ${AWAY_TEMP_LABEL()} anti-frost
+      <p class="zd-sub">Every zone drops to Away — a fixed ${AWAY_TEMP_LABEL()} anti-frost
       temperature set by Nobø — and returns to its normal schedule when you get back.
-      Rooms that must stay warmer can be held on Eco instead, under Settings.</p>
+      Zones that must stay warmer can be held on Eco instead, under Settings.</p>
 
       <label class="field">
         <span>Leaving</span>
@@ -397,7 +397,7 @@
       <div class="sheet-alt">
         <p class="zd-sub">Not sure when you are back?</p>
         <button class="btn btn-wide" data-act="constant" type="button">Stay away with no return date</button>
-        <small class="field-hint">The same as the Away button: every room holds the away
+        <small class="field-hint">The same as the Away button: every zone holds the away
         temperature until you come back and end it yourself.</small>
       </div>
 
@@ -453,7 +453,7 @@
 
   async function arriveNow() {
     confirmSheet("You're back",
-      'The away period ends now and every room returns to its normal schedule.',
+      'The away period ends now and every zone returns to its normal schedule.',
       "I'm back", async () => {
         try {
           /* There may be no window to clear - the cabin can be on constant
@@ -473,7 +473,7 @@
    */
   function stayAwayIndefinitely() {
     confirmSheet('Stay away with no return date?',
-      'Every room drops to the away temperature and stays there until you end it yourself. Any away period you had planned is removed.',
+      'Every zone drops to the away temperature and stays there until you end it yourself. Any away period you had planned is removed.',
       'Stay away', async () => {
         try {
           await Nobo.api.clearAwaySchedule().catch(() => {});
@@ -502,10 +502,10 @@
     btn.addEventListener('click', () => {
       const mode = btn.dataset.global;
       const labels = {
-        home:    ['Back to schedules?', 'Every room returns to its own weekly schedule.'],
-        comfort: [`Warm all of ${SITE_IN()}?`, 'Every room is held at its comfort temperature until you change it.'],
-        eco:     [`All of ${SITE_IN()} on eco?`, 'Every room is held at its eco temperature.'],
-        away:    [`All of ${SITE_IN()} on away?`, 'Every room drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
+        home:    ['Back to schedules?', 'Every zone returns to its own weekly schedule.'],
+        comfort: [`Warm all of ${SITE_IN()}?`, 'Every zone is held at its comfort temperature until you change it.'],
+        eco:     [`All of ${SITE_IN()} on eco?`, 'Every zone is held at its eco temperature.'],
+        away:    [`All of ${SITE_IN()} on away?`, 'Every zone drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
       };
       const [title, msg] = labels[mode];
       confirmSheet(title, msg, 'Yes, ' + mode, async () => {
@@ -569,7 +569,7 @@
 
   function renderSetpointDriftBadge(zone) {
     if (!zone.setpoint_changed_outside) return '';
-    return `<span class="badge badge-drift" title="${esc(setpointDriftText(zone))} Open the room to restore or keep it.">Changed outside app</span>`;
+    return `<span class="badge badge-drift" title="${esc(setpointDriftText(zone))} Open the zone to restore or keep it.">Changed outside app</span>`;
   }
 
   function renderSetpointDrift(zone) {
@@ -632,9 +632,9 @@
     const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
 
     const manualBadge = !remote
-      ? `<span class="badge badge-manual" title="No heater in this room can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
+      ? `<span class="badge badge-manual" title="No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
       : (zone.has_manual_devices
-          ? `<span class="badge badge-manual" title="Some heaters in this room have no remote temperature control. Their temperature is set by a dial on the heater itself.">Some dial-only</span>`
+          ? `<span class="badge badge-manual" title="Some heaters in this zone have no remote temperature control. Their temperature is set by a dial on the heater itself.">Some dial-only</span>`
           : '');
 
     const comps = zone.components || [];
@@ -660,7 +660,7 @@
     const stepTitle = adjustable
       ? ''
       : (!remote
-          ? 'Turn the dial on the heater to change this room'
+          ? 'Turn the dial on the heater to change this zone'
           : 'Away uses a fixed system temperature');
 
     return `
@@ -690,17 +690,17 @@
   function renderZones() {
     const list = $('#zoneList');
     if (!state.zones.length) {
-      list.innerHTML = `<li class="zone"><div class="zone-meta">No rooms yet.
+      list.innerHTML = `<li class="zone"><div class="zone-meta">No zones yet.
         Add one, then put its heaters in it.</div></li>`;
       $('#roomsNote').textContent = '';
       return;
     }
     list.innerHTML = state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
-    const rooms = `${state.zones.length} ${state.zones.length === 1 ? 'room' : 'rooms'}`;
+    const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'zone' : 'zones'}`;
     $('#roomsNote').textContent = manual
-      ? `${rooms} · ${manual} with a dial-only heater`
-      : rooms;
+      ? `${zoneCount} · ${manual} with a dial-only heater`
+      : zoneCount;
 
     list.querySelectorAll('[data-open]').forEach(b => {
       b.onclick = () => showZone(b.dataset.open);
@@ -757,11 +757,11 @@
     const hub = state.hub || {};
     const info = state.hubInfo || {};
     const rows = [
-      ['Rooms', String(s.zoneCount)],
+      ['Zones', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
-      ['Coldest room', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
+      ['Coldest zone', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
-      ['Rooms overridden', String(s.overriddenCount)],
+      ['Zones overridden', String(s.overriddenCount)],
       ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
@@ -819,10 +819,10 @@
   function renderZoneDetail() {
     const zone = state.zones.find(z => String(z.zone_id) === state.zoneId);
     const root = $('#viewZone');
-    if (!zone) { root.innerHTML = `<div class="card">This room is no longer available.</div>`; return; }
+    if (!zone) { root.innerHTML = `<div class="card">This zone is no longer available.</div>`; return; }
 
     $('#topTitle').textContent = zone.name;
-    $('#topSub').textContent = 'Room';
+    $('#topSub').textContent = 'Zone';
 
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
@@ -839,9 +839,9 @@
       ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
       : `<span class="zd-mode">${esc(modeLabel)}</span>`;
     const headSub = !remote
-      ? 'The temperature in this room is set by the dial on each heater'
+      ? 'The temperature in this zone is set by the dial on each heater'
       : (zone.current_temperature == null
-          ? 'No temperature sensor in this room'
+          ? 'No temperature sensor in this zone'
           : 'Measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now');
 
     root.innerHTML = `
@@ -860,10 +860,10 @@
           </div>
         </div>
         ${adjustable ? '' : `<div class="note note-warn">${!remote
-          ? 'No heater in this room can be adjusted from here. You can still switch the room between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
-          : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per room. To hold this room warmer while you are away, put it on Eco, or list it under Settings as a room that must not get cold.`}</div>`}
+          ? 'No heater in this zone can be adjusted from here. You can still switch the zone between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
+          : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per zone. To hold this zone warmer while you are away, put it on Eco, or list it under Settings as a zone that must not get cold.`}</div>`}
         ${renderSetpointDrift(zone)}
-        <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
+        <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this zone">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
               aria-pressed="${(zone.current_mode || 'normal') === m}">
@@ -873,9 +873,9 @@
       </section>
 
       <section class="card">
-        <h2>Heaters in this room (${devices.length})</h2>
+        <h2>Heaters in this zone (${devices.length})</h2>
         ${devices.length ? `<ul class="dev-list">${devices.map(devRow).join('')}</ul>`
-          : `<p class="zd-sub">No heaters are assigned to this room. Add one by typing the
+          : `<p class="zd-sub">No heaters are assigned to this zone. Add one by typing the
              12-digit serial printed on it.</p>`}
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="add-device">Add a heater</button>
@@ -884,17 +884,17 @@
 
       <section class="card">
         <div class="card-head">
-          <h2>This room's week</h2>
+          <h2>This zone's week</h2>
           <button class="btn" type="button" data-act="edit-week">Edit week</button>
         </div>
         ${renderSchedule()}
       </section>
 
       <section class="card">
-        <h2>Room settings</h2>
+        <h2>Zone settings</h2>
         <div class="sheet-actions">
-          <button class="btn" type="button" data-act="rename-zone">Rename room</button>
-          <button class="btn btn-danger" type="button" data-act="delete-zone">Delete room</button>
+          <button class="btn" type="button" data-act="rename-zone">Rename zone</button>
+          <button class="btn btn-danger" type="button" data-act="delete-zone">Delete zone</button>
         </div>
       </section>`;
 
@@ -918,6 +918,9 @@
     });
     root.querySelectorAll('[data-move-device]').forEach(b => {
       b.onclick = () => moveDevice(b.dataset.moveDevice);
+    });
+    root.querySelectorAll('[data-rename-device]').forEach(b => {
+      b.onclick = () => renameDevice(b.dataset.renameDevice);
     });
     root.querySelectorAll('[data-replace-device]').forEach(b => {
       b.onclick = () => replaceDevice(b.dataset.replaceDevice);
@@ -951,6 +954,7 @@
           <div class="dev-tags">${tags}</div>
         </div>
         <div class="dev-actions">
+          <button class="btn" type="button" data-rename-device="${esc(d.serial)}">Rename</button>
           <button class="btn" type="button" data-move-device="${esc(d.serial)}">Move</button>
           <button class="btn" type="button" data-replace-device="${esc(d.serial)}">Replace</button>
           <button class="btn btn-danger" type="button" data-remove-device="${esc(d.serial)}">Remove</button>
@@ -985,7 +989,7 @@
     const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
     const sharedNote = shared.length
       ? `<div class="note note-warn">This week is shared with ${esc(shared.join(', '))}.
-         Editing it here changes those rooms too.</div>`
+         Editing it here changes those zones too.</div>`
       : '';
 
     return `<div class="sched">${rows}</div>
@@ -1055,8 +1059,8 @@
 
     openSheet(`${zone.name} · weekly schedule`, `
       ${shared.length ? `<div class="note note-warn">This schedule is shared with
-        ${esc(shared.join(', '))}. Saving changes those rooms as well.</div>` : ''}
-      <p class="zd-sub">Each row says what the room does from that time until the next
+        ${esc(shared.join(', '))}. Saving changes those zones as well.</div>` : ''}
+      <p class="zd-sub">Each row says what the zone does from that time until the next
       change. The day always starts at 00:00, so there can never be a gap.</p>
 
       <div class="day-tabs" role="tablist" aria-label="Day of the week">
@@ -1168,7 +1172,7 @@
             best = span; at = mid; splitMode = pts[i].mode;
           }
         }
-        if (at == null) { Nobo.toast('This day has no room left for another change', 'error'); return; }
+        if (at == null) { Nobo.toast('This day has no space left for another change', 'error'); return; }
         const hhmm = String(Math.floor(at / 60)).padStart(2, '0') + ':' + String(at % 60).padStart(2, '0');
         draft[day].push({ at: hhmm, mode: splitMode === 'comfort' ? 'eco' : 'comfort' });
         paint();
@@ -1299,7 +1303,7 @@
     root.querySelector('[data-act="log-refresh"]').onclick = () => loadLog();
     root.querySelector('[data-act="log-clear"]').onclick = () => {
       confirmSheet('Clear the log?',
-        'Every entry is discarded. This does not change any setting or any room - it only throws away the record of what happened.',
+        'Every entry is discarded. This does not change any setting or any zone - it only throws away the record of what happened.',
         'Clear', async () => {
           try {
             await Nobo.api.clearLog();
@@ -1378,7 +1382,7 @@
       .join('');
     openSheet('Move heater', `
       <p class="zd-sub">${esc((d && (d.display_name || d.name)) || serial)}</p>
-      <label class="field"><span>Room</span><select id="mvZone">${options}</select></label>
+      <label class="field"><span>Zone</span><select id="mvZone">${options}</select></label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Move</button>
@@ -1624,7 +1628,7 @@
 
     openSheet('Replace this heater', `
       <p class="zd-sub">The new heater takes over everything <strong>${esc(label)}</strong>
-      had - the same room, the same schedule and the same temperatures.</p>
+      had - the same zone, the same schedule and the same temperatures.</p>
       <label class="field">
         <span>Serial number of the new heater</span>
         <input type="text" id="rpSerial" inputmode="numeric" autocomplete="off"
@@ -1685,8 +1689,8 @@
   }
 
   function renameZone(zone) {
-    openSheet('Rename room', `
-      <label class="field"><span>Room name</span>
+    openSheet('Rename zone', `
+      <label class="field"><span>Zone name</span>
         <input type="text" id="rzName" value="${esc(zone.name)}" autocomplete="off"></label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
@@ -1695,11 +1699,11 @@
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       root.querySelector('[data-act="ok"]').onclick = async () => {
         const name = root.querySelector('#rzName').value.trim();
-        if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
+        if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
         try {
           await Nobo.api.updateZone(zone.zone_id, { name });
           closeSheet();
-          Nobo.toast('Room renamed');
+          Nobo.toast('Zone renamed');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
@@ -1707,29 +1711,65 @@
   }
 
   /**
-   * Create a room.
+   * Rename one heater.
    *
-   * The hub assigns the id, not the client, so the new room is found by
-   * reloading rather than by trusting anything echoed back. A room starts
+   * Worth having separately from the zone name: a zone is usually several
+   * rooms that share a schedule, so the heater name is where the actual room
+   * gets recorded -- "Soverom Master", "Soverom Køyeseng Bad". The official app
+   * allows this, and without it those names could only be set from there.
+   */
+  function renameDevice(serial) {
+    const d = state.devices.find(x => x.serial === serial);
+    if (!d) { Nobo.toast('That heater is no longer here', 'error'); return; }
+    const current = d.display_name || d.name || '';
+
+    openSheet('Rename heater', `
+      <p class="zd-sub">${esc(d.device_type || 'Heater')} &middot; ${esc(d.serial_display || serial)}</p>
+      <label class="field"><span>Heater name</span>
+        <input type="text" id="rdName" value="${esc(current)}" autocomplete="off"></label>
+      <small class="field-hint">Often the room it stands in, when a zone covers more than one.</small>
+      <div class="sheet-actions">
+        <button class="btn" data-act="cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" data-act="ok" type="button">Save</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="ok"]').onclick = async () => {
+        const name = root.querySelector('#rdName').value.trim();
+        if (!name) { Nobo.toast('Give the heater a name', 'error'); return; }
+        try {
+          await Nobo.api.renameDevice(serial, name);
+          closeSheet();
+          Nobo.toast('Heater renamed');
+          await refresh(true);
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+  }
+
+  /**
+   * Create a zone.
+   *
+   * The hub assigns the id, not the client, so the new zone is found by
+   * reloading rather than by trusting anything echoed back. A zone starts
    * empty: heaters are moved or added into it afterwards, from inside it.
    */
   function addZoneSheet() {
-    openSheet('Add a room', `
-      <p class="zd-sub">A new room starts empty and on the standard week. Open it
+    openSheet('Add a zone', `
+      <p class="zd-sub">A new zone starts empty and on the standard week. Open it
       afterwards to add its heaters and set its temperatures.</p>
       <label class="field">
-        <span>Room name</span>
+        <span>Zone name</span>
         <input type="text" id="azName" autocomplete="off" placeholder="e.g. Loft">
       </label>
       <label class="field">
         <span>Icon (optional)</span>
         <input type="text" id="azIcon" autocomplete="off" maxlength="2" placeholder="e.g. \u{1F6CF}">
-        <small class="field-hint">Stored for the current app, which shows an icon per room.
-        Concept D identifies a room by its name alone.</small>
+        <small class="field-hint">Stored for the current app, which shows an icon per zone.
+        Concept D identifies a zone by its name alone.</small>
       </label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-primary" data-act="ok" type="button">Add room</button>
+        <button class="btn btn-primary" data-act="ok" type="button">Add zone</button>
       </div>`, (root) => {
       const nameEl = root.querySelector('#azName');
       const okBtn = root.querySelector('[data-act="ok"]');
@@ -1738,7 +1778,7 @@
       okBtn.onclick = async () => {
         const name = nameEl.value.trim();
         const icon = root.querySelector('#azIcon').value.trim();
-        if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
+        if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
         okBtn.disabled = true;
         try {
           await Nobo.api.addZone({ name, icon: icon || undefined });
@@ -1755,12 +1795,12 @@
   }
 
   function deleteZone(zone) {
-    confirmSheet('Delete this room?',
+    confirmSheet('Delete this zone?',
       `${zone.name} and its schedule are removed. Its heaters are not deleted.`,
-      'Delete room', async () => {
+      'Delete zone', async () => {
         try {
           await Nobo.api.removeZone(zone.zone_id);
-          Nobo.toast('Room deleted');
+          Nobo.toast('Zone deleted');
           showHome();
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
@@ -1841,7 +1881,7 @@
         <div class="switch">
           <div class="switch-text">
             <strong>Demo mode</strong>
-            <span>Example rooms and heaters, so you can try the app without a hub.</span>
+            <span>Example zones and heaters, so you can try the app without a hub.</span>
           </div>
           <button class="btn" type="button" data-act="toggle-demo"
             aria-pressed="${hub.demo_mode ? 'true' : 'false'}">
@@ -1870,12 +1910,12 @@
       </section>
 
       <section class="card">
-        <h2>Rooms that must not get cold</h2>
-        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the rooms that should hold their
+        <h2>Zones that must not get cold</h2>
+        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the zones that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
         goes Away — a bathroom with pipes, a workshop, a wine store.</p>
         <div id="awayExc" class="exc-list">
-          <p class="zd-sub">Loading rooms…</p>
+          <p class="zd-sub">Loading zones…</p>
         </div>
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
@@ -2218,7 +2258,7 @@
       const chosen = new Set((data.zone_ids || []).map(String));
       const zones = state.zones.length ? state.zones : (await Nobo.api.zones() || []);
       if (!zones.length) {
-        box.innerHTML = `<p class="zd-sub">No rooms to choose from yet.</p>`;
+        box.innerHTML = `<p class="zd-sub">No zones to choose from yet.</p>`;
         return;
       }
       box.innerHTML = zones.map(z => `
@@ -2231,7 +2271,7 @@
             : 'Eco temperature'}</span>
         </label>`).join('');
     } catch (e) {
-      box.innerHTML = `<p class="zd-sub">Could not load the rooms: ${esc(e.message)}</p>`;
+      box.innerHTML = `<p class="zd-sub">Could not load the zones: ${esc(e.message)}</p>`;
     }
   }
 
@@ -2244,8 +2284,8 @@
     try {
       const res = await Nobo.api.setAwayExceptions(zone_ids);
       Nobo.toast(zone_ids.length
-        ? `${zone_ids.length} room${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
-        : 'Every room will follow Away');
+        ? `${zone_ids.length} zone${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
+        : 'Every zone will follow Away');
       if (res && res.applied_now && res.applied_now.length) {
         Nobo.toast(`Applied now, because ${SITE_IN()} is away`);
       }
@@ -2256,7 +2296,7 @@
   function toggleDemo(next) {
     confirmSheet(next ? 'Switch to demo mode?' : 'Connect to a real hub?',
       next
-        ? 'The app shows example rooms instead of your hub. You will be signed out so it reloads cleanly.'
+        ? 'The app shows example zones instead of your hub. You will be signed out so it reloads cleanly.'
         : 'The app connects to the hub using the serial and IP below. You will be signed out so it reloads cleanly.',
       next ? 'Switch to demo' : 'Connect to hub', async () => {
         const serial = ($('#stSerial') && $('#stSerial').value || '').replace(/\s/g, '');
