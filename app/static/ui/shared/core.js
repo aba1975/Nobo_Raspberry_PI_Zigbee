@@ -105,9 +105,14 @@ const Nobo = (() => {
                                      method: 'PUT', body: JSON.stringify(body) }),
     removeZone:   (zoneId)       => req(`/api/zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
 
-    weekProfiles: () => req('/api/week_profiles').then(r => r.week_profiles || r),
-    setSchedule:  (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
-                                     method: 'POST', body: JSON.stringify(body) }),
+    weekProfiles:      ()              => req('/api/week_profiles').then(r => r.week_profiles || r),
+    updateWeekProfile: (profileId, body) => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, {
+                                           method: 'PATCH', body: JSON.stringify(body) }),
+    deleteWeekProfile: (profileId)     => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' }),
+    assignWeekProfile: (zoneId, profileId) => req(`/api/zones/${encodeURIComponent(zoneId)}/week-profile`, {
+                                           method: 'POST', body: JSON.stringify({ profile_id: profileId }) }),
+    setSchedule:       (zoneId, body)  => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
+                                           method: 'POST', body: JSON.stringify(body) }),
 
     // The command log is one buffer holding three kinds of entry, told apart
     // by `source`: 'api' (a change made through the app), 'schedule' (the away
@@ -590,9 +595,18 @@ const Nobo = (() => {
     return intlFormat({ day: 'numeric', month: 'short' }).format(dt);
   }
 
-  /** Day names for the schedule editor, in the installation's language. */
+  /**
+   * Day names for the schedule editor, in the interface's language.
+   *
+   * Deliberately not the regional format's language. That setting decides how a
+   * date and time are *written* — "30. aug. 2026" against "30 Aug 2026", which
+   * day the week starts on, 24-hour or not — and a Norwegian household wants
+   * Norwegian dates. It does not decide what language the app is in, and the
+   * app is in English, so a schedule reading "man. tir. ons." next to "Comfort"
+   * and "Save schedule" was the one place the two got confused.
+   */
   function dayNames(style = 'short') {
-    const fmt = intlFormat({ weekday: style });
+    const fmt = new Intl.DateTimeFormat('en-GB', { weekday: style });
     // 2024-01-01 was a Monday; DAY_KEYS starts at Sunday, so start a day back.
     return DAY_KEYS.map((key, i) => {
       const d = new Date(2023, 11, 31 + i);   // 31 Dec 2023 = Sunday

@@ -785,6 +785,16 @@ class ScheduleBlock(BaseModel):
 class ScheduleUpdate(BaseModel):
     """Validated weekly schedule payload for POST /api/zones/{zone_id}/schedule."""
     schedule: Dict[str, List[ScheduleBlock]]
+    # Which of the two things the user meant, when the schedule is shared.
+    #
+    # "zone"    -- change this zone only, giving it a copy of its own. Safe, and
+    #              what this application always did, silently.
+    # "profile" -- change the schedule itself, and therefore every zone on it.
+    #              This is what the official app does, and there was no way to
+    #              ask for it here.
+    #
+    # None keeps the old behaviour so existing callers are unaffected.
+    apply_to: Optional[str] = None
 
     def validate_schedule(self) -> None:
         """Raise ValueError describing the first problem found."""
@@ -3675,7 +3685,16 @@ async def away_schedule_loop():
 
 @app.get("/api/week_profiles")
 async def get_week_profiles():
-    """Get all week profiles"""
+    """
+    Every week profile on the hub, and which zones use it.
+
+    A week profile is a shared object: several zones can point at the same one,
+    and the official Nobø app treats that as the normal way to work — you make
+    a schedule, name it, and give it to the rooms that should follow it. This
+    application used to hide profiles entirely and present "this zone's week",
+    which is friendlier for a house where the two coincide and quietly wrong for
+    one where they do not. ``used_by`` is what makes the sharing visible again.
+    """
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -3692,6 +3711,17 @@ async def get_week_profiles():
                         "profile_id": "1",
                         "name": "Default",
                         "profile": DEFAULT_DEMO_SCHEDULE,
+                        # Already in day-block form here, unlike the hub's flat
+                        # list of "HHMMS" stamps, so it needs no decoding.
+                        "schedule": DEFAULT_DEMO_SCHEDULE,
+                        "unreadable": None,
+                        "used_by": [
+                            {"zone_id": str(z.get("zone_id")),
+                             "name": z.get("name", "")}
+                            for z in DEMO_ZONES
+                        ],
+                        "can_delete": False,
+                        "why_not": "The built-in schedule cannot be deleted.",
                     }
                 ]
             }
@@ -3708,11 +3738,31 @@ async def get_week_profiles():
             decoded = dict(profile)
             if 'name' in decoded:
                 decoded['name'] = decode_hub_name(decoded['name'])
+            used_by = [
+                {"zone_id": str(zid), "name": decode_hub_name(z.get('name', ''))}
+                for zid, z in current_hub.zones.items()
+                if str(z.get('week_profile_id')) == str(profile_id)
+            ]
+            can_delete, why_not = _week_profile_deletable(str(profile_id), used_by)
+            # The decoded week, so the interface can show what a schedule
+            # actually does. Without it the list is a set of names and choosing
+            # one from it is guesswork -- which is exactly how it first shipped.
+            try:
+                week = week_profile_to_schedule(list(profile.get('profile') or []))
+                unreadable = None
+            except ValueError as exc:
+                week, unreadable = None, str(exc)
             profiles.append({
                 'profile_id': str(profile_id),
                 'name': decode_hub_name(profile.get('name')) or f'Profile {profile_id}',
-                'profile': decoded
+                'profile': decoded,
+                'schedule': week,
+                'unreadable': unreadable,
+                'used_by': used_by,
+                'can_delete': can_delete,
+                'why_not': why_not,
             })
+        profiles.sort(key=lambda p: _profile_sort_key(p['profile_id']))
         return {"week_profiles": profiles}
     except HTTPException:
         raise
@@ -3721,12 +3771,209 @@ async def get_week_profiles():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class WeekProfileRename(BaseModel):
+    """Change a schedule: its name, its week, or both."""
+    name: Optional[str] = None
+    schedule: Optional[Dict[str, List["ScheduleBlock"]]] = None
+
+
+class ZoneWeekProfileAssign(BaseModel):
+    profile_id: str
+
+
+@app.patch("/api/week_profiles/{profile_id}")
+async def rename_week_profile(profile_id: str, body: WeekProfileRename):
+    """
+    Change a schedule itself: its name, its week, or both.
+
+    Editing here is deliberate in a way that editing through a zone is not. A
+    zone's week screen is where somebody adjusts *their room*, so a shared
+    profile is copied rather than changed underneath the other rooms. This
+    endpoint is reached by picking a named schedule out of a list of schedules,
+    so the thing being edited is the schedule, and every zone following it
+    changes. The interface names those zones before saving.
+
+    That distinction is the whole reason both paths exist.
+
+    Renaming matters on its own because this application names the profiles it
+    creates, and those names age badly: a zone renamed from "Soverom 1. Etasje"
+    to "Downstairs Bedrooms" left its schedule called "Soverom 1. Etasje
+    schedule", which is then what the official app shows.
+    """
+    require_capability("edit_schedule")
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    if body.name is None and body.schedule is None:
+        raise HTTPException(status_code=400, detail="Nothing to change")
+
+    name = None
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Schedule name cannot be empty")
+        if len(encode_hub_name(name).encode('utf-8')) > ZONE_NAME_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Schedule name is too long for the hub (maximum {ZONE_NAME_MAX_BYTES} bytes)",
+            )
+
+    entries = None
+    if body.schedule is not None:
+        try:
+            ScheduleUpdate(schedule=body.schedule).validate_schedule()
+            entries = schedule_to_week_profile(body.schedule)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    if DEMO_MODE:
+        return {"status": "success", "profile_id": profile_id, "name": name}
+
+    if not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    if profile_id not in current_hub.week_profiles:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    stored = current_hub.week_profiles[profile_id]
+    # update_week_profile carries the whole object, so whichever half was not
+    # supplied goes back exactly as it stands. Sending only a name would blank
+    # the week, and only a week would blank the name.
+    if name is None:
+        name = decode_hub_name(stored.get('name', '')) or f'Profile {profile_id}'
+    if entries is None:
+        entries = list(stored.get('profile') or [])
+
+    await hub_command(current_hub.async_update_week_profile(
+        profile_id, encode_hub_name(name), entries))
+    await wait_for_hub_state(
+        lambda: decode_hub_name(
+            current_hub.week_profiles.get(profile_id, {}).get('name', '')) == name
+        and list(current_hub.week_profiles.get(profile_id, {}).get('profile') or [])
+        == list(entries)
+    )
+    add_log_entry("sent", f"Schedule {profile_id} renamed to '{name}'",
+                  command=f"U02 {profile_id} {name}", source="api")
+    await broadcast_zone_update()
+    return {"status": "success", "profile_id": profile_id, "name": name}
+
+
+@app.delete("/api/week_profiles/{profile_id}")
+async def delete_week_profile(profile_id: str):
+    """
+    Remove a schedule nothing is using.
+
+    Splitting a shared schedule creates a new one every time, and until now
+    nothing could remove the leftovers, so a house slowly filled with them.
+    """
+    require_capability("edit_schedule")
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    if DEMO_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail="The built-in schedule cannot be deleted.",
+        )
+
+    if not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    if profile_id not in current_hub.week_profiles:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    used_by = [
+        {"zone_id": str(zid), "name": decode_hub_name(z.get('name', ''))}
+        for zid, z in current_hub.zones.items()
+        if str(z.get('week_profile_id')) == str(profile_id)
+    ]
+    can_delete, why_not = _week_profile_deletable(profile_id, used_by)
+    if not can_delete:
+        raise HTTPException(status_code=409, detail=why_not)
+
+    await hub_command(current_hub.async_remove_week_profile(profile_id))
+    await wait_for_hub_state(lambda: profile_id not in current_hub.week_profiles)
+    add_log_entry("sent", f"Schedule {profile_id} deleted",
+                  command=f"R02 {profile_id}", source="api")
+    await broadcast_zone_update()
+    return {"status": "success", "profile_id": profile_id}
+
+
+@app.post("/api/zones/{zone_id}/week-profile")
+async def assign_week_profile(zone_id: str, body: ZoneWeekProfileAssign):
+    """
+    Point a zone at a schedule that already exists.
+
+    This is the operation the official app is built around and this one had no
+    way to express: two rooms that should follow the same week could only be
+    made to by editing each separately, which produced two profiles that happen
+    to match rather than one they share.
+    """
+    require_capability("edit_schedule")
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    if DEMO_MODE:
+        return {"status": "success", "zone_id": zone_id, "profile_id": body.profile_id}
+
+    if not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    if zone_id not in current_hub.zones:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    if body.profile_id not in current_hub.week_profiles:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    await hub_command(current_hub.async_update_zone(
+        zone_id, week_profile_id=body.profile_id))
+    await wait_for_hub_state(
+        lambda: str(current_hub.zones.get(zone_id, {}).get('week_profile_id'))
+        == str(body.profile_id)
+    )
+    name = decode_hub_name(current_hub.week_profiles[body.profile_id].get('name', ''))
+    add_log_entry("sent", f"Zone {zone_id} now follows schedule '{name}'",
+                  command=f"U00 {zone_id} week_profile_id={body.profile_id}", source="api")
+    await broadcast_zone_update()
+    return {"status": "success", "zone_id": zone_id,
+            "profile_id": body.profile_id, "name": name}
+
+
 # ===== Schedule API Endpoints =====
 
 # The hub's factory default week profile. It is shared by every zone out of the
 # box and users expect it to keep meaning "the default", so it is never edited
 # in place.
 DEFAULT_WEEK_PROFILE_ID = "1"
+
+# The hub ships with these and will not let them go. "0" is the factory default
+# every zone starts on; DEFAULT_WEEK_PROFILE_ID is what this application hands a
+# newly created zone. Refusing them here means a clear sentence instead of a
+# protocol error the user cannot act on.
+UNDELETABLE_WEEK_PROFILES = {"0", DEFAULT_WEEK_PROFILE_ID}
+
+
+def _profile_sort_key(profile_id: str):
+    """Numeric where the hub's ids are numeric, so 2 sorts before 20."""
+    try:
+        return (0, int(profile_id))
+    except (TypeError, ValueError):
+        return (1, str(profile_id))
+
+
+def _week_profile_deletable(profile_id: str, used_by: List[Dict[str, str]]):
+    """Whether this profile can be removed, and a sentence saying why not."""
+    if profile_id in UNDELETABLE_WEEK_PROFILES:
+        return False, "This is one of the hub's own schedules and cannot be deleted."
+    if used_by:
+        names = ", ".join(z["name"] or z["zone_id"] for z in used_by)
+        return False, f"Still used by {names}. Move those zones to another schedule first."
+    return True, None
 
 
 async def wait_for_hub_state(predicate, timeout: float = 5.0, interval: float = 0.1):
@@ -3747,13 +3994,19 @@ async def wait_for_hub_state(predicate, timeout: float = 5.0, interval: float = 
         await asyncio.sleep(interval)
 
 
-async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[str]) -> str:
+async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[str],
+                                    apply_to: Optional[str] = None) -> str:
     """Write a week profile for one zone and return the profile id used.
 
     Week profiles are shared objects: several zones can point at the same one,
     and the factory default starts out shared by all of them. Editing in place
-    would silently reschedule other rooms, so a profile is only updated when it
-    belongs to this zone alone. Otherwise the zone gets its own profile.
+    would silently reschedule other rooms, so by default a profile is only
+    updated when it belongs to this zone alone. Otherwise the zone gets its own.
+
+    ``apply_to="profile"`` says the caller meant the other thing — change the
+    schedule itself, and every zone following it. That is how the official app
+    works, and the absence of any way to ask for it here is what made this
+    application quietly undo deliberate sharing.
     """
     zone = current_hub.zones[zone_id]
     zone_name = decode_hub_name(zone.get('name', f'Zone {zone_id}'))
@@ -3765,7 +4018,14 @@ async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[st
     ]
     exclusive = profile_id in current_hub.week_profiles and users == [zone_id]
 
-    if exclusive and profile_id != DEFAULT_WEEK_PROFILE_ID:
+    # The factory default is never edited, however it is asked for: every zone
+    # starts on it and it has to keep meaning "the default".
+    share = (apply_to == "profile"
+             and profile_id in current_hub.week_profiles
+             and profile_id != DEFAULT_WEEK_PROFILE_ID
+             and profile_id not in UNDELETABLE_WEEK_PROFILES)
+
+    if (exclusive or share) and profile_id != DEFAULT_WEEK_PROFILE_ID:
         name = decode_hub_name(current_hub.week_profiles[profile_id].get('name', zone_name))
         await hub_command(current_hub.async_update_week_profile(profile_id, name, entries))
         # Wait for the edit to land before reporting success. Without this the
@@ -3949,7 +4209,8 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        profile_id = await apply_week_profile_to_zone(current_hub, zone_id, entries)
+        profile_id = await apply_week_profile_to_zone(
+            current_hub, zone_id, entries, apply_to=schedule.apply_to)
 
         add_log_entry(
             "sent",
