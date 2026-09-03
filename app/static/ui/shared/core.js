@@ -89,6 +89,10 @@ const Nobo = (() => {
     removeDevice: (serial)         => req(`/api/devices/${encodeURIComponent(serial)}`, { method: 'DELETE' }),
     moveDevice:   (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}/move`, {
                                        method: 'POST', body: JSON.stringify(body) }),
+    // PATCH, not the PUT above: that one replaces a heater with a different
+    // serial, this only changes what it is called.
+    renameDevice: (serial, name)   => req(`/api/devices/${encodeURIComponent(serial)}/name`, {
+                                       method: 'PATCH', body: JSON.stringify({ name }) }),
 
     // Discovery needs the hub's radio, so it is unavailable in demo mode.
     // /api/capabilities says so, with a reason worth showing to the user.
