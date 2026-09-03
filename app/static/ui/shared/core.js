@@ -106,6 +106,8 @@ const Nobo = (() => {
     removeZone:   (zoneId)       => req(`/api/zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
 
     weekProfiles:      ()              => req('/api/week_profiles').then(r => r.week_profiles || r),
+    createWeekProfile: (body)          => req('/api/week_profiles', {
+                                           method: 'POST', body: JSON.stringify(body) }),
     updateWeekProfile: (profileId, body) => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, {
                                            method: 'PATCH', body: JSON.stringify(body) }),
     deleteWeekProfile: (profileId)     => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' }),

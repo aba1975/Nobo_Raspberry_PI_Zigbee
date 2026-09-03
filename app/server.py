@@ -3722,6 +3722,8 @@ async def get_week_profiles():
                         ],
                         "can_delete": False,
                         "why_not": "The built-in schedule cannot be deleted.",
+                        "can_edit": False,
+                        "why_not_edit": "The built-in schedule cannot be changed.",
                     }
                 ]
             }
@@ -3744,6 +3746,7 @@ async def get_week_profiles():
                 if str(z.get('week_profile_id')) == str(profile_id)
             ]
             can_delete, why_not = _week_profile_deletable(str(profile_id), used_by)
+            can_edit, why_not_edit = _week_profile_editable(str(profile_id))
             # The decoded week, so the interface can show what a schedule
             # actually does. Without it the list is a set of names and choosing
             # one from it is guesswork -- which is exactly how it first shipped.
@@ -3761,6 +3764,8 @@ async def get_week_profiles():
                 'used_by': used_by,
                 'can_delete': can_delete,
                 'why_not': why_not,
+                'can_edit': can_edit,
+                'why_not_edit': why_not_edit,
             })
         profiles.sort(key=lambda p: _profile_sort_key(p['profile_id']))
         return {"week_profiles": profiles}
@@ -3769,6 +3774,68 @@ async def get_week_profiles():
     except Exception as e:
         logger.error(f"Error getting week profiles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class WeekProfileCreate(BaseModel):
+    """A brand-new schedule: a name and a week."""
+    name: str
+    schedule: Dict[str, List["ScheduleBlock"]]
+
+
+@app.post("/api/week_profiles")
+async def create_week_profile(body: WeekProfileCreate):
+    """
+    Make a new schedule, belonging to no zone yet.
+
+    The list could be renamed, edited and deleted but never added to, so the
+    only way a schedule came into existence was as a side effect: editing a
+    shared one split a copy off. That is a strange way to get the thing you
+    actually wanted, and it means a schedule can only be created by first
+    disturbing a zone.
+    """
+    require_capability("edit_schedule")
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Schedule name cannot be empty")
+    if len(encode_hub_name(name).encode('utf-8')) > ZONE_NAME_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Schedule name is too long for the hub (maximum {ZONE_NAME_MAX_BYTES} bytes)",
+        )
+    try:
+        ScheduleUpdate(schedule=body.schedule).validate_schedule()
+        entries = schedule_to_week_profile(body.schedule)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if DEMO_MODE:
+        return {"status": "success", "profile_id": "2", "name": name}
+
+    if not current_hub:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+
+    # The hub assigns the id, so the new profile is found by comparing before
+    # and after rather than by trusting anything echoed back.
+    before = set(current_hub.week_profiles)
+    unique = _unique_week_profile_name(current_hub, name)
+    await hub_command(current_hub.async_add_week_profile(unique, entries))
+    new_ids = await wait_for_hub_state(lambda: set(current_hub.week_profiles) - before)
+    if not new_ids:
+        raise HTTPException(
+            status_code=502,
+            detail="The hub did not report the new schedule. Reload and check whether it was created.",
+        )
+    profile_id = sorted(new_ids)[0]
+    add_log_entry("sent", f"Schedule '{unique}' created",
+                  command=f"A02 {unique}", source="api")
+    await broadcast_zone_update()
+    return {"status": "success", "profile_id": str(profile_id), "name": unique}
 
 
 class WeekProfileRename(BaseModel):
@@ -3848,12 +3915,25 @@ async def rename_week_profile(profile_id: str, body: WeekProfileRename):
 
     await hub_command(current_hub.async_update_week_profile(
         profile_id, encode_hub_name(name), entries))
-    await wait_for_hub_state(
+    landed = await wait_for_hub_state(
         lambda: decode_hub_name(
             current_hub.week_profiles.get(profile_id, {}).get('name', '')) == name
         and list(current_hub.week_profiles.get(profile_id, {}).get('profile') or [])
         == list(entries)
     )
+    if not landed:
+        # The hub accepts U02 for its own built-in schedules and then quietly
+        # ignores it -- no error, no change. Reporting success for that would
+        # tell the user their edit was saved when the week is untouched, which
+        # is worse than refusing. Found on real hardware against profile 0.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The hub did not accept the change. This is one of its built-in "
+                "schedules, which cannot be edited — make a new schedule instead "
+                "and give it to the zones that should follow it."
+            ),
+        )
     add_log_entry("sent", f"Schedule {profile_id} renamed to '{name}'",
                   command=f"U02 {profile_id} {name}", source="api")
     await broadcast_zone_update()
@@ -3973,6 +4053,21 @@ def _week_profile_deletable(profile_id: str, used_by: List[Dict[str, str]]):
     if used_by:
         names = ", ".join(z["name"] or z["zone_id"] for z in used_by)
         return False, f"Still used by {names}. Move those zones to another schedule first."
+    return True, None
+
+
+def _week_profile_editable(profile_id: str):
+    """
+    Whether the hub will actually take a change to this profile.
+
+    Its built-in schedules accept U02 and then quietly ignore it -- no error,
+    no change -- so the only honest thing is to say so before the user types a
+    week they are about to lose. Established on real hardware: renaming and
+    rescheduling profile 0 both reported success and changed nothing.
+    """
+    if profile_id in UNDELETABLE_WEEK_PROFILES:
+        return False, ("This is one of the hub's own schedules. It cannot be changed — "
+                       "make a new schedule instead.")
     return True, None
 
 
