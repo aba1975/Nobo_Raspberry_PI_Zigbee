@@ -1086,13 +1086,25 @@
       return `<div class="sched-day"><span>${esc(label)}</span><div class="sched-bar">${segs}</div></div>`;
     }).join('');
 
+    /* An hour axis, because a coloured bar with no scale only says "warm in the
+       middle" -- you cannot read 09:00 off it. Labelled every six hours, which
+       is as many as fits across a phone, with an hourly rule drawn over the
+       bars themselves so a block edge can be placed against it. */
+    const axis = `<div class="sched-day sched-axis" aria-hidden="true">
+      <span></span>
+      <div class="sched-scale">
+        ${[0, 6, 12, 18, 24].map(h => `<i style="left:${(h / 24) * 100}%">${
+          String(h).padStart(2, '0')}</i>`).join('')}
+      </div>
+    </div>`;
+
     const shared = (meta && meta.shared_with_zones) || [];
     const sharedNote = !opts.compact && shared.length
       ? `<div class="note note-warn">This schedule is shared with ${esc(listSentence(shared))}.
          When you save, choose whether to change just this zone or every zone using it.</div>`
       : '';
 
-    return `<div class="sched${opts.compact ? ' sched-compact' : ''}">${rows}</div>
+    return `<div class="sched${opts.compact ? ' sched-compact' : ''}">${rows}${axis}</div>
       ${opts.showKey === false ? '' : `<div class="sched-key">
         <span><i style="background:var(--m-comfort)"></i>Comfort</span>
         <span><i style="background:var(--m-eco)"></i>Eco</span>
@@ -1185,6 +1197,12 @@
       </div>
 
       <div class="sched-bar sched-preview" id="weekPreview"></div>
+      <!-- The same hour scale the week bars carry. This is the bar you are
+           actually editing, so it is the one that most needs a ruler. -->
+      <div class="sched-scale sched-preview-scale" aria-hidden="true">
+        ${[0, 6, 12, 18, 24].map(h => `<i style="left:${(h / 24) * 100}%">${
+          String(h).padStart(2, '0')}</i>`).join('')}
+      </div>
 
       <div id="weekRows" class="week-rows"></div>
 
@@ -2249,7 +2267,6 @@
             <span class="schedule-copy">
               <strong>${esc(name)}</strong>
               <small>${esc(profileUsage(profile))}</small>
-              ${renderSchedule(profile.schedule, null, { compact: true, showKey: false, unreadable: profile.unreadable, loadingText: 'Schedule details unavailable.' })}
             </span>
           </div>
           <div class="schedule-row-actions">

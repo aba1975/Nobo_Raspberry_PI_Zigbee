@@ -568,7 +568,35 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sched { display: grid; gap: .35rem; }
 .sched-day { display: grid; grid-template-columns: 3.2rem 1fr; align-items: center; gap: .7rem; }
 .sched-day > span { font-size: .78rem; color: var(--ink-faint); font-weight: 600; }
-.sched-bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; background: var(--rule); }
+.sched-bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; background: var(--rule); position: relative; }
+
+/* Hour rules drawn over the colour, so a block edge can be read against the
+   scale below. Every hour faintly, every sixth more firmly, and not on the
+   compact preview where they would only be noise at 10px tall. */
+.sched-bar::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(to right,
+      color-mix(in srgb, var(--ink) 26%, transparent) 0 1px,
+      transparent 1px calc(100% / 4)),
+    repeating-linear-gradient(to right,
+      color-mix(in srgb, var(--ink) 11%, transparent) 0 1px,
+      transparent 1px calc(100% / 24));
+}
+.sched-compact .sched-bar::after { display: none; }
+
+/* The scale itself. Absolutely placed so 00 and 24 sit exactly on the ends of
+   the bar rather than being spread by a flex row, which would put them a few
+   pixels inside and quietly misalign every reading. */
+.sched-axis { margin-top: .15rem; }
+.sched-scale { position: relative; height: 1rem; }
+.sched-scale i {
+  position: absolute; top: 0; transform: translateX(-50%);
+  font-size: .66rem; font-style: normal; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.sched-scale i:first-child { transform: none; }
+.sched-scale i:last-child  { transform: translateX(-100%); }
 .sched-compact { gap: .2rem; margin-top: .45rem; }
 .sched-compact .sched-day { grid-template-columns: 2.1rem 1fr; gap: .45rem; }
 .sched-compact .sched-day > span { font-size: .68rem; }
@@ -603,7 +631,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   background: var(--amber-wash); border-color: var(--amber); color: var(--amber);
 }
 
-.sched-preview { height: 26px; margin-bottom: .9rem; }
+.sched-preview { height: 26px; margin-bottom: .15rem; }
+.sched-preview-scale { margin-bottom: .9rem; }
 
 .week-rows { display: grid; gap: .5rem; }
 .week-row {
@@ -666,10 +695,14 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); }
 .schedule-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .55rem; }
 .schedule-row {
-  display: grid; grid-template-columns: 1fr auto; align-items: start; gap: .8rem;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .8rem;
   padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-sm);
 }
-.schedule-main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .7rem; min-width: 0; }
+/* The list is for finding a schedule, not reading one: name, who follows it,
+   and the way in. The week itself was shown on every row and turned Settings
+   into a wall of bars; it belongs behind Edit, where there is room to read it
+   against an hour scale. */
+.schedule-main { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .7rem; min-width: 0; }
 .schedule-main strong, .schedule-main small { display: block; }
 .schedule-main small { margin-top: .12rem; color: var(--ink-faint); font-size: .78rem; }
 .schedule-icon { color: var(--m-sched); flex: none; }
