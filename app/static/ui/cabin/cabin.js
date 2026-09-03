@@ -498,6 +498,14 @@
     });
   }
 
+  /* The house row is static markup, so its icons are filled in from the same
+     set the zone row uses. One source, so the two rows cannot drift apart
+     again -- they previously carried different symbols for the same four
+     instructions. */
+  document.querySelectorAll('.mode-glyph[data-icon]').forEach(el => {
+    el.innerHTML = Nobo.icon(el.dataset.icon);
+  });
+
   document.querySelectorAll('[data-global]').forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.global;
@@ -867,6 +875,7 @@
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
               aria-pressed="${(zone.current_mode || 'normal') === m}">
+              <span class="mode-glyph" aria-hidden="true">${Nobo.icon(m)}</span>
               ${esc((Nobo.MODES[m] || {}).label || m)}
             </button>`).join('')}
         </div>
@@ -938,6 +947,7 @@
 
   function devRow(d) {
     const manual = Nobo.isManualDevice(d);
+    const name = d.display_name || d.name || d.device_type || 'Heater';
     const tags = [
       manual
         ? `<span class="badge badge-manual" title="This heater has no remote temperature control. Turn the dial on the heater to change its temperature.">Dial on heater</span>`
@@ -947,17 +957,21 @@
 
     return `
       <li class="dev">
-        <span class="np-device">${Nobo.deviceImg(d.serial, '', (d.display_name || d.name || 'Heater') + ' - ' + (d.device_type || 'heating device'))}</span>
+        <span class="np-device">${Nobo.deviceImg(d.serial, '', name + ' - ' + (d.device_type || 'heating device'))}</span>
         <div>
-          <div class="dev-name">${esc(d.display_name || d.name || d.device_type || 'Heater')}</div>
+          <div class="dev-name">${esc(name)}</div>
           <div class="dev-meta">${esc(d.device_type || 'Unknown model')} &middot; ${esc(d.serial_display || d.serial)}</div>
           <div class="dev-tags">${tags}</div>
         </div>
         <div class="dev-actions">
-          <button class="btn" type="button" data-rename-device="${esc(d.serial)}">Rename</button>
-          <button class="btn" type="button" data-move-device="${esc(d.serial)}">Move</button>
-          <button class="btn" type="button" data-replace-device="${esc(d.serial)}">Replace</button>
-          <button class="btn btn-danger" type="button" data-remove-device="${esc(d.serial)}">Remove</button>
+          <button class="icon-btn act-rename" type="button" data-rename-device="${esc(d.serial)}"
+            title="Rename this heater" aria-label="Rename ${esc(name)}">${Nobo.icon('rename')}</button>
+          <button class="icon-btn act-move" type="button" data-move-device="${esc(d.serial)}"
+            title="Move to another zone" aria-label="Move ${esc(name)} to another zone">${Nobo.icon('move')}</button>
+          <button class="icon-btn act-replace" type="button" data-replace-device="${esc(d.serial)}"
+            title="Replace with a different heater" aria-label="Replace ${esc(name)}">${Nobo.icon('replace')}</button>
+          <button class="icon-btn act-remove" type="button" data-remove-device="${esc(d.serial)}"
+            title="Remove from the hub" aria-label="Remove ${esc(name)}">${Nobo.icon('remove')}</button>
         </div>
       </li>`;
   }

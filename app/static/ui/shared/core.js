@@ -118,6 +118,50 @@ const Nobo = (() => {
   };
 
   /* ---------------------------------------------------------------
+   * 1b. Icons
+   *
+   * One set, drawn as inline SVG so it inherits `currentColor` and needs no
+   * separate dark-mode artwork. Both mode rows read from here: the house row
+   * is markup in index.html and the zone row is built in cabin.js, and they
+   * used to carry different glyphs entirely -- the house had a sun, a moon and
+   * an aeroplane while a zone showed a triangle, a disc and a clock face for
+   * the same four instructions.
+   *
+   * Stroked rather than filled, at the weight the rest of the interface uses.
+   * The aeroplane is the exception: a stroked outline of one is unreadable at
+   * 20px, so it is a solid silhouette.
+   * ------------------------------------------------------------- */
+
+  const ICON_PATHS = {
+    home:    '<path d="M3.2 10.6 12 3.4l8.8 7.2"/><path d="M5.6 9.6V20h12.8V9.6"/>',
+    comfort: '<circle cx="12" cy="12" r="3.9"/><path d="M12 2.4v2.2M12 19.4v2.2M4.9 4.9l1.6 1.6' +
+             'M17.5 17.5l1.6 1.6M2.4 12h2.2M19.4 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/>',
+    eco:     '<path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a7.7 7.7 0 1 0 11.1 11.1z"/>',
+    away:    '<path fill="currentColor" stroke="none" d="M12 3.2c.7 0 1.25.57 1.25 1.27v4.4' +
+             'l7.35 4.23v1.83l-7.35-2.25v4.02l2.42 1.72v1.4L12 19.15l-3.67 1.02v-1.4' +
+             'l2.42-1.72v-4.02L3.4 15.28v-1.83l7.35-4.23v-4.4C10.75 3.77 11.3 3.2 12 3.2z"/>',
+    normal:  '<rect x="3.4" y="5.2" width="17.2" height="15.4" rx="2.2"/>' +
+             '<path d="M3.4 9.8h17.2M8.2 3.4v3.4M15.8 3.4v3.4"/>',
+    rename:  '<path d="M4 20h4L18.6 9.4a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.6 6.4l4 4"/>',
+    move:    '<rect x="13.2" y="4.2" width="7.4" height="15.6" rx="1.8"/>' +
+             '<path d="M3.4 12h7.2M7.6 8.4 11.2 12l-3.6 3.6"/>',
+    replace: '<path d="M4 8.4h13.2l-3.6-3.6"/><path d="M20 15.6H6.8l3.6 3.6"/>',
+    remove:  '<path d="M4.6 7h14.8"/><path d="M9.6 7V4.9h4.8V7"/>' +
+             '<path d="M6.6 7l1 12.1a1.8 1.8 0 0 0 1.8 1.7h5.2a1.8 1.8 0 0 0 1.8-1.7L17.4 7"/>' +
+             '<path d="M10.5 11v6.2M13.5 11v6.2"/>',
+  };
+
+  /** An inline SVG for `name`, sized in ems so it follows the button's text. */
+  function icon(name, size = '1.25em') {
+    const paths = ICON_PATHS[name];
+    if (!paths) return '';
+    return `<svg class="icon" viewBox="0 0 24 24" width="${size}" height="${size}" ` +
+           `fill="none" stroke="currentColor" stroke-width="1.7" ` +
+           `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ` +
+           `focusable="false">${paths}</svg>`;
+  }
+
+  /* ---------------------------------------------------------------
    * 2. Device pictures
    *
    * Copied verbatim from the production app.js so the prototypes stay
@@ -581,7 +625,7 @@ const Nobo = (() => {
   }
 
   return {
-    api, DEVICE_MODELS, deviceModel, deviceName, deviceImg,
+    api, DEVICE_MODELS, deviceModel, deviceName, deviceImg, icon, ICON_PATHS,
     MODES, effectiveMode, targetTemp, heatState, HEAT_STATE,
     houseMode, houseSummary, todaySchedule, DAY_KEYS, minutesOf, fmtClock,
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
