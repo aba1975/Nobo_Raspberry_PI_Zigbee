@@ -1243,19 +1243,47 @@
     `, (root) => {
       const rowsEl = root.querySelector('#weekRows');
 
-      const paint = () => {
-        root.querySelectorAll('.day-tab').forEach(t => {
-          t.setAttribute('aria-selected', String(t.dataset.day === day));
-        });
-
-        const pts = draft[day].slice().sort((a, b) => Nobo.minutesOf(a.at) - Nobo.minutesOf(b.at));
-        draft[day] = pts;
-
+      /* Drawing is split in two on purpose.
+       *
+       * The bar and the hint can be redrawn as often as we like -- nobody is
+       * touching them. The rows cannot: rebuilding them replaces the very
+       * <input> the user is interacting with, and a time input fires `change`
+       * *while* a native picker is being spun on a phone or tablet, not only
+       * when it is dismissed. Redrawing on every change therefore tore the
+       * picker out from under the user's finger, so a time could not be set at
+       * all on a touch device and the row list looked frozen.
+       *
+       * Rows are rebuilt only when the list itself changes shape -- a row added
+       * or removed, or a time edit finished and the day needing re-sorting. */
+      const paintPreview = () => {
+        // Sorted copy, not the draft itself: while a time is being changed the
+        // points can be briefly out of order, and the bar should still read
+        // correctly without the row order jumping around underneath the finger.
+        const pts = draft[day].slice()
+          .sort((a, b) => Nobo.minutesOf(a.at) - Nobo.minutesOf(b.at));
         root.querySelector('#weekPreview').innerHTML = blocksOfPoints(pts).map(b => {
           const w = Math.max(0, Nobo.minutesOf(b.end) - Nobo.minutesOf(b.start)) / 14.4;
           return `<span class="sched-seg m-${esc(b.mode)}" style="width:${w}%"
             title="${esc(b.start)}-${esc(b.end)} ${esc(b.mode)}"></span>`;
         }).join('');
+        // The 7 C explanation only earns its space once Away is actually in use.
+        const hint = root.querySelector('#weekAwayHint');
+        if (hint) hint.hidden = !pts.some(p => p.mode === 'away');
+      };
+
+      const sortDay = () => {
+        draft[day] = draft[day].slice()
+          .sort((a, b) => Nobo.minutesOf(a.at) - Nobo.minutesOf(b.at));
+      };
+
+      const paint = () => {
+        root.querySelectorAll('.day-tab').forEach(t => {
+          t.setAttribute('aria-selected', String(t.dataset.day === day));
+        });
+
+        sortDay();
+        const pts = draft[day];
+        paintPreview();
 
         rowsEl.innerHTML = pts.map((p, i) => `
           <div class="week-row">
@@ -1277,8 +1305,17 @@
           </div>`).join('');
 
         rowsEl.querySelectorAll('[data-at]').forEach(inp => {
-          inp.onchange = () => {
-            const i = Number(inp.dataset.at);
+          const i = Number(inp.dataset.at);
+          /* While the picker is open: record the time and redraw the bar only,
+             so the bar follows the finger without the input being replaced. */
+          inp.oninput = () => {
+            if (!inp.value) return;
+            draft[day][i].at = inp.value;
+            paintPreview();
+          };
+          /* When the user has finished: snap, check, and only then rebuild -- by
+             which point the day may need re-sorting and the row may move. */
+          inp.onblur = () => {
             const snapped = snap15(inp.value);
             if (!snapped) { paint(); return; }
             if (snapped === '00:00') {
@@ -1295,12 +1332,14 @@
           };
         });
         rowsEl.querySelectorAll('[data-mode]').forEach(sel => {
-          sel.onchange = () => { draft[day][Number(sel.dataset.mode)].mode = sel.value; paint(); };
+          // Changing a mode cannot reorder the day, so the rows stay as they
+          // are and only the bar is redrawn.
+          sel.onchange = () => {
+            draft[day][Number(sel.dataset.mode)].mode = sel.value;
+            paintPreview();
+          };
         });
 
-        // The 7 C explanation only earns its space once Away is actually in use.
-        const hint = root.querySelector('#weekAwayHint');
-        if (hint) hint.hidden = !pts.some(p => p.mode === 'away');
         rowsEl.querySelectorAll('[data-del]').forEach(b => {
           b.onclick = () => { draft[day].splice(Number(b.dataset.del), 1); paint(); };
         });
