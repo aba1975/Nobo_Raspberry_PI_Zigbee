@@ -2627,13 +2627,31 @@ async def set_zone_override(zone_id: str, mode: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def round_to_whole_degree(value: float) -> int:
+def round_to_whole_degree(value: Any) -> int:
     """
     The Eco Hub stores set points as whole degrees. Truncating turned a
     requested 20.6°C into 20°C, so a room ran colder than the user asked for;
     round to the nearest degree instead.
+
+    Values reach this from two places with different types. The API supplies
+    floats, but the hub supplies *strings* — the Nobø protocol is text on the
+    wire and pynobo keeps zone values exactly as they arrived. Coercing here is
+    what stops that difference reaching the arithmetic.
+
+    That difference was a real fault: setting one set point on its own filled
+    the other in from the hub, so ``'15' + 0.5`` raised TypeError and every
+    temperature change from the web interface failed with a 500 against a real
+    hub. Demo mode stores floats, so it only ever broke on real hardware.
     """
-    return math.floor(value + 0.5)
+    try:
+        return math.floor(float(value) + 0.5)
+    except (TypeError, ValueError) as exc:
+        # A set point the hub gave us that is not a number is the hub's
+        # problem, not the caller's, so say so rather than returning a 500.
+        raise HTTPException(
+            status_code=502,
+            detail=f"The hub reported a temperature this app could not read: {value!r}",
+        ) from exc
 
 
 def resolve_temperature_update(
