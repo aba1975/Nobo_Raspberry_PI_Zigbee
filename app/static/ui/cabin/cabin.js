@@ -562,10 +562,15 @@
     return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
   }
 
+  function renderSetpointDriftBadge(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    return `<span class="badge badge-drift" title="${esc(setpointDriftText(zone))} Open the room to restore or keep it.">Changed outside app</span>`;
+  }
+
   function renderSetpointDrift(zone) {
     if (!zone.setpoint_changed_outside) return '';
     return `
-      <div class="note note-warn" style="grid-column:1/-1;position:relative;z-index:1;margin-top:.65rem">
+      <div class="note note-warn">
         <strong>Changed outside this app</strong>
         <div>${esc(setpointDriftText(zone))} That change was made on a heater or in the Nobø app — the hub does not record which.</div>
         <div class="sheet-actions" style="margin-top:.7rem">
@@ -658,7 +663,7 @@
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
-        <div class="zone-meta">${modeBadge}${manualBadge}</div>
+        <div class="zone-meta">${modeBadge}${manualBadge}${renderSetpointDriftBadge(zone)}</div>
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -674,7 +679,6 @@
             aria-label="Raise ${esc(zone.name)} set temperature">+</button>
         </div>` : ''}
         <div class="zone-devices">${thumbs}${more}</div>
-        ${renderSetpointDrift(zone)}
       </li>`;
   }
 

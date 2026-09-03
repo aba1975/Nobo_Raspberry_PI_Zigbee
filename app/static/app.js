@@ -93,20 +93,23 @@ function setpointChangeActionLabel(zone, field) {
     return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
 }
 
+function renderSetpointChangeBadge(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    const title = `${setpointChangeSummary(zone)} Open the room to restore or keep it.`;
+    return `<div class="zone-list-drift" title="${escapeHtml(title)}">Changed outside app</div>`;
+}
+
 function renderSetpointChangeNotice(zone) {
     if (!zone.setpoint_changed_outside) return '';
     const summary = setpointChangeSummary(zone);
     const idArg = htmlJsString(zone.zone_id);
     return `
-        <div class="manual-temp-notice" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">
-            <span class="icon">ℹ️</span>
-            <div>
-                <strong>Changed outside this app</strong>
-                <div>${escapeHtml(summary)} That change was made on a heater or in the Nobø app — the hub does not record which.</div>
-                <div class="form-actions" style="margin-top:10px;">
-                    <button class="btn btn-primary" onclick="restoreZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'intended'))}</button>
-                    <button class="btn btn-secondary" onclick="acceptZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'actual'))}</button>
-                </div>
+        <div class="setpoint-notice">
+            <strong>Changed outside this app</strong>
+            <p>${escapeHtml(summary)} That change was made on a heater or in the Nobø app — the hub does not record which.</p>
+            <div class="setpoint-notice-actions">
+                <button class="btn btn-primary" onclick="restoreZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'intended'))}</button>
+                <button class="btn btn-secondary" onclick="acceptZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'actual'))}</button>
             </div>
         </div>
     `;
@@ -806,7 +809,6 @@ function createZoneListItem(zone) {
         ? `<div class="zone-list-subtitle">${zone.rooms.map(escapeHtml).join(' · ')}</div>` 
         : '';
     const zoneIdArg = htmlJsString(zone.zone_id);
-    const setpointNotice = renderSetpointChangeNotice(zone);
     
     const supportsTemp = zone.supports_temp_adjust || false;
     let setTemp = '—';
@@ -858,8 +860,8 @@ function createZoneListItem(zone) {
             <div class="zone-list-bottom">
                 <div class="zone-list-temp">${setTemp}</div>
                 <div class="zone-list-mode${modeCssClass ? ' ' + modeCssClass : ''}">${modeLabel}</div>
+                ${renderSetpointChangeBadge(zone)}
             </div>
-            ${setpointNotice}
         </div>
     `;
 }

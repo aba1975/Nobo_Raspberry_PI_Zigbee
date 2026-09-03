@@ -762,6 +762,57 @@ body {
     font-size: 16px;
 }
 
+/* A set point that no longer matches what was asked for here. Deliberately not
+   .manual-temp-notice: that one is a single centred line, and centring a
+   heading, a paragraph and two buttons against a small icon is what made this
+   look broken. */
+.setpoint-notice {
+    background-color: #fff8e1;
+    border: 1px solid #ffd54f;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 15px;
+    font-size: 13px;
+    color: #7a6400;
+}
+
+.setpoint-notice strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.setpoint-notice p {
+    margin: 0;
+    line-height: 1.45;
+}
+
+.setpoint-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.setpoint-notice-actions .btn {
+    flex: 0 1 auto;
+    padding: 7px 14px;
+    font-size: var(--text-sm);
+}
+
+/* In the room list the same fact gets one word, alongside the mode pill, so a
+   room that has drifted is visible on a scan without the list losing its
+   rhythm. The explanation and the actions are in the room. */
+.zone-list-drift {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 20px;
+    background: #fff8e1;
+    border: 1px solid #ffd54f;
+    color: #7a6400;
+    white-space: nowrap;
+}
+
 .temp-control {
     display: flex;
     justify-content: space-between;
@@ -1738,6 +1789,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-top: 4px;
 }
 
@@ -1754,6 +1807,7 @@ body {
     color: var(--color-text-secondary);
     padding: 3px 8px;
     border-radius: 20px;
+    white-space: nowrap;
     background: rgba(127, 140, 141, 0.12);
 }
 
@@ -2772,6 +2826,13 @@ select:focus-visible {
 }
 
 [data-theme="dark"] .manual-temp-notice {
+    background-color: rgba(255, 213, 79, 0.08);
+    border-color: rgba(255, 213, 79, 0.3);
+    color: #ffd54f;
+}
+
+[data-theme="dark"] .setpoint-notice,
+[data-theme="dark"] .zone-list-drift {
     background-color: rgba(255, 213, 79, 0.08);
     border-color: rgba(255, 213, 79, 0.3);
     color: #ffd54f;
