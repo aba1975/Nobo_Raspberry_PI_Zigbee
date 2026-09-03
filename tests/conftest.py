@@ -51,6 +51,31 @@ def authenticate(client):
 
 
 @pytest.fixture(autouse=True)
+def clean_zone_override_state(tmp_path, monkeypatch):
+    """
+    Start every test with no zone-level overrides and nothing held from Away.
+
+    Both of these are module globals in ``server``, so without a reset one
+    test's Away leaks into the next test's Comfort. The applied-exception set is
+    also persisted, so its file is redirected into tmp_path to keep test runs
+    out of the real data directory.
+    """
+    import server
+
+    monkeypatch.setattr(
+        config_persistence,
+        "AWAY_EXCEPTIONS_APPLIED_FILE",
+        tmp_path / "away_exceptions_applied.json",
+        raising=False,
+    )
+    server.DEMO_ZONE_OVERRIDES.clear()
+    server._away_exception_zones_applied.clear()
+    yield
+    server.DEMO_ZONE_OVERRIDES.clear()
+    server._away_exception_zones_applied.clear()
+
+
+@pytest.fixture(autouse=True)
 def demo_hub_is_connected():
     """
     Keep every test starting from "demo hub connected".

@@ -36,6 +36,12 @@ SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
+# Which exception zones are *currently* held on a zone-level Eco override.
+#
+# Separate from the configured list above, and deliberately so: the hub will not
+# release a zone override by itself, so the only way a room can be freed after a
+# restart mid-away is if we wrote down what we did to it.
+AWAY_EXCEPTIONS_APPLIED_FILE = DATA_DIR / "away_exceptions_applied.json"
 SITE_FILE = DATA_DIR / "site.json"
 
 # Default server state values
@@ -322,6 +328,44 @@ def load_away_exceptions() -> list:
     except json.JSONDecodeError as exc:
         logger.warning("away_exceptions.json is corrupt: %s — backing up and using none", exc)
         _backup_corrupt(AWAY_EXCEPTIONS_FILE)
+        return []
+
+
+def save_away_exceptions_applied(zone_ids) -> None:
+    """Record which exception zones are currently held on a zone override."""
+    try:
+        _atomic_write(
+            AWAY_EXCEPTIONS_APPLIED_FILE,
+            {"zone_ids": sorted(str(z) for z in zone_ids)},
+        )
+    except Exception as exc:
+        logger.error("Failed to save applied away exceptions: %s", exc)
+
+
+def load_away_exceptions_applied() -> list:
+    """
+    Load the zone ids currently held on an away-exception override.
+
+    Returns an empty list when missing or corrupt. That is the safe reading:
+    the worst case is a room that stays on Eco until the next away cycle, rather
+    than an override being cancelled on a zone the user set deliberately.
+    """
+    try:
+        with AWAY_EXCEPTIONS_APPLIED_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return []
+        ids = data.get("zone_ids", [])
+        if not isinstance(ids, list):
+            return []
+        return [str(z) for z in ids]
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "away_exceptions_applied.json is corrupt: %s — backing up and using none", exc
+        )
+        _backup_corrupt(AWAY_EXCEPTIONS_APPLIED_FILE)
         return []
 
 
