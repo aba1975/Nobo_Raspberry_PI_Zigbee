@@ -408,6 +408,26 @@ def encode_hub_name(name: str) -> str:
     return name.replace(" ", HUB_NAME_SPACE)
 
 
+def format_production_date(value: Any) -> Optional[str]:
+    """
+    The hub gives its production date as ``YYYYMMDD``; return it as ISO.
+
+    Left as a date rather than formatted for a locale, because the interface
+    already knows the household's regional format and this endpoint does not.
+    Anything that is not eight digits is passed through untouched: a value we
+    cannot parse is still worth showing.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d").date().isoformat()
+        except ValueError:
+            return text
+    return text
+
+
 def format_serial_display(serial: str) -> str:
     """
     Format serial number for display with spaces: XXX XXX XXX XXX
@@ -2267,37 +2287,59 @@ async def favicon():
 
 @app.get("/api/hub")
 async def get_hub_info():
-    """Get hub information"""
+    """
+    What the hub says about itself.
+
+    Everything here comes from ``hub.hub_info``, which pynobo fills in from the
+    ``H05``/``V03`` handshake. There is no ``hub_version`` or ``hub_name``
+    attribute on the client — this endpoint used to read both through
+    ``getattr`` with a fallback, so it silently reported "Unknown" and "Nobø
+    Hub" against a perfectly healthy hub. Reading the dict is the only way to
+    get the real answers, and the interface shows the firmware version because
+    a known-bad one (115) is worth being able to see without the official app.
+    """
     with connection_lock:
         connected = hub_connected
         current_hub = hub
-    
+
     if not connected:
         raise HTTPException(status_code=503, detail="Hub not connected")
-    
+
     try:
         # Demo mode - return simulated hub info
         if DEMO_MODE:
             return {
                 "name": "Nobø Hub",
                 "serial": NOBO_SERIAL,
+                "serial_display": format_serial_display(NOBO_SERIAL),
                 "software_version": DEMO_SOFTWARE_VERSION,
+                "hardware_version": None,
+                "production_date": None,
+                "api_version": pynobo.nobo.API.VERSION,
+                "ip": None,
                 "connected": True,
                 "demo_mode": True
             }
-        
+
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
-        
-        # Get hub info from pynobo
-        hub_info = {
-            "name": getattr(current_hub, 'hub_name', 'Nobø Hub'),
-            "serial": NOBO_SERIAL,
-            "software_version": getattr(current_hub, 'hub_version', 'Unknown'),
-            "connected": connected
+
+        info = getattr(current_hub, 'hub_info', None) or {}
+        serial = info.get('serial') or NOBO_SERIAL
+
+        return {
+            "name": decode_hub_name(info.get('name')) or "Nobø Hub",
+            "serial": serial,
+            "serial_display": format_serial_display(serial),
+            "software_version": info.get('software_version') or "Unknown",
+            "hardware_version": info.get('hardware_version'),
+            "production_date": format_production_date(info.get('production_date')),
+            "api_version": pynobo.nobo.API.VERSION,
+            "ip": NOBO_IP or None,
+            "connected": connected,
+            "demo_mode": False
         }
-        return hub_info
     except HTTPException:
         raise
     except Exception as e:

@@ -128,10 +128,14 @@
    * ---------------------------------------------------------------- */
 
   async function loadAll() {
-    const [zones, status, hub, caps, devices, site] = await Promise.all([
+    const [zones, status, hub, hubInfo, caps, devices, site] = await Promise.all([
       Nobo.api.zones().catch(() => []),
       Nobo.api.status().catch(() => null),
       Nobo.api.hubConfig().catch(() => null),
+      /* Configuration and identity are two different endpoints: hubConfig is
+         what we were told to connect to, this is what the hub says it is. It
+         answers 503 while the hub is unreachable, hence the catch. */
+      Nobo.api.hub().catch(() => null),
       Nobo.api.capabilities().catch(() => null),
       Nobo.api.devices().catch(() => []),
       Nobo.api.site().catch(() => null),
@@ -139,6 +143,7 @@
     state.zones = zones || [];
     state.status = status;
     state.hub = hub;
+    state.hubInfo = hubInfo;
     state.caps = caps;
     state.devices = devices || [];
     if (site) state.site = site;
@@ -749,17 +754,41 @@
   function renderSystem() {
     const s = Nobo.houseSummary(state.zones);
     const st = state.status || {};
+    const hub = state.hub || {};
+    const info = state.hubInfo || {};
     const rows = [
       ['Rooms', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
       ['Coldest room', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
       ['Rooms overridden', String(s.overriddenCount)],
-      ['Hub', state.hub && state.hub.demo_mode ? 'Demo mode' : (state.hub && state.hub.serial_display) || 'Unknown'],
+      ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
+    /* Everything the hub will tell us about itself. Only shown when it is
+       actually there: the firmware version in particular is worth being able to
+       read without the official app, because 115 has a fault that stops the hub
+       reaching the update service and the only outward sign is a blinking LED. */
+    for (const [label, value] of [
+      ['Hub name', info.name],
+      ['Firmware', info.software_version],
+      ['Hardware', info.hardware_version],
+      ['Made', fmtHubDate(info.production_date)],
+      ['Protocol', info.api_version],
+      ['Hub address', hub.ip],
+    ]) {
+      if (value) rows.push([label, String(value)]);
+    }
     $('#sysGrid').innerHTML = rows
       .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  }
+
+  /* The server sends an ISO date; the household's own format is a browser
+     setting, so the conversion belongs here rather than in the API. */
+  function fmtHubDate(iso) {
+    if (!iso) return '';
+    const d = new Date(`${iso}T00:00:00`);
+    return isNaN(d) ? iso : d.toLocaleDateString();
   }
 
   /* ------------------------------------------------------------------
