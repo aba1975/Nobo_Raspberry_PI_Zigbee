@@ -228,7 +228,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px solid var(--rule); border-radius: var(--radius-sm);
   background: var(--card); color: var(--ink-soft);
 }
-.mode-glyph { font-size: 1.15rem; line-height: 1; }
+.mode-glyph { font-size: 1.15rem; line-height: 1; display: inline-flex; }
+.mode-glyph .icon { width: 22px; height: 22px; }
 .mode-btn:hover { border-color: var(--pine); color: var(--ink); }
 
 /* A selected mode button wears that mode's own colour, so the room screen, the
@@ -473,10 +474,68 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* This is where you check you are looking at the right piece of hardware,
    so the picture is given real size rather than a thumbnail. */
 .dev .np-device { width: 112px; height: 58px; }
+
+/* The device pictures are pale line art on a light "stage", and in dark mode
+   that stage stayed white -- bright slabs on a dark card, the one thing on the
+   screen that had not been themed.
+   
+   Both halves have to change together. Inverting the image alone did not work:
+   the stage is a CSS gradient rather than part of the picture, and base.css
+   blends the art with mix-blend-mode: multiply, which is a light-background
+   technique. So the stage is darkened here and the blend switched to screen,
+   where the now-black background of the inverted art drops out and only the
+   white lines remain. */
+@media (prefers-color-scheme: dark) {
+  .d .np-device {
+    background:
+      radial-gradient(ellipse at 50% 120%, rgba(0, 0, 0, .40), rgba(0, 0, 0, 0) 62%),
+      linear-gradient(170deg, #262B29 0%, #1A1E1C 100%);
+  }
+  .d .np-device img {
+    filter: invert(1) hue-rotate(180deg) contrast(1.15);
+    mix-blend-mode: screen;
+  }
+}
 .dev-name { font-weight: 620; }
 .dev-meta { font-size: .78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .dev-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
-.dev-actions { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: flex-end; }
+/* Deliberately two by two rather than left to wrap. At phone width four in a
+   row would squeeze the heater's name into three lines and make the card
+   taller than the buttons saved; two by two balances against the picture. A
+   wider screen has room for the single row. */
+.dev-actions { display: grid; grid-template-columns: repeat(2, auto); gap: .4rem; }
+@media (min-width: 560px) {
+  .dev-actions { grid-template-columns: repeat(4, auto); }
+}
+
+/* Four labelled buttons per heater turned a room with three heaters into a wall
+   of text, and on a phone they stacked one per line. Icons carry the same four
+   actions in a quarter of the height. Each keeps a title and an aria-label, so
+   nothing is lost to anyone reading by touch or hovering to check.
+
+   The colour is the meaning, not decoration: editing is calm, moving is the
+   house's own green, replacing is amber because it swaps hardware, and removing
+   is the danger red used everywhere else. Every one of those is a themed
+   variable, so dark mode follows without a second rule. */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; padding: 0;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--card); color: var(--ink-soft);
+  cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+}
+.icon-btn:hover { background: var(--paper); }
+.icon-btn:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+.icon-btn .icon { width: 20px; height: 20px; }
+
+.act-rename  { color: var(--frost); }
+.act-rename:hover  { border-color: var(--frost); background: var(--frost-wash); }
+.act-move    { color: var(--pine); }
+.act-move:hover    { border-color: var(--pine); background: var(--pine-wash); }
+.act-replace { color: var(--amber); }
+.act-replace:hover { border-color: var(--amber); background: var(--amber-wash); }
+.act-remove  { color: var(--danger); }
+.act-remove:hover  { border-color: var(--danger); background: var(--danger-wash); }
 
 /* ------------------------------------------------------- adding a heater
    Two ways in, and they are not equivalent: typing the serial always works,
