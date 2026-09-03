@@ -3701,10 +3701,17 @@ async def get_week_profiles():
 
         profiles = []
         for profile_id, profile in current_hub.week_profiles.items():
+            # Names arrive padded with non-breaking spaces, the same as zone and
+            # component names. Decoded in both places: the nested copy is the
+            # whole profile as the hub sent it, and leaving that raw would hand
+            # any caller reading the inner name a "Teknisk\xa0Rom".
+            decoded = dict(profile)
+            if 'name' in decoded:
+                decoded['name'] = decode_hub_name(decoded['name'])
             profiles.append({
                 'profile_id': str(profile_id),
-                'name': profile.get('name', f'Profile {profile_id}'),
-                'profile': profile
+                'name': decode_hub_name(profile.get('name')) or f'Profile {profile_id}',
+                'profile': decoded
             })
         return {"week_profiles": profiles}
     except HTTPException:

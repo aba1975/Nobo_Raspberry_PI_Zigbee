@@ -217,7 +217,7 @@ async function refreshCapabilities() {
         const data = await r.json();
         capabilities = data.features || {};
         applyCapabilityGating();
-        renderCapabilityNotices(data.demo_mode);
+        renderCapabilityNotices();
     } catch (e) {
         console.error('Could not read capabilities:', e);
     }
@@ -259,24 +259,30 @@ function applyCapabilityGating() {
     });
 }
 
-/** Explain once per section why the greyed-out controls are greyed out. */
-function renderCapabilityNotices(demoMode) {
+/** Explain once per section why the greyed-out controls are greyed out.
+ *
+ *  Derived from the same /api/capabilities response that does the gating, so a
+ *  notice cannot outlive the restriction it describes. It used to be a fixed
+ *  paragraph saying zones, devices and schedules had to be managed in the
+ *  official app; that stopped being true when those features gained real-hub
+ *  support, and the interface went on saying it against a hub that was happily
+ *  creating and deleting zones. */
+function renderCapabilityNotices() {
     document.querySelectorAll('.capability-notice').forEach(el => el.remove());
-    if (demoMode !== false) return;
+
+    const reasons = Object.values(capabilities)
+        .filter(cap => cap && !cap.supported && cap.reason)
+        .map(cap => cap.reason);
+    if (!reasons.length) return;
 
     const notice = document.createElement('p');
     notice.className = 'capability-notice';
-    notice.textContent =
-        'Connected to a real Nobø Eco Hub. Adding, removing and renaming zones, ' +
-        'devices and week schedules is done in the official Nobø Energy Control ' +
-        'app — those controls are greyed out here. Temperatures, comfort/eco/away ' +
-        'modes and the away schedule all work normally.';
+    notice.textContent = reasons.join(' ');
 
-    const zoneFooter = document.querySelector('.zone-list-footer');
-    if (zoneFooter) zoneFooter.insertAdjacentElement('beforebegin', notice);
-
+    // Every gated feature currently lives in the devices section; if that ever
+    // stops being true this needs a per-section map rather than one placement.
     const devices = document.querySelector('.devices-section h2');
-    if (devices) devices.insertAdjacentElement('afterend', notice.cloneNode(true));
+    if (devices) devices.insertAdjacentElement('afterend', notice);
 }
 
 // ===== Theme Toggle =====
