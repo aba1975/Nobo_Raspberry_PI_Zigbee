@@ -595,9 +595,18 @@ const Nobo = (() => {
     return intlFormat({ day: 'numeric', month: 'short' }).format(dt);
   }
 
-  /** Day names for the schedule editor, in the installation's language. */
+  /**
+   * Day names for the schedule editor, in the interface's language.
+   *
+   * Deliberately not the regional format's language. That setting decides how a
+   * date and time are *written* — "30. aug. 2026" against "30 Aug 2026", which
+   * day the week starts on, 24-hour or not — and a Norwegian household wants
+   * Norwegian dates. It does not decide what language the app is in, and the
+   * app is in English, so a schedule reading "man. tir. ons." next to "Comfort"
+   * and "Save schedule" was the one place the two got confused.
+   */
   function dayNames(style = 'short') {
-    const fmt = intlFormat({ weekday: style });
+    const fmt = new Intl.DateTimeFormat('en-GB', { weekday: style });
     // 2024-01-01 was a Monday; DAY_KEYS starts at Sunday, so start a day back.
     return DAY_KEYS.map((key, i) => {
       const d = new Date(2023, 11, 31 + i);   // 31 Dec 2023 = Sunday

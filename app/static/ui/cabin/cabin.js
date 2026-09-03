@@ -989,7 +989,7 @@
 
   /* Monday first: the week starts on Monday everywhere this is sold, and a
      heating schedule reads oddly beginning on Sunday. Nobo.dayNames() returns
-     the labels in the installation's own language. */
+     English labels — the app's language, not the date format's. */
   function scheduleDays() {
     const byKey = Object.fromEntries(Nobo.dayNames('short'));
     return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -1128,8 +1128,7 @@
    * ---------------------------------------------------------------- */
 
   /* Monday first, so the weekday/weekend slices below stay meaningful.
-     Labels come from the installation's locale, resolved at call time so a
-     change in Settings takes effect without a reload. */
+     Labels are English, the app's language, rather than the date format's. */
   const SCHED_DAY_KEYS = [
     'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
   ];
