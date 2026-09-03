@@ -532,6 +532,76 @@
     return null;
   }
 
+  function fmtSetpointTemp(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '\u2014';
+    return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '\u00B0C';
+  }
+
+  function setpointDriftEntries(zone) {
+    const changed = zone.setpoint_changed_outside || {};
+    return ['comfort', 'eco']
+      .filter(key => changed[key])
+      .map(key => ({
+        key,
+        label: key === 'comfort' ? 'Comfort' : 'Eco',
+        intended: changed[key].intended,
+        actual: changed[key].actual,
+      }));
+  }
+
+  function setpointDriftText(zone) {
+    return setpointDriftEntries(zone).map(entry =>
+      `${entry.label} is ${fmtSetpointTemp(entry.actual)} here, but ${fmtSetpointTemp(entry.intended)} was set in this app.`
+    ).join(' ');
+  }
+
+  function setpointDriftAction(zone, field) {
+    const values = setpointDriftEntries(zone).map(entry => fmtSetpointTemp(entry[field]));
+    if (!values.length) return field === 'intended' ? 'Restore' : 'Keep';
+    return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
+  }
+
+  function renderSetpointDrift(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    return `
+      <div class="note note-warn" style="grid-column:1/-1;position:relative;z-index:1;margin-top:.65rem">
+        <strong>Changed outside this app</strong>
+        <div>${esc(setpointDriftText(zone))} That change was made on a heater or in the Nobø app — the hub does not record which.</div>
+        <div class="sheet-actions" style="margin-top:.7rem">
+          <button class="btn btn-primary" type="button" data-setpoint-action="restore" data-zone="${esc(zone.zone_id)}">${esc(setpointDriftAction(zone, 'intended'))}</button>
+          <button class="btn" type="button" data-setpoint-action="accept" data-zone="${esc(zone.zone_id)}">${esc(setpointDriftAction(zone, 'actual'))}</button>
+        </div>
+      </div>`;
+  }
+
+  async function postSetpointDecision(zoneId, action) {
+    const path = `/api/zones/${encodeURIComponent(zoneId)}/${action === 'restore' ? 'restore-setpoints' : 'accept-setpoints'}`;
+    const res = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (_) { /* response had no JSON body */ }
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  async function handleSetpointDecision(zoneId, action) {
+    hold();
+    try {
+      await postSetpointDecision(zoneId, action);
+      Nobo.toast(action === 'restore' ? 'Setpoints restored' : 'Setpoints kept');
+      await refresh(true);
+    } catch (e) { Nobo.toast(e.message, 'error'); }
+  }
+
   function devicesOfZone(zoneId) {
     return state.devices.filter(d => String(d.zone_id) === String(zoneId));
   }
@@ -604,6 +674,7 @@
             aria-label="Raise ${esc(zone.name)} set temperature">+</button>
         </div>` : ''}
         <div class="zone-devices">${thumbs}${more}</div>
+        ${renderSetpointDrift(zone)}
       </li>`;
   }
 
@@ -627,6 +698,9 @@
     });
     list.querySelectorAll('[data-step]').forEach(b => {
       b.onclick = () => stepZone(b.dataset.zone, b.dataset.step === 'up' ? 0.5 : -0.5);
+    });
+    list.querySelectorAll('[data-setpoint-action]').forEach(b => {
+      b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
   }
 
@@ -755,6 +829,7 @@
         ${adjustable ? '' : `<div class="note note-warn">${!remote
           ? 'No heater in this room can be adjusted from here. You can still switch the room between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
           : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per room. To hold this room warmer while you are away, put it on Eco, or list it under Settings as a room that must not get cold.`}</div>`}
+        ${renderSetpointDrift(zone)}
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
@@ -801,6 +876,9 @@
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
+    });
+    root.querySelectorAll('[data-setpoint-action]').forEach(b => {
+      b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
     root.querySelectorAll('[data-remove-device]').forEach(b => {
       b.onclick = () => removeDevice(b.dataset.removeDevice);

@@ -32,6 +32,7 @@ import away_schedule
 import config_persistence
 import notifications
 import notify_watch
+import setpoint_guard as setpoint_guard_mod
 
 # Configure logging
 logging.basicConfig(
@@ -263,6 +264,14 @@ log_lock = threading.Lock()  # Lock for thread-safe command log access
 # until the user turns notifications on in Settings.
 notifier = notifications.Notifier()
 zone_watcher = notify_watch.ZoneWatcher(notifier=notifier)
+
+# The temperatures this system means each zone to have. Unlike the notifier this
+# is always on: a dial turned on a heater rewrites the hub's setpoint outright,
+# and if nothing here remembers the old value then nothing anywhere does.
+setpoint_guard = setpoint_guard_mod.SetpointGuard(
+    save_fn=config_persistence.save_intended_setpoints,
+    intended=config_persistence.load_intended_setpoints(),
+)
 
 # Command log buffer — keeps the last 500 entries
 command_log: deque = deque(maxlen=500)
@@ -1451,6 +1460,12 @@ def note_local_write(zone_id: Any, field_name: str, value: Any) -> None:
         zone_watcher.record_local_write(str(zone_id), field_name, value)
     except Exception as exc:
         logger.debug("Could not record a local write: %s", exc)
+    try:
+        # The same write, kept for a different purpose: the watcher forgets after
+        # two minutes, the guard has to remember until somebody changes it again.
+        setpoint_guard.remember(zone_id, field_name, value)
+    except Exception as exc:
+        logger.debug("Could not record an intended setpoint: %s", exc)
 
 
 async def notification_watch_loop():
@@ -1540,6 +1555,28 @@ def get_current_schedule_mode(zone_id: str) -> str:
 
 
 def get_zones_data() -> List[Dict[str, Any]]:
+    """
+    Current data for all zones, with any setpoint drift marked.
+
+    Drift is worked out here, on the way out, rather than stored: it is simply
+    the difference between what this system intends and what the hub reports, so
+    it cannot be left behind by a missed message or a restart.
+    """
+    zones = _build_zones_data()
+    try:
+        setpoint_guard.observe(zones)
+        for zone in zones:
+            moved = setpoint_guard.drift(zone)
+            zone["setpoint_changed_outside"] = moved or None
+    except Exception as exc:
+        # A fault in the guard must never cost the browsers their zone list.
+        logger.error("Setpoint guard failed while annotating zones: %s", exc)
+        for zone in zones:
+            zone.setdefault("setpoint_changed_outside", None)
+    return zones
+
+
+def _build_zones_data() -> List[Dict[str, Any]]:
     """Get current data for all zones"""
     with connection_lock:
         connected = hub_connected
@@ -2820,6 +2857,126 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _restore_intended_setpoints(zone_ids=None, source: str = "api") -> List[Dict[str, Any]]:
+    """
+    Put back the temperatures this system intends, wherever the hub disagrees.
+
+    Used by the restore button on a room, and by every global mode change: when
+    the owner tells the whole house what to do, the settings applied should be
+    theirs and not whatever was last dialled in on a wall.
+
+    Only zones that have actually drifted are written, so this costs nothing on
+    a house nobody has touched.
+    """
+    zones = _build_zones_data()
+    by_id = {str(z.get("zone_id")): z for z in zones}
+    targets = setpoint_guard.restore_targets(zones)
+    if zone_ids is not None:
+        wanted = {str(z) for z in zone_ids}
+        targets = {z: t for z, t in targets.items() if z in wanted}
+    if not targets:
+        return []
+
+    with connection_lock:
+        current_hub = hub
+
+    restored: List[Dict[str, Any]] = []
+
+    for zone_id, fields in targets.items():
+        zone = by_id.get(zone_id)
+        if zone is None:
+            continue
+        # Read before writing: our own write marks the zone as settled, after
+        # which there is no drift left to report.
+        moved = {k: v["actual"] for k, v in setpoint_guard.drift(zone).items()}
+        # update_zone takes both temperatures, so whichever did not drift is
+        # written back at the value it already has.
+        comfort = fields.get("comfort", zone.get("comfort_temperature"))
+        eco = fields.get("eco", zone.get("eco_temperature"))
+        try:
+            comfort = round_to_whole_degree(comfort)
+            eco = round_to_whole_degree(eco)
+        except HTTPException:
+            logger.error("Cannot restore zone %s: unreadable temperatures", zone_id)
+            continue
+
+        note_local_write(zone_id, "comfort", comfort)
+        note_local_write(zone_id, "eco", eco)
+
+        try:
+            if DEMO_MODE:
+                demo_zone = next(
+                    (z for z in DEMO_ZONES if str(z.get('zone_id')) == zone_id), None
+                )
+                if demo_zone is None:
+                    continue
+                demo_zone['comfort_temp'] = float(comfort)
+                demo_zone['eco_temp'] = float(eco)
+                config_persistence.save_demo_zones(DEMO_ZONES)
+            else:
+                if not current_hub or zone_id not in current_hub.zones:
+                    continue
+                await hub_command(current_hub.async_update_zone(
+                    zone_id,
+                    name=current_hub.zones[zone_id]['name'],
+                    temp_comfort_c=comfort,
+                    temp_eco_c=eco,
+                ))
+            restored.append({
+                "zone_id": zone_id,
+                "name": zone.get("name"),
+                "comfort": comfort,
+                "eco": eco,
+                "was": moved,
+            })
+            add_log_entry(
+                "sent",
+                f"update_zone(zone_{zone_id}, comfort={comfort}, eco={eco}) "
+                f"— restoring the setting made here",
+                command=f"update_zone {zone_id} comfort={comfort} eco={eco}",
+                source=source,
+            )
+        except Exception as exc:
+            # One unreachable zone must not stop the rest being put right.
+            logger.error("Could not restore setpoints on zone %s: %s", zone_id, exc)
+
+    return restored
+
+
+@app.post("/api/zones/{zone_id}/restore-setpoints")
+async def restore_zone_setpoints(zone_id: str):
+    """Put one room back to the temperatures set here."""
+    with connection_lock:
+        connected = hub_connected
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    restored = await _restore_intended_setpoints([zone_id])
+    if not restored:
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing to restore: this room already matches the setting made here.",
+        )
+    await asyncio.sleep(0.5)
+    return {"status": "success", "restored": restored}
+
+
+@app.post("/api/zones/{zone_id}/accept-setpoints")
+async def accept_zone_setpoints(zone_id: str):
+    """Keep whatever the room is set to now, and stop warning about it."""
+    zones = _build_zones_data()
+    zone = next((z for z in zones if str(z.get("zone_id")) == str(zone_id)), None)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    setpoint_guard.accept(zone_id)
+    setpoint_guard.observe([zone])
+    return {
+        "status": "success",
+        "zone_id": str(zone_id),
+        "comfort": zone.get("comfort_temperature"),
+        "eco": zone.get("eco_temperature"),
+    }
+
+
 @app.post("/api/global/override/{mode}")
 async def set_global_override(mode: str):
     """Set global override mode for all zones"""
@@ -2846,6 +3003,10 @@ async def set_global_override(mode: str):
     
     # One record covering every zone, since a global override moves them all.
     note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
+    # Before the house is told what to do, make sure the settings it will use
+    # are the ones set here rather than any that were changed on a wall.
+    restored_setpoints = await _restore_before_global_mode()
 
     try:
         # Demo mode - update all simulated zones
@@ -2874,7 +3035,8 @@ async def set_global_override(mode: str):
             config_persistence.save_server_state({"global_mode_source": global_mode_source})
             exceptions = await _sync_away_exceptions(mode)
             return {"status": "success", "mode": mode, "source": "manual",
-                    "away_exceptions_applied": exceptions}
+                    "away_exceptions_applied": exceptions,
+                    "setpoints_restored": restored_setpoints}
         
         # Real hub mode — use a single global override command instead of per-zone
         if not current_hub:
@@ -2912,7 +3074,8 @@ async def set_global_override(mode: str):
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
         exceptions = await _sync_away_exceptions(mode)
         return {"status": "success", "mode": mode, "source": "manual",
-                "away_exceptions_applied": exceptions}
+                "away_exceptions_applied": exceptions,
+                "setpoints_restored": restored_setpoints}
     except HTTPException:
         raise
     except Exception as e:
@@ -3280,6 +3443,23 @@ async def _sync_away_exceptions(mode: str, source: str = "api") -> List[str]:
     return []
 
 
+async def _restore_before_global_mode(source: str = "api") -> List[Dict[str, Any]]:
+    """
+    Put any drifted setpoints back before the house is told what to do.
+
+    Choosing Comfort, Eco, Away or the schedule is the owner saying "use my
+    settings", and a temperature dialled in on a wall would otherwise silently
+    become the one that gets used -- the hub keeps no memory of what the room
+    was meant to be. Guarded, because a failure here must not stop the mode
+    change itself, which is the thing actually asked for.
+    """
+    try:
+        return await _restore_intended_setpoints(source=source)
+    except Exception as exc:
+        logger.error("Could not restore setpoints before a global mode change: %s", exc)
+        return []
+
+
 async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> None:
     """
     Internal helper to apply a global mode without going through the HTTP endpoint.
@@ -3297,6 +3477,10 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     # The scheduler changes every zone too, so the same record is needed here or
     # a planned away period would arrive as "somebody changed it".
     note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
+
+    # The schedule is this system's own intention too, so a temperature changed
+    # on a wall should not be the one the schedule ends up using.
+    await _restore_before_global_mode(source=source)
 
     if DEMO_MODE:
         for demo_zone in DEMO_ZONES:
