@@ -457,7 +457,13 @@ class TestDeviceDiscovery:
         client.post("/api/devices/search")
         assert client.delete("/api/devices/search").json()["status"] == "stopped"
 
-    def test_pairing_adds_the_device_to_the_zone(self, client, fake):
+    def test_adding_by_serial_registers_it_without_the_radio(self, client, fake):
+        """
+        Manual registration is A01, "adds a Component to the hub's internal
+        database". No radio, no pairing mode -- which is what Nobø's manual
+        describes for a mains-powered receiver, and the only way an R80 RDC 700
+        can be added at all, because it does not support autosearch.
+        """
         response = client.post(
             "/api/devices",
             json={"serial": "186100000009", "zone_id": "2", "name": "New Panel"},
@@ -466,8 +472,29 @@ class TestDeviceDiscovery:
         wait_until(lambda: "186100000009" in fake.components)
         assert fake.component_name("186100000009") == "New Panel"
         assert fake.components["186100000009"][4] == "2"
+        assert fake.commands_of_type("A01"), "the database command should be used"
+        assert not fake.commands_of_type("X03"), \
+            "a wall heater must not be asked to enter pairing mode"
 
-    def test_a_refused_pairing_is_reported(self, client, fake):
+    def test_a_device_that_needs_pairing_still_gets_it(self, client, fake):
+        """
+        A battery unit -- a Nobø Switch, a TCU 700 -- really does need the radio.
+        The manual says those "need pairing with the Nobø HUB if the ID-code has
+        been added manually", so a hub that will not take the record outright
+        must still be given the chance to pair.
+        """
+        fake.fail_next = "A01"
+        response = client.post(
+            "/api/devices", json={"serial": "186100000009", "zone_id": "2"}
+        )
+        assert response.status_code == 200, response.text
+        assert fake.commands_of_type("X03"), "should have fallen back to pairing"
+        wait_until(lambda: "186100000009" in fake.components)
+        assert fake.components["186100000009"][4] == "2", \
+            "a paired device lands wherever the hub put it and must still be moved"
+
+    def test_a_device_the_hub_will_not_take_is_reported(self, client, fake):
+        fake.fail_next = "A01"
         fake.pair_should_succeed = False
         response = client.post(
             "/api/devices", json={"serial": "186100000009", "zone_id": "2"}
