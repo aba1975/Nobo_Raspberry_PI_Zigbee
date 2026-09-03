@@ -36,6 +36,13 @@ SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
+# Which exception zones are *currently* held on a zone-level Eco override.
+#
+# Separate from the configured list above, and deliberately so: the hub will not
+# release a zone override by itself, so the only way a room can be freed after a
+# restart mid-away is if we wrote down what we did to it.
+AWAY_EXCEPTIONS_APPLIED_FILE = DATA_DIR / "away_exceptions_applied.json"
+INTENDED_SETPOINTS_FILE = DATA_DIR / "intended_setpoints.json"
 SITE_FILE = DATA_DIR / "site.json"
 
 # Default server state values
@@ -323,6 +330,103 @@ def load_away_exceptions() -> list:
         logger.warning("away_exceptions.json is corrupt: %s — backing up and using none", exc)
         _backup_corrupt(AWAY_EXCEPTIONS_FILE)
         return []
+
+
+def save_away_exceptions_applied(zone_ids) -> None:
+    """Record which exception zones are currently held on a zone override."""
+    try:
+        _atomic_write(
+            AWAY_EXCEPTIONS_APPLIED_FILE,
+            {"zone_ids": sorted(str(z) for z in zone_ids)},
+        )
+    except Exception as exc:
+        logger.error("Failed to save applied away exceptions: %s", exc)
+
+
+def load_away_exceptions_applied() -> list:
+    """
+    Load the zone ids currently held on an away-exception override.
+
+    Returns an empty list when missing or corrupt. That is the safe reading:
+    the worst case is a room that stays on Eco until the next away cycle, rather
+    than an override being cancelled on a zone the user set deliberately.
+    """
+    try:
+        with AWAY_EXCEPTIONS_APPLIED_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return []
+        ids = data.get("zone_ids", [])
+        if not isinstance(ids, list):
+            return []
+        return [str(z) for z in ids]
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "away_exceptions_applied.json is corrupt: %s — backing up and using none", exc
+        )
+        _backup_corrupt(AWAY_EXCEPTIONS_APPLIED_FILE)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Intended setpoints
+# ---------------------------------------------------------------------------
+# The comfort and eco temperature this system means each zone to have. A Nobø
+# thermostat with a dial rewrites the hub's value outright and the hub keeps no
+# history, so this file is the only record that the room was ever meant to be
+# something else. See app/setpoint_guard.py.
+
+def save_intended_setpoints(intended: dict) -> None:
+    """Persist the intended comfort/eco temperatures, atomically."""
+    try:
+        clean = {
+            str(zone_id): {k: float(v) for k, v in fields.items() if v is not None}
+            for zone_id, fields in (intended or {}).items()
+        }
+        _atomic_write(INTENDED_SETPOINTS_FILE, {"zones": clean})
+    except Exception as exc:
+        logger.error("Failed to save intended setpoints: %s", exc)
+
+
+def load_intended_setpoints() -> dict:
+    """
+    Load the intended comfort/eco temperatures from ``data/intended_setpoints.json``.
+
+    Returns an empty dict when missing or corrupt. The guard then re-adopts
+    whatever the hub currently reports, which loses the warning but never
+    invents one.
+    """
+    try:
+        with INTENDED_SETPOINTS_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return {}
+        zones = data.get("zones", {})
+        if not isinstance(zones, dict):
+            return {}
+        out = {}
+        for zone_id, fields in zones.items():
+            if not isinstance(fields, dict):
+                continue
+            picked = {}
+            for k, v in fields.items():
+                try:
+                    picked[str(k)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+            if picked:
+                out[str(zone_id)] = picked
+        return out
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "intended_setpoints.json is corrupt: %s — backing up and using none", exc
+        )
+        _backup_corrupt(INTENDED_SETPOINTS_FILE)
+        return {}
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import math
 import threading
 import time
 from collections import deque
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +32,7 @@ import away_schedule
 import config_persistence
 import notifications
 import notify_watch
+import setpoint_guard as setpoint_guard_mod
 
 # Configure logging
 logging.basicConfig(
@@ -264,6 +265,14 @@ log_lock = threading.Lock()  # Lock for thread-safe command log access
 notifier = notifications.Notifier()
 zone_watcher = notify_watch.ZoneWatcher(notifier=notifier)
 
+# The temperatures this system means each zone to have. Unlike the notifier this
+# is always on: a dial turned on a heater rewrites the hub's setpoint outright,
+# and if nothing here remembers the old value then nothing anywhere does.
+setpoint_guard = setpoint_guard_mod.SetpointGuard(
+    save_fn=config_persistence.save_intended_setpoints,
+    intended=config_persistence.load_intended_setpoints(),
+)
+
 # Command log buffer — keeps the last 500 entries
 command_log: deque = deque(maxlen=500)
 
@@ -397,6 +406,26 @@ def decode_hub_name(name: Any) -> Any:
 def encode_hub_name(name: str) -> str:
     """Prepare a name for the hub. Only needed where pynobo does not do it."""
     return name.replace(" ", HUB_NAME_SPACE)
+
+
+def format_production_date(value: Any) -> Optional[str]:
+    """
+    The hub gives its production date as ``YYYYMMDD``; return it as ISO.
+
+    Left as a date rather than formatted for a locale, because the interface
+    already knows the household's regional format and this endpoint does not.
+    Anything that is not eight digits is passed through untouched: a value we
+    cannot parse is still worth showing.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d").date().isoformat()
+        except ValueError:
+            return text
+    return text
 
 
 def format_serial_display(serial: str) -> str:
@@ -1451,6 +1480,12 @@ def note_local_write(zone_id: Any, field_name: str, value: Any) -> None:
         zone_watcher.record_local_write(str(zone_id), field_name, value)
     except Exception as exc:
         logger.debug("Could not record a local write: %s", exc)
+    try:
+        # The same write, kept for a different purpose: the watcher forgets after
+        # two minutes, the guard has to remember until somebody changes it again.
+        setpoint_guard.remember(zone_id, field_name, value)
+    except Exception as exc:
+        logger.debug("Could not record an intended setpoint: %s", exc)
 
 
 async def notification_watch_loop():
@@ -1540,6 +1575,28 @@ def get_current_schedule_mode(zone_id: str) -> str:
 
 
 def get_zones_data() -> List[Dict[str, Any]]:
+    """
+    Current data for all zones, with any setpoint drift marked.
+
+    Drift is worked out here, on the way out, rather than stored: it is simply
+    the difference between what this system intends and what the hub reports, so
+    it cannot be left behind by a missed message or a restart.
+    """
+    zones = _build_zones_data()
+    try:
+        setpoint_guard.observe(zones)
+        for zone in zones:
+            moved = setpoint_guard.drift(zone)
+            zone["setpoint_changed_outside"] = moved or None
+    except Exception as exc:
+        # A fault in the guard must never cost the browsers their zone list.
+        logger.error("Setpoint guard failed while annotating zones: %s", exc)
+        for zone in zones:
+            zone.setdefault("setpoint_changed_outside", None)
+    return zones
+
+
+def _build_zones_data() -> List[Dict[str, Any]]:
     """Get current data for all zones"""
     with connection_lock:
         connected = hub_connected
@@ -2230,37 +2287,59 @@ async def favicon():
 
 @app.get("/api/hub")
 async def get_hub_info():
-    """Get hub information"""
+    """
+    What the hub says about itself.
+
+    Everything here comes from ``hub.hub_info``, which pynobo fills in from the
+    ``H05``/``V03`` handshake. There is no ``hub_version`` or ``hub_name``
+    attribute on the client — this endpoint used to read both through
+    ``getattr`` with a fallback, so it silently reported "Unknown" and "Nobø
+    Hub" against a perfectly healthy hub. Reading the dict is the only way to
+    get the real answers, and the interface shows the firmware version because
+    a known-bad one (115) is worth being able to see without the official app.
+    """
     with connection_lock:
         connected = hub_connected
         current_hub = hub
-    
+
     if not connected:
         raise HTTPException(status_code=503, detail="Hub not connected")
-    
+
     try:
         # Demo mode - return simulated hub info
         if DEMO_MODE:
             return {
                 "name": "Nobø Hub",
                 "serial": NOBO_SERIAL,
+                "serial_display": format_serial_display(NOBO_SERIAL),
                 "software_version": DEMO_SOFTWARE_VERSION,
+                "hardware_version": None,
+                "production_date": None,
+                "api_version": pynobo.nobo.API.VERSION,
+                "ip": None,
                 "connected": True,
                 "demo_mode": True
             }
-        
+
         # Real hub mode
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
-        
-        # Get hub info from pynobo
-        hub_info = {
-            "name": getattr(current_hub, 'hub_name', 'Nobø Hub'),
-            "serial": NOBO_SERIAL,
-            "software_version": getattr(current_hub, 'hub_version', 'Unknown'),
-            "connected": connected
+
+        info = getattr(current_hub, 'hub_info', None) or {}
+        serial = info.get('serial') or NOBO_SERIAL
+
+        return {
+            "name": decode_hub_name(info.get('name')) or "Nobø Hub",
+            "serial": serial,
+            "serial_display": format_serial_display(serial),
+            "software_version": info.get('software_version') or "Unknown",
+            "hardware_version": info.get('hardware_version'),
+            "production_date": format_production_date(info.get('production_date')),
+            "api_version": pynobo.nobo.API.VERSION,
+            "ip": NOBO_IP or None,
+            "connected": connected,
+            "demo_mode": False
         }
-        return hub_info
     except HTTPException:
         raise
     except Exception as e:
@@ -2569,6 +2648,10 @@ async def set_zone_override(zone_id: str, mode: str):
                 raise HTTPException(status_code=404, detail="Zone not found")
             
             demo_zone['mode'] = mode
+            if mode == 'normal':
+                DEMO_ZONE_OVERRIDES.discard(zone_id)
+            else:
+                DEMO_ZONE_OVERRIDES.add(zone_id)
             add_log_entry(
                 "sent",
                 f"[DEMO] Would send: create_override(now, 0, {mode.upper()}, zone_{zone_id})",
@@ -2627,13 +2710,31 @@ async def set_zone_override(zone_id: str, mode: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def round_to_whole_degree(value: float) -> int:
+def round_to_whole_degree(value: Any) -> int:
     """
     The Eco Hub stores set points as whole degrees. Truncating turned a
     requested 20.6°C into 20°C, so a room ran colder than the user asked for;
     round to the nearest degree instead.
+
+    Values reach this from two places with different types. The API supplies
+    floats, but the hub supplies *strings* — the Nobø protocol is text on the
+    wire and pynobo keeps zone values exactly as they arrived. Coercing here is
+    what stops that difference reaching the arithmetic.
+
+    That difference was a real fault: setting one set point on its own filled
+    the other in from the hub, so ``'15' + 0.5`` raised TypeError and every
+    temperature change from the web interface failed with a 500 against a real
+    hub. Demo mode stores floats, so it only ever broke on real hardware.
     """
-    return math.floor(value + 0.5)
+    try:
+        return math.floor(float(value) + 0.5)
+    except (TypeError, ValueError) as exc:
+        # A set point the hub gave us that is not a number is the hub's
+        # problem, not the caller's, so say so rather than returning a 500.
+        raise HTTPException(
+            status_code=502,
+            detail=f"The hub reported a temperature this app could not read: {value!r}",
+        ) from exc
 
 
 def resolve_temperature_update(
@@ -2798,6 +2899,126 @@ async def set_zone_temperature(zone_id: str, temps: TemperatureUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _restore_intended_setpoints(zone_ids=None, source: str = "api") -> List[Dict[str, Any]]:
+    """
+    Put back the temperatures this system intends, wherever the hub disagrees.
+
+    Used by the restore button on a room, and by every global mode change: when
+    the owner tells the whole house what to do, the settings applied should be
+    theirs and not whatever was last dialled in on a wall.
+
+    Only zones that have actually drifted are written, so this costs nothing on
+    a house nobody has touched.
+    """
+    zones = _build_zones_data()
+    by_id = {str(z.get("zone_id")): z for z in zones}
+    targets = setpoint_guard.restore_targets(zones)
+    if zone_ids is not None:
+        wanted = {str(z) for z in zone_ids}
+        targets = {z: t for z, t in targets.items() if z in wanted}
+    if not targets:
+        return []
+
+    with connection_lock:
+        current_hub = hub
+
+    restored: List[Dict[str, Any]] = []
+
+    for zone_id, fields in targets.items():
+        zone = by_id.get(zone_id)
+        if zone is None:
+            continue
+        # Read before writing: our own write marks the zone as settled, after
+        # which there is no drift left to report.
+        moved = {k: v["actual"] for k, v in setpoint_guard.drift(zone).items()}
+        # update_zone takes both temperatures, so whichever did not drift is
+        # written back at the value it already has.
+        comfort = fields.get("comfort", zone.get("comfort_temperature"))
+        eco = fields.get("eco", zone.get("eco_temperature"))
+        try:
+            comfort = round_to_whole_degree(comfort)
+            eco = round_to_whole_degree(eco)
+        except HTTPException:
+            logger.error("Cannot restore zone %s: unreadable temperatures", zone_id)
+            continue
+
+        note_local_write(zone_id, "comfort", comfort)
+        note_local_write(zone_id, "eco", eco)
+
+        try:
+            if DEMO_MODE:
+                demo_zone = next(
+                    (z for z in DEMO_ZONES if str(z.get('zone_id')) == zone_id), None
+                )
+                if demo_zone is None:
+                    continue
+                demo_zone['comfort_temp'] = float(comfort)
+                demo_zone['eco_temp'] = float(eco)
+                config_persistence.save_demo_zones(DEMO_ZONES)
+            else:
+                if not current_hub or zone_id not in current_hub.zones:
+                    continue
+                await hub_command(current_hub.async_update_zone(
+                    zone_id,
+                    name=current_hub.zones[zone_id]['name'],
+                    temp_comfort_c=comfort,
+                    temp_eco_c=eco,
+                ))
+            restored.append({
+                "zone_id": zone_id,
+                "name": zone.get("name"),
+                "comfort": comfort,
+                "eco": eco,
+                "was": moved,
+            })
+            add_log_entry(
+                "sent",
+                f"update_zone(zone_{zone_id}, comfort={comfort}, eco={eco}) "
+                f"— restoring the setting made here",
+                command=f"update_zone {zone_id} comfort={comfort} eco={eco}",
+                source=source,
+            )
+        except Exception as exc:
+            # One unreachable zone must not stop the rest being put right.
+            logger.error("Could not restore setpoints on zone %s: %s", zone_id, exc)
+
+    return restored
+
+
+@app.post("/api/zones/{zone_id}/restore-setpoints")
+async def restore_zone_setpoints(zone_id: str):
+    """Put one room back to the temperatures set here."""
+    with connection_lock:
+        connected = hub_connected
+    if not connected:
+        raise HTTPException(status_code=503, detail="Hub not connected")
+    restored = await _restore_intended_setpoints([zone_id])
+    if not restored:
+        raise HTTPException(
+            status_code=400,
+            detail="Nothing to restore: this room already matches the setting made here.",
+        )
+    await asyncio.sleep(0.5)
+    return {"status": "success", "restored": restored}
+
+
+@app.post("/api/zones/{zone_id}/accept-setpoints")
+async def accept_zone_setpoints(zone_id: str):
+    """Keep whatever the room is set to now, and stop warning about it."""
+    zones = _build_zones_data()
+    zone = next((z for z in zones if str(z.get("zone_id")) == str(zone_id)), None)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="Zone not found")
+    setpoint_guard.accept(zone_id)
+    setpoint_guard.observe([zone])
+    return {
+        "status": "success",
+        "zone_id": str(zone_id),
+        "comfort": zone.get("comfort_temperature"),
+        "eco": zone.get("eco_temperature"),
+    }
+
+
 @app.post("/api/global/override/{mode}")
 async def set_global_override(mode: str):
     """Set global override mode for all zones"""
@@ -2825,10 +3046,19 @@ async def set_global_override(mode: str):
     # One record covering every zone, since a global override moves them all.
     note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
 
+    # Before the house is told what to do, make sure the settings it will use
+    # are the ones set here rather than any that were changed on a wall.
+    restored_setpoints = await _restore_before_global_mode()
+
     try:
         # Demo mode - update all simulated zones
         if DEMO_MODE:
             for demo_zone in DEMO_ZONES:
+                # A zone override outranks the global one on the hub, so a zone
+                # that has its own override is left alone here â€” same as the
+                # hardware. Whoever set it is responsible for clearing it.
+                if str(demo_zone.get('zone_id')) in DEMO_ZONE_OVERRIDES:
+                    continue
                 # For home mode, set to 'normal' which means following schedule
                 demo_zone['mode'] = 'normal' if mode == 'home' else mode
             add_log_entry(
@@ -2845,9 +3075,10 @@ async def set_global_override(mode: str):
             global_mode_source = "manual"
             config_persistence.save_demo_zones(DEMO_ZONES)
             config_persistence.save_server_state({"global_mode_source": global_mode_source})
-            exceptions = await _apply_away_exceptions() if mode == 'away' else []
+            exceptions = await _sync_away_exceptions(mode)
             return {"status": "success", "mode": mode, "source": "manual",
-                    "away_exceptions_applied": exceptions}
+                    "away_exceptions_applied": exceptions,
+                    "setpoints_restored": restored_setpoints}
         
         # Real hub mode — use a single global override command instead of per-zone
         if not current_hub:
@@ -2883,9 +3114,10 @@ async def set_global_override(mode: str):
         
         global_mode_source = "manual"
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
-        exceptions = await _apply_away_exceptions() if mode == 'away' else []
+        exceptions = await _sync_away_exceptions(mode)
         return {"status": "success", "mode": mode, "source": "manual",
-                "away_exceptions_applied": exceptions}
+                "away_exceptions_applied": exceptions,
+                "setpoints_restored": restored_setpoints}
     except HTTPException:
         raise
     except Exception as e:
@@ -3059,6 +3291,112 @@ async def delete_away_schedule():
     return {"status": "cleared"}
 
 
+# Zone ids currently under a zone-level override in demo mode.
+#
+# The real hub ranks a zone override above the global one, and cancelling the
+# global override does not touch the zone. Demo mode used to blanket-assign
+# every zone on a global change, which is tidier than the hardware and hid a
+# real defect: an away-exception room that could never come home. Demo now
+# models the hub's actual ranking so that class of bug fails a test instead of
+# reaching a cabin.
+DEMO_ZONE_OVERRIDES: Set[str] = set()
+
+# Zones we put on a zone-level Eco override when the house went Away. The hub
+# will not release these by itself: cancelling the global override cancels only
+# the global one, so we have to remember what we did and undo it ourselves.
+# Held alongside the persisted exception list rather than instead of it, so a
+# zone removed from the list mid-away still gets released.
+_away_exception_zones_applied: Set[str] = set(
+    config_persistence.load_away_exceptions_applied()
+)
+
+
+def _record_away_exceptions_applied() -> None:
+    config_persistence.save_away_exceptions_applied(_away_exception_zones_applied)
+
+
+async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home") -> List[str]:
+    """
+    Release the zone-level Eco overrides that ``_apply_away_exceptions`` created.
+
+    A zone override outranks the global override on the hub, which is exactly why
+    the away exception works â€” and exactly why coming home does not undo it.
+    ``create_override(NORMAL, GLOBAL)`` cancels the *global* override only, so
+    without this the excluded room holds Eco for ever and no amount of pressing
+    Home will free it.
+
+    Only zones this app actually overrode are released. A zone that is merely
+    *configured* as an exception but was never touched is left alone, so a
+    global Comfort still reaches it.
+
+    Returns the zone ids that were released.
+    """
+    global _away_exception_zones_applied
+
+    zone_ids = set(_away_exception_zones_applied)
+    if not zone_ids:
+        return []
+
+    with connection_lock:
+        current_hub = hub
+
+    released: List[str] = []
+
+    if DEMO_MODE:
+        # Dropping the zone override does not mean "follow the schedule" -- it
+        # means the global override applies again, whatever that currently is.
+        # On the hub that falls out of the ranking for free; here it has to be
+        # spelled out, or a global Comfort would land the room on normal.
+        settled = 'normal' if fallback_mode in ('home', 'normal') else fallback_mode
+        for demo_zone in DEMO_ZONES:
+            if str(demo_zone.get('zone_id')) in zone_ids:
+                demo_zone['mode'] = settled
+                DEMO_ZONE_OVERRIDES.discard(str(demo_zone.get('zone_id')))
+                released.append(str(demo_zone.get('zone_id')))
+        if released:
+            config_persistence.save_demo_zones(DEMO_ZONES)
+            add_log_entry(
+                "sent",
+                f"[DEMO] Away exceptions released: {', '.join(released)}",
+                command=f"create_override normal NOW ZONE {','.join(released)}",
+                source=source,
+            )
+        _away_exception_zones_applied = set()
+        _record_away_exceptions_applied()
+        return released
+
+    if not current_hub:
+        return []
+
+    for zone_id in sorted(zone_ids):
+        if zone_id not in current_hub.zones:
+            # Deleted since. Nothing to release, but stop tracking it.
+            _away_exception_zones_applied.discard(zone_id)
+            continue
+        try:
+            await hub_command(current_hub.async_create_override(
+                pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
+                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
+                zone_id,
+            ))
+            released.append(zone_id)
+            add_log_entry(
+                "sent",
+                f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) â€” away exception released",
+                command=f"create_override normal NOW ZONE {zone_id}",
+                source=source,
+            )
+        except Exception as exc:
+            # Leave it in the applied set so the next global change retries it,
+            # rather than stranding the room on Eco.
+            logger.error("Could not release away exception on zone %s: %s", zone_id, exc)
+
+    _away_exception_zones_applied -= set(released)
+    _record_away_exceptions_applied()
+    return released
+
+
 async def _apply_away_exceptions(source: str = "api") -> List[str]:
     """
     Put every configured exception zone on Eco, right after the house went Away.
@@ -3087,6 +3425,7 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
         for demo_zone in DEMO_ZONES:
             if str(demo_zone.get('zone_id')) in zone_ids:
                 demo_zone['mode'] = 'eco'
+                DEMO_ZONE_OVERRIDES.add(str(demo_zone.get('zone_id')))
                 applied.append(str(demo_zone.get('zone_id')))
         if applied:
             config_persistence.save_demo_zones(DEMO_ZONES)
@@ -3096,6 +3435,8 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
                 command=f"create_override now 0 eco {','.join(applied)}",
                 source=source,
             )
+        _away_exception_zones_applied.update(applied)
+        _record_away_exceptions_applied()
         return applied
 
     if not current_hub:
@@ -3125,7 +3466,40 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
             # One unreachable zone must not leave the rest of the house un-Away.
             logger.error("Could not apply away exception to zone %s: %s", zone_id, exc)
 
+    _away_exception_zones_applied.update(applied)
+    _record_away_exceptions_applied()
     return applied
+
+
+async def _sync_away_exceptions(mode: str, source: str = "api") -> List[str]:
+    """
+    Keep the away exceptions in step with the global mode.
+
+    Going Away puts the excluded rooms on a zone-level Eco override; every other
+    global mode has to take it back off again, or that override outranks whatever
+    was just asked for and the room quietly ignores it.
+    """
+    if mode == 'away':
+        return await _apply_away_exceptions(source=source)
+    await _clear_away_exceptions(source=source, fallback_mode=mode)
+    return []
+
+
+async def _restore_before_global_mode(source: str = "api") -> List[Dict[str, Any]]:
+    """
+    Put any drifted setpoints back before the house is told what to do.
+
+    Choosing Comfort, Eco, Away or the schedule is the owner saying "use my
+    settings", and a temperature dialled in on a wall would otherwise silently
+    become the one that gets used -- the hub keeps no memory of what the room
+    was meant to be. Guarded, because a failure here must not stop the mode
+    change itself, which is the thing actually asked for.
+    """
+    try:
+        return await _restore_intended_setpoints(source=source)
+    except Exception as exc:
+        logger.error("Could not restore setpoints before a global mode change: %s", exc)
+        return []
 
 
 async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> None:
@@ -3146,8 +3520,15 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     # a planned away period would arrive as "somebody changed it".
     note_local_write("*", "mode", 'normal' if mode == 'home' else mode)
 
+    # The schedule is this system's own intention too, so a temperature changed
+    # on a wall should not be the one the schedule ends up using.
+    await _restore_before_global_mode(source=source)
+
     if DEMO_MODE:
         for demo_zone in DEMO_ZONES:
+            # As on the hub, a zone-level override survives a global change.
+            if str(demo_zone.get('zone_id')) in DEMO_ZONE_OVERRIDES:
+                continue
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
         add_log_entry(
             "sent",
@@ -3158,8 +3539,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         global_mode_source = source
         config_persistence.save_demo_zones(DEMO_ZONES)
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
-        if mode == 'away':
-            await _apply_away_exceptions(source=source)
+        await _sync_away_exceptions(mode, source=source)
         return
 
     if not current_hub:
@@ -3187,8 +3567,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     global_mode_source = source
     config_persistence.save_server_state({"global_mode_source": global_mode_source})
     await asyncio.sleep(0.5)
-    if mode == 'away':
-        await _apply_away_exceptions(source=source)
+    await _sync_away_exceptions(mode, source=source)
 
 
 async def away_schedule_loop():

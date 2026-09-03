@@ -128,10 +128,14 @@
    * ---------------------------------------------------------------- */
 
   async function loadAll() {
-    const [zones, status, hub, caps, devices, site] = await Promise.all([
+    const [zones, status, hub, hubInfo, caps, devices, site] = await Promise.all([
       Nobo.api.zones().catch(() => []),
       Nobo.api.status().catch(() => null),
       Nobo.api.hubConfig().catch(() => null),
+      /* Configuration and identity are two different endpoints: hubConfig is
+         what we were told to connect to, this is what the hub says it is. It
+         answers 503 while the hub is unreachable, hence the catch. */
+      Nobo.api.hub().catch(() => null),
       Nobo.api.capabilities().catch(() => null),
       Nobo.api.devices().catch(() => []),
       Nobo.api.site().catch(() => null),
@@ -139,6 +143,7 @@
     state.zones = zones || [];
     state.status = status;
     state.hub = hub;
+    state.hubInfo = hubInfo;
     state.caps = caps;
     state.devices = devices || [];
     if (site) state.site = site;
@@ -532,6 +537,81 @@
     return null;
   }
 
+  function fmtSetpointTemp(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '\u2014';
+    return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '\u00B0C';
+  }
+
+  function setpointDriftEntries(zone) {
+    const changed = zone.setpoint_changed_outside || {};
+    return ['comfort', 'eco']
+      .filter(key => changed[key])
+      .map(key => ({
+        key,
+        label: key === 'comfort' ? 'Comfort' : 'Eco',
+        intended: changed[key].intended,
+        actual: changed[key].actual,
+      }));
+  }
+
+  function setpointDriftText(zone) {
+    return setpointDriftEntries(zone).map(entry =>
+      `${entry.label} is ${fmtSetpointTemp(entry.actual)} here, but ${fmtSetpointTemp(entry.intended)} was set in this app.`
+    ).join(' ');
+  }
+
+  function setpointDriftAction(zone, field) {
+    const values = setpointDriftEntries(zone).map(entry => fmtSetpointTemp(entry[field]));
+    if (!values.length) return field === 'intended' ? 'Restore' : 'Keep';
+    return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
+  }
+
+  function renderSetpointDriftBadge(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    return `<span class="badge badge-drift" title="${esc(setpointDriftText(zone))} Open the room to restore or keep it.">Changed outside app</span>`;
+  }
+
+  function renderSetpointDrift(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    return `
+      <div class="note note-warn">
+        <strong>Changed outside this app</strong>
+        <div>${esc(setpointDriftText(zone))} That change was made on a heater or in the Nobø app — the hub does not record which.</div>
+        <div class="sheet-actions" style="margin-top:.7rem">
+          <button class="btn btn-primary" type="button" data-setpoint-action="restore" data-zone="${esc(zone.zone_id)}">${esc(setpointDriftAction(zone, 'intended'))}</button>
+          <button class="btn" type="button" data-setpoint-action="accept" data-zone="${esc(zone.zone_id)}">${esc(setpointDriftAction(zone, 'actual'))}</button>
+        </div>
+      </div>`;
+  }
+
+  async function postSetpointDecision(zoneId, action) {
+    const path = `/api/zones/${encodeURIComponent(zoneId)}/${action === 'restore' ? 'restore-setpoints' : 'accept-setpoints'}`;
+    const res = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (_) { /* response had no JSON body */ }
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  async function handleSetpointDecision(zoneId, action) {
+    hold();
+    try {
+      await postSetpointDecision(zoneId, action);
+      Nobo.toast(action === 'restore' ? 'Setpoints restored' : 'Setpoints kept');
+      await refresh(true);
+    } catch (e) { Nobo.toast(e.message, 'error'); }
+  }
+
   function devicesOfZone(zoneId) {
     return state.devices.filter(d => String(d.zone_id) === String(zoneId));
   }
@@ -588,7 +668,7 @@
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
-        <div class="zone-meta">${modeBadge}${manualBadge}</div>
+        <div class="zone-meta">${modeBadge}${manualBadge}${renderSetpointDriftBadge(zone)}</div>
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -627,6 +707,9 @@
     });
     list.querySelectorAll('[data-step]').forEach(b => {
       b.onclick = () => stepZone(b.dataset.zone, b.dataset.step === 'up' ? 0.5 : -0.5);
+    });
+    list.querySelectorAll('[data-setpoint-action]').forEach(b => {
+      b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
   }
 
@@ -671,17 +754,41 @@
   function renderSystem() {
     const s = Nobo.houseSummary(state.zones);
     const st = state.status || {};
+    const hub = state.hub || {};
+    const info = state.hubInfo || {};
     const rows = [
       ['Rooms', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
       ['Coldest room', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
       ['Rooms overridden', String(s.overriddenCount)],
-      ['Hub', state.hub && state.hub.demo_mode ? 'Demo mode' : (state.hub && state.hub.serial_display) || 'Unknown'],
+      ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
+    /* Everything the hub will tell us about itself. Only shown when it is
+       actually there: the firmware version in particular is worth being able to
+       read without the official app, because 115 has a fault that stops the hub
+       reaching the update service and the only outward sign is a blinking LED. */
+    for (const [label, value] of [
+      ['Hub name', info.name],
+      ['Firmware', info.software_version],
+      ['Hardware', info.hardware_version],
+      ['Made', fmtHubDate(info.production_date)],
+      ['Protocol', info.api_version],
+      ['Hub address', hub.ip],
+    ]) {
+      if (value) rows.push([label, String(value)]);
+    }
     $('#sysGrid').innerHTML = rows
       .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  }
+
+  /* The server sends an ISO date; the household's own format is a browser
+     setting, so the conversion belongs here rather than in the API. */
+  function fmtHubDate(iso) {
+    if (!iso) return '';
+    const d = new Date(`${iso}T00:00:00`);
+    return isNaN(d) ? iso : d.toLocaleDateString();
   }
 
   /* ------------------------------------------------------------------
@@ -755,6 +862,7 @@
         ${adjustable ? '' : `<div class="note note-warn">${!remote
           ? 'No heater in this room can be adjusted from here. You can still switch the room between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
           : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per room. To hold this room warmer while you are away, put it on Eco, or list it under Settings as a room that must not get cold.`}</div>`}
+        ${renderSetpointDrift(zone)}
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
@@ -801,6 +909,9 @@
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
+    });
+    root.querySelectorAll('[data-setpoint-action]').forEach(b => {
+      b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
     root.querySelectorAll('[data-remove-device]').forEach(b => {
       b.onclick = () => removeDevice(b.dataset.removeDevice);

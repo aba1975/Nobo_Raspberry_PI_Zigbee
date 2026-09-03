@@ -59,6 +59,62 @@ function deviceImageTag(serial, altText, cssClass) {
     return `<img src="/static/images/${slug}.png" alt="${escapeHtml(alt)}"${cls} onerror="this.onerror=null;this.src='/static/images/${slugLower}.svg';this.onerror=function(){this.src='/static/images/placeholder.svg';};">`;
 }
 
+function formatSetpointTemperature(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + '°C';
+}
+
+function htmlJsString(value) {
+    return escapeHtml(JSON.stringify(String(value)));
+}
+
+function setpointChangeEntries(zone) {
+    const changed = zone.setpoint_changed_outside || {};
+    return ['comfort', 'eco']
+        .filter(key => changed[key])
+        .map(key => ({
+            key,
+            label: key === 'comfort' ? 'Comfort' : 'Eco',
+            intended: changed[key].intended,
+            actual: changed[key].actual
+        }));
+}
+
+function setpointChangeSummary(zone) {
+    return setpointChangeEntries(zone).map(entry =>
+        `${entry.label} is ${formatSetpointTemperature(entry.actual)} here, but ${formatSetpointTemperature(entry.intended)} was set in this app.`
+    ).join(' ');
+}
+
+function setpointChangeActionLabel(zone, field) {
+    const values = setpointChangeEntries(zone).map(entry => formatSetpointTemperature(entry[field]));
+    if (values.length === 0) return field === 'intended' ? 'Restore' : 'Keep';
+    return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
+}
+
+function renderSetpointChangeBadge(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    const title = `${setpointChangeSummary(zone)} Open the room to restore or keep it.`;
+    return `<div class="zone-list-drift" title="${escapeHtml(title)}">Changed outside app</div>`;
+}
+
+function renderSetpointChangeNotice(zone) {
+    if (!zone.setpoint_changed_outside) return '';
+    const summary = setpointChangeSummary(zone);
+    const idArg = htmlJsString(zone.zone_id);
+    return `
+        <div class="setpoint-notice">
+            <strong>Changed outside this app</strong>
+            <p>${escapeHtml(summary)} That change was made on a heater or in the Nobø app — the hub does not record which.</p>
+            <div class="setpoint-notice-actions">
+                <button class="btn btn-primary" onclick="restoreZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'intended'))}</button>
+                <button class="btn btn-secondary" onclick="acceptZoneSetpoints(${idArg})">${escapeHtml(setpointChangeActionLabel(zone, 'actual'))}</button>
+            </div>
+        </div>
+    `;
+}
+
 /**
  * Attach auto-formatting listeners to the away-schedule date/time inputs.
  */
@@ -554,6 +610,44 @@ async function setZoneTemperature(zoneId, comfort, eco) {
     }
 }
 
+async function restoreZoneSetpoints(zoneId) {
+    try {
+        const response = await fetch(`/api/zones/${encodeURIComponent(zoneId)}/restore-setpoints`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to restore setpoints');
+        }
+
+        await fetchZones();
+        showToast('Setpoints restored', 'success');
+    } catch (error) {
+        console.error('Error restoring setpoints:', error);
+        showToast(error.message, 'error');
+    }
+}
+
+async function acceptZoneSetpoints(zoneId) {
+    try {
+        const response = await fetch(`/api/zones/${encodeURIComponent(zoneId)}/accept-setpoints`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to keep setpoints');
+        }
+
+        await fetchZones();
+        showToast('Setpoints kept', 'success');
+    } catch (error) {
+        console.error('Error keeping setpoints:', error);
+        showToast(error.message, 'error');
+    }
+}
+
 // ===== UI Update Functions =====
 // Tracks the browser <-> server WebSocket only. Whether the *hub* is reachable is
 // a separate question, answered by hubInfo, and the two must not be conflated:
@@ -712,8 +806,9 @@ function createZoneListItem(zone) {
     
     // Subtitle for grouped zones
     const subtitle = zone.rooms && zone.rooms.length > 1 
-        ? `<div class="zone-list-subtitle">${zone.rooms.join(' · ')}</div>` 
+        ? `<div class="zone-list-subtitle">${zone.rooms.map(escapeHtml).join(' · ')}</div>` 
         : '';
+    const zoneIdArg = htmlJsString(zone.zone_id);
     
     const supportsTemp = zone.supports_temp_adjust || false;
     let setTemp = '—';
@@ -745,18 +840,18 @@ function createZoneListItem(zone) {
     
     return `
         <div class="zone-list-item ripple-container" 
-             onclick="navigateToZoneDetail('${zone.zone_id}')"
+             onclick="navigateToZoneDetail(${zoneIdArg})"
              role="button"
              tabindex="0"
-             aria-label="${zone.name}, ${setTempAriaLabel}, ${modeLabel}"
-             onkeydown="if(event.key==='Enter'||event.key===' ')navigateToZoneDetail('${zone.zone_id}')">
+             aria-label="${escapeHtml(zone.name)}, ${setTempAriaLabel}, ${modeLabel}${zone.setpoint_changed_outside ? ', changed outside this app' : ''}"
+             onkeydown="if(event.key==='Enter'||event.key===' ')navigateToZoneDetail(${zoneIdArg})">
             <div class="zone-list-item-top">
                 <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
                     <div class="zone-list-dot${hasOverride ? ' active-override' : ''}" 
                          style="background-color: ${dotColor};" 
                          aria-hidden="true"></div>
                     <div class="zone-list-info">
-                        <div class="zone-list-name">${icon} ${zone.name}</div>
+                        <div class="zone-list-name">${escapeHtml(icon)} ${escapeHtml(zone.name)}</div>
                         ${subtitle}
                     </div>
                 </div>
@@ -765,6 +860,7 @@ function createZoneListItem(zone) {
             <div class="zone-list-bottom">
                 <div class="zone-list-temp">${setTemp}</div>
                 <div class="zone-list-mode${modeCssClass ? ' ' + modeCssClass : ''}">${modeLabel}</div>
+                ${renderSetpointChangeBadge(zone)}
             </div>
         </div>
     `;
@@ -979,6 +1075,7 @@ function renderZoneDetail(zoneId) {
             </div>
             
             ${noSensorNotice}
+            ${renderSetpointChangeNotice(zone)}
             ${tempSection}
             ${overrideSection}
             ${scheduleSection}

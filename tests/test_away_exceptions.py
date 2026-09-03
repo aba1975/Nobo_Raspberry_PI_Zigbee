@@ -189,3 +189,69 @@ def test_clearing_the_list_does_not_disturb_a_running_away(client):
     client.put("/api/global-mode/away-exceptions", json={"zone_ids": []})
     assert config_persistence.load_away_exceptions() == []
     assert zone_mode("1") == "eco", "it stays where it was until the next transition"
+
+
+# ---------------------------------------------------------------------------
+# Coming home again
+# ---------------------------------------------------------------------------
+# Found on real hardware during commissioning, and invisible until then. The
+# away exception works by putting the room on a *zone* override, which outranks
+# the global one -- that is the whole mechanism. Coming home sends
+# create_override(NORMAL, GLOBAL), which cancels the global override and nothing
+# else, so the zone override survived and the room held Eco for ever.
+#
+# Demo mode hid it: it used to blanket-assign every zone on a global change,
+# which is tidier than the hub actually is. Demo now models the hub's ranking,
+# so these tests fail if the release is removed.
+
+
+class TestComingHomeReleasesTheRoom:
+    def test_home_actually_frees_the_excluded_room(self, client):
+        client.put("/api/global-mode/away-exceptions", json={"zone_ids": ["1"]})
+        client.post("/api/global/override/away")
+        assert zone_mode("1") == "eco"
+
+        client.post("/api/global/override/home")
+        assert zone_mode("1") == "normal", "the room must go back to its schedule"
+
+    def test_comfort_reaches_the_excluded_room_too(self, client):
+        """Away is the only mode the exception applies to."""
+        client.put("/api/global-mode/away-exceptions", json={"zone_ids": ["1"]})
+        client.post("/api/global/override/away")
+        client.post("/api/global/override/comfort")
+        assert zone_mode("1") == "comfort"
+
+    def test_a_zone_override_outranks_a_global_one(self, client):
+        """
+        The hub's ranking, now modelled in demo. Proven on real hardware:
+        zone Eco held while the other six rooms went Away.
+        """
+        client.post("/api/zones/1/override/comfort")
+        client.post("/api/global/override/away")
+        assert zone_mode("1") == "comfort", "zone override wins"
+        assert zone_mode("2") == "away"
+
+    def test_a_room_we_never_touched_is_left_alone(self, client):
+        """
+        Only zones this app actually overrode are released. A zone merely listed
+        as an exception, with no away ever taken, must not be reset.
+        """
+        client.put("/api/global-mode/away-exceptions", json={"zone_ids": ["1"]})
+        client.post("/api/global/override/comfort")
+        assert zone_mode("1") == "comfort"
+
+    def test_the_release_survives_a_restart(self, client):
+        """
+        A power blip halfway through a fortnight away must not strand the room
+        on Eco, so what we overrode is written down, not just remembered.
+        """
+        client.put("/api/global-mode/away-exceptions", json={"zone_ids": ["1"]})
+        client.post("/api/global/override/away")
+        assert config_persistence.load_away_exceptions_applied() == ["1"]
+
+        server._away_exception_zones_applied = set(
+            config_persistence.load_away_exceptions_applied()
+        )
+        client.post("/api/global/override/home")
+        assert zone_mode("1") == "normal"
+        assert config_persistence.load_away_exceptions_applied() == []

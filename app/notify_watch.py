@@ -16,7 +16,16 @@ came from somewhere else — the official Nobø app, another browser, or the hub
 itself expiring an override. We can say *that* it was not us; we can never say
 which of the others it was, and the wording is careful not to pretend otherwise.
 
-**A setpoint changed**, by the same reasoning.
+**A setpoint changed**, by the same reasoning. Worth knowing where that can come
+from: a thermostat with a dial does not create an override when somebody turns
+it, it rewrites the zone's comfort or eco temperature on the hub outright. That
+was proved on real hardware — turning a Gang NTB-2R moved ``comfort`` from 17.0
+to 21.0 with ``active_override_id`` still ``-1``. So "somebody changed it" here
+covers a person standing at the heater as well as a person using an app, and the
+two are indistinguishable from this end.
+
+Restoring such a change is a separate job, in ``setpoint_guard.py``: this module
+only reports, and the hub keeps no memory of what a room was meant to be.
 
 What is deliberately not here
 -----------------------------
@@ -205,8 +214,10 @@ class ZoneWatcher:
             f"{name}: {which} temperature changed to {after:.0f}°C",
             f"The {which} temperature for {name} changed from {before:.0f}°C to {after:.0f}°C,\n"
             "and it was not changed from here.\n\n"
-            "Somebody used the Nobø app or another browser. The hub does not record\n"
-            "which app made a change, so this is as much as can honestly be said.",
+            "A thermostat with a dial does this too: turning it rewrites the zone's\n"
+            "temperature on the hub outright, rather than creating an override. So this\n"
+            "may be somebody standing at the heater, or somebody using the Nobø app.\n"
+            "The hub does not record which, so this is as much as can honestly be said.",
             severity="info",
             key=f"changed_{which}:{zone_id}",
         )

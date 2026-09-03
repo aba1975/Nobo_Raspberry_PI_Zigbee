@@ -370,6 +370,13 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    in words, not by a colour alone. */
 .badge-manual { background: transparent; color: var(--ink-soft); border-color: var(--rule); border-style: dashed; }
 
+/* A set point that no longer matches what was asked for here. Amber because it
+   wants noticing on a scan of the room list, but it is not a fault - the room
+   is heating perfectly well, just not to the number this app last set. The
+   explanation and the two ways out live in the room itself, where there is
+   space for them. */
+.badge-drift { background: var(--amber-wash); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+
 /* --------------------------------------------------------- system box */
 
 .sysbox {

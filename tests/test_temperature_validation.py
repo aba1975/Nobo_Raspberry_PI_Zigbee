@@ -74,6 +74,66 @@ class TestRounding:
         assert zone['comfort_temp'] == 23.0, "22.6°C was truncated to 22°C again"
 
 
+class TestTheHubGivesUsStrings:
+    """
+    Found during commissioning against a real hub, 3 September 2026.
+
+    The Nobø protocol is text on the wire, so pynobo keeps every zone value
+    exactly as it arrived — ``temp_comfort_c`` is the string ``'17'``, not the
+    number 17. Setting one set point on its own fills the other in from the
+    hub, so the old ``value + 0.5`` evaluated ``'15' + 0.5`` and raised
+    TypeError. Every temperature change from the web interface answered 500,
+    and the raw Python message was shown to the user as a toast.
+
+    It survived because demo mode stores floats and every test above passes
+    ints, so nothing in the suite ever modelled what the hub actually sends.
+    These tests do.
+    """
+
+    @pytest.mark.parametrize("value,expected", [("17", 17), ("7", 7), ("30", 30)])
+    def test_a_whole_degree_string_from_the_hub_is_accepted(self, value, expected):
+        assert round_to_whole_degree(value) == expected
+
+    def test_a_decimal_string_is_accepted_too(self):
+        assert round_to_whole_degree("20.6") == 21
+
+    def test_ints_and_floats_still_work(self):
+        assert round_to_whole_degree(17) == 17
+        assert round_to_whole_degree(20.6) == 21
+
+    def test_setting_only_comfort_when_the_hub_holds_strings(self):
+        """The exact call that returned 500 on the production hub."""
+        assert resolve_temperature_update(temps(comfort=20), "17", "15") == (20, 15)
+
+    def test_setting_only_eco_when_the_hub_holds_strings(self):
+        assert resolve_temperature_update(temps(eco=16), "22", "16") == (22, 16)
+
+    def test_supplying_both_still_works(self):
+        """This path always worked, which is what masked the fault."""
+        assert resolve_temperature_update(temps(comfort=20, eco=15), "17", "15") == (20, 15)
+
+    def test_the_comfort_eco_ordering_is_still_enforced_with_strings(self):
+        """The string path must not skip validation on its way through."""
+        with pytest.raises(HTTPException) as exc:
+            resolve_temperature_update(temps(eco=25), "20", "15")
+        assert exc.value.status_code == 400
+
+    def test_a_nonsense_value_from_the_hub_is_not_a_500(self):
+        """
+        If the hub ever sends something unreadable that is the hub's problem,
+        and the user should be told that rather than shown a Python traceback.
+        """
+        with pytest.raises(HTTPException) as exc:
+            round_to_whole_degree("N/A")
+        assert exc.value.status_code == 502
+        assert "N/A" in exc.value.detail
+
+    def test_none_is_not_a_500_either(self):
+        with pytest.raises(HTTPException) as exc:
+            round_to_whole_degree(None)
+        assert exc.value.status_code == 502
+
+
 class TestEcoBelowComfort:
     """D-08"""
 
