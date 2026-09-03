@@ -3711,6 +3711,10 @@ async def get_week_profiles():
                         "profile_id": "1",
                         "name": "Default",
                         "profile": DEFAULT_DEMO_SCHEDULE,
+                        # Already in day-block form here, unlike the hub's flat
+                        # list of "HHMMS" stamps, so it needs no decoding.
+                        "schedule": DEFAULT_DEMO_SCHEDULE,
+                        "unreadable": None,
                         "used_by": [
                             {"zone_id": str(z.get("zone_id")),
                              "name": z.get("name", "")}
@@ -3740,10 +3744,20 @@ async def get_week_profiles():
                 if str(z.get('week_profile_id')) == str(profile_id)
             ]
             can_delete, why_not = _week_profile_deletable(str(profile_id), used_by)
+            # The decoded week, so the interface can show what a schedule
+            # actually does. Without it the list is a set of names and choosing
+            # one from it is guesswork -- which is exactly how it first shipped.
+            try:
+                week = week_profile_to_schedule(list(profile.get('profile') or []))
+                unreadable = None
+            except ValueError as exc:
+                week, unreadable = None, str(exc)
             profiles.append({
                 'profile_id': str(profile_id),
                 'name': decode_hub_name(profile.get('name')) or f'Profile {profile_id}',
                 'profile': decoded,
+                'schedule': week,
+                'unreadable': unreadable,
                 'used_by': used_by,
                 'can_delete': can_delete,
                 'why_not': why_not,
@@ -3758,7 +3772,9 @@ async def get_week_profiles():
 
 
 class WeekProfileRename(BaseModel):
-    name: str
+    """Change a schedule: its name, its week, or both."""
+    name: Optional[str] = None
+    schedule: Optional[Dict[str, List["ScheduleBlock"]]] = None
 
 
 class ZoneWeekProfileAssign(BaseModel):
@@ -3768,12 +3784,21 @@ class ZoneWeekProfileAssign(BaseModel):
 @app.patch("/api/week_profiles/{profile_id}")
 async def rename_week_profile(profile_id: str, body: WeekProfileRename):
     """
-    Rename a schedule, leaving its times alone.
+    Change a schedule itself: its name, its week, or both.
 
-    Worth having because this application names the profiles it creates, and
-    those names age badly: a zone renamed from "Soverom 1. Etasje" to
-    "Downstairs Bedrooms" left its schedule called "Soverom 1. Etasje schedule",
-    which is then what the official app shows.
+    Editing here is deliberate in a way that editing through a zone is not. A
+    zone's week screen is where somebody adjusts *their room*, so a shared
+    profile is copied rather than changed underneath the other rooms. This
+    endpoint is reached by picking a named schedule out of a list of schedules,
+    so the thing being edited is the schedule, and every zone following it
+    changes. The interface names those zones before saving.
+
+    That distinction is the whole reason both paths exist.
+
+    Renaming matters on its own because this application names the profiles it
+    creates, and those names age badly: a zone renamed from "Soverom 1. Etasje"
+    to "Downstairs Bedrooms" left its schedule called "Soverom 1. Etasje
+    schedule", which is then what the official app shows.
     """
     require_capability("edit_schedule")
     with connection_lock:
@@ -3782,14 +3807,27 @@ async def rename_week_profile(profile_id: str, body: WeekProfileRename):
     if not connected:
         raise HTTPException(status_code=503, detail="Hub not connected")
 
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Schedule name cannot be empty")
-    if len(encode_hub_name(name).encode('utf-8')) > ZONE_NAME_MAX_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Schedule name is too long for the hub (maximum {ZONE_NAME_MAX_BYTES} bytes)",
-        )
+    if body.name is None and body.schedule is None:
+        raise HTTPException(status_code=400, detail="Nothing to change")
+
+    name = None
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Schedule name cannot be empty")
+        if len(encode_hub_name(name).encode('utf-8')) > ZONE_NAME_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Schedule name is too long for the hub (maximum {ZONE_NAME_MAX_BYTES} bytes)",
+            )
+
+    entries = None
+    if body.schedule is not None:
+        try:
+            ScheduleUpdate(schedule=body.schedule).validate_schedule()
+            entries = schedule_to_week_profile(body.schedule)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     if DEMO_MODE:
         return {"status": "success", "profile_id": profile_id, "name": name}
@@ -3799,14 +3837,22 @@ async def rename_week_profile(profile_id: str, body: WeekProfileRename):
     if profile_id not in current_hub.week_profiles:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    # The entries go back untouched: update_week_profile carries the whole
-    # object, so sending only a name would blank the week.
-    entries = list(current_hub.week_profiles[profile_id].get('profile') or [])
+    stored = current_hub.week_profiles[profile_id]
+    # update_week_profile carries the whole object, so whichever half was not
+    # supplied goes back exactly as it stands. Sending only a name would blank
+    # the week, and only a week would blank the name.
+    if name is None:
+        name = decode_hub_name(stored.get('name', '')) or f'Profile {profile_id}'
+    if entries is None:
+        entries = list(stored.get('profile') or [])
+
     await hub_command(current_hub.async_update_week_profile(
         profile_id, encode_hub_name(name), entries))
     await wait_for_hub_state(
         lambda: decode_hub_name(
             current_hub.week_profiles.get(profile_id, {}).get('name', '')) == name
+        and list(current_hub.week_profiles.get(profile_id, {}).get('profile') or [])
+        == list(entries)
     )
     add_log_entry("sent", f"Schedule {profile_id} renamed to '{name}'",
                   command=f"U02 {profile_id} {name}", source="api")

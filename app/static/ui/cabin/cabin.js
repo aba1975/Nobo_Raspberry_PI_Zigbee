@@ -950,7 +950,7 @@
     const weekBtn = root.querySelector('[data-act="edit-week"]');
     if (weekBtn) {
       weekBtn.disabled = !state.schedule;
-      weekBtn.onclick = () => editWeek(zone);
+      weekBtn.onclick = () => editZoneWeek(zone);
     }
     const changeScheduleBtn = root.querySelector('[data-act="change-schedule"]');
     if (changeScheduleBtn) changeScheduleBtn.onclick = () => changeZoneSchedule(zone);
@@ -1016,7 +1016,7 @@
 
   function profileUsage(profile) {
     const used = (profile && profile.used_by) || [];
-    return used.length ? 'Used by ' + listSentence(used.map(z => z.name || z.zone_id)) : 'Not used';
+    return used.length ? 'Used by ' + listSentence(used.map(z => typeof z === 'string' ? z : (z.name || z.zone_id))) : 'Not used';
   }
 
   async function changeZoneSchedule(zone) {
@@ -1039,9 +1039,10 @@
           const name = profile.name || (profile.profile && profile.profile.name) || 'Unnamed schedule';
           return `<button class="schedule-choice" type="button" data-profile="${esc(id)}" ${current ? 'disabled' : ''}>
             <span class="schedule-choice-icon" aria-hidden="true">${Nobo.icon('normal')}</span>
-            <span>
+            <span class="schedule-copy">
               <strong>${esc(name)}${current ? ' · Current' : ''}</strong>
               <small>${esc(profileUsage(profile))}</small>
+              ${renderSchedule(profile.schedule, null, { compact: true, showKey: false, unreadable: profile.unreadable, loadingText: 'Schedule details unavailable.' })}
             </span>
           </button>`;
         }).join('') || '<p class="zd-sub">No schedules are available.</p>'}
@@ -1069,11 +1070,12 @@
     });
   }
 
-  function renderSchedule() {
-    if (!state.schedule) return `<p class="zd-sub">Loading the weekly schedule…</p>`;
+  function renderSchedule(schedule = state.schedule, meta = state.scheduleMeta, opts = {}) {
+    if (opts.unreadable) return `<p class="zd-sub schedule-unreadable">${esc(opts.unreadable)}</p>`;
+    if (!schedule) return `<p class="zd-sub">${esc(opts.loadingText || 'Loading the weekly schedule…')}</p>`;
     const days = scheduleDays();
     const rows = days.map(([key, label]) => {
-      const blocks = state.schedule[key] || [];
+      const blocks = schedule[key] || [];
       const segs = blocks.map(b => {
         const from = Nobo.minutesOf(b.start);
         const to = Nobo.minutesOf(b.end);
@@ -1084,20 +1086,20 @@
       return `<div class="sched-day"><span>${esc(label)}</span><div class="sched-bar">${segs}</div></div>`;
     }).join('');
 
-    const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
-    const sharedNote = shared.length
+    const shared = (meta && meta.shared_with_zones) || [];
+    const sharedNote = !opts.compact && shared.length
       ? `<div class="note note-warn">This schedule is shared with ${esc(listSentence(shared))}.
          When you save, choose whether to change just this zone or every zone using it.</div>`
       : '';
 
-    return `<div class="sched">${rows}</div>
-      <div class="sched-key">
+    return `<div class="sched${opts.compact ? ' sched-compact' : ''}">${rows}</div>
+      ${opts.showKey === false ? '' : `<div class="sched-key">
         <span><i style="background:var(--m-comfort)"></i>Comfort</span>
         <span><i style="background:var(--m-eco)"></i>Eco</span>
         <span><i style="background:var(--m-away)"></i>Away · ${AWAY_TEMP_LABEL()}</span>
         <span><i style="background:var(--off)"></i>Off</span>
       </div>
-      <p class="zd-sub sched-away-note">${AWAY_EXPLAINER()}</p>
+      <p class="zd-sub sched-away-note">${AWAY_EXPLAINER()}</p>`}
       ${sharedNote}`;
   }
 
@@ -1146,20 +1148,36 @@
     return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
   };
 
-  function editWeek(zone) {
+  function editZoneWeek(zone) {
     if (!state.schedule) { Nobo.toast('The weekly schedule has not loaded yet', 'error'); return; }
+    const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
+    editWeek({
+      title: `${zone.name} · weekly schedule`,
+      schedule: state.schedule,
+      beforeHtml: `
+        ${shared.length ? `<div class="note note-warn">This schedule is shared with
+          ${esc(listSentence(shared))}. You will choose who to change when you save.</div>` : ''}
+        <p class="zd-sub">Each row says what the zone does from that time until the next
+        change. The day always starts at 00:00, so there can never be a gap.</p>`,
+      onSave: async (payload, root) => {
+        if (shared.length) {
+          chooseScheduleSaveScope(zone, payload, shared);
+          return;
+        }
+        const btn = root.querySelector('[data-act="save"]');
+        btn.disabled = true;
+        await saveWeekSchedule(zone, payload, undefined, () => { btn.disabled = false; });
+      },
+    });
+  }
 
+  function editWeek(editor) {
     const draft = {};
-    SCHED_DAY_KEYS.forEach((key) => { draft[key] = pointsOfDay(state.schedule[key]); });
+    SCHED_DAY_KEYS.forEach((key) => { draft[key] = pointsOfDay(editor.schedule[key]); });
     let day = SCHED_DAY_KEYS[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
 
-    const shared = (state.scheduleMeta && state.scheduleMeta.shared_with_zones) || [];
-
-    openSheet(`${zone.name} · weekly schedule`, `
-      ${shared.length ? `<div class="note note-warn">This schedule is shared with
-        ${esc(listSentence(shared))}. You will choose who to change when you save.</div>` : ''}
-      <p class="zd-sub">Each row says what the zone does from that time until the next
-      change. The day always starts at 00:00, so there can never be a gap.</p>
+    openSheet(editor.title, `
+      ${editor.beforeHtml || ''}
 
       <div class="day-tabs" role="tablist" aria-label="Day of the week">
         ${schedDays().map(([k, l]) => `<button class="day-tab" type="button" role="tab"
@@ -1300,13 +1318,7 @@
           if (!times.includes('00:00')) { Nobo.toast(label + ' has to start at 00:00', 'error'); return; }
           payload[key] = blocksOfPoints(pts);
         }
-        if (shared.length) {
-          chooseScheduleSaveScope(zone, payload, shared);
-          return;
-        }
-        const btn = root.querySelector('[data-act="save"]');
-        btn.disabled = true;
-        await saveWeekSchedule(zone, payload, undefined, () => { btn.disabled = false; });
+        await editor.onSave(payload, root);
       };
 
       paint();
@@ -1356,6 +1368,61 @@
       Nobo.toast('Weekly schedule saved');
       await loadSchedule(zone.zone_id);
       await refresh(true);
+    } catch (e) {
+      if (onError) onError();
+      Nobo.toast(e.message, 'error');
+    }
+  }
+
+  function editWeekProfile(profileId) {
+    const profile = (state.weekProfiles || []).find(p => String(p.profile_id) === String(profileId));
+    if (!profile) { Nobo.toast('That schedule is no longer here', 'error'); return; }
+    const name = profile.name || (profile.profile && profile.profile.name) || 'Unnamed schedule';
+
+    if (profile.unreadable || !profile.schedule) {
+      openSheet(`${name} · schedule`, `
+        <div class="note note-warn">${esc(profile.unreadable || 'The hub did not return a readable schedule.')}</div>
+        <div class="sheet-actions">
+          <button class="btn" data-act="dismiss" type="button">Close</button>
+        </div>`, (root) => {
+        root.querySelector('[data-act="dismiss"]').onclick = closeSheet;
+      });
+      return;
+    }
+
+    const used = ((profile && profile.used_by) || [])
+      .map(z => typeof z === 'string' ? z : (z.name || z.zone_id))
+      .filter(Boolean);
+    const affected = used.length
+      ? `Changes ${listSentence(used)}.`
+      : 'This schedule is not used by any zone.';
+
+    editWeek({
+      title: `${name} · schedule`,
+      schedule: profile.schedule,
+      beforeHtml: `
+        <p class="zd-sub">${esc(affected)}</p>
+        <p class="zd-sub">Each row says what zones using this schedule do from that
+        time until the next change. The day always starts at 00:00, so there can
+        never be a gap.</p>`,
+      onSave: async (payload, root) => {
+        const btn = root.querySelector('[data-act="save"]');
+        btn.disabled = true;
+        await saveWeekProfileSchedule(profileId, payload, () => { btn.disabled = false; });
+      },
+    });
+  }
+
+  async function saveWeekProfileSchedule(profileId, payload, onError) {
+    const openProfileId = String((state.scheduleMeta && state.scheduleMeta.week_profile_id) || '');
+    const openZoneId = state.zoneId;
+    hold(6000);
+    try {
+      await Nobo.api.updateWeekProfile(profileId, { schedule: payload });
+      closeSheet();
+      Nobo.toast('Schedule saved');
+      await refresh(true);
+      if (openZoneId && openProfileId === String(profileId)) await loadSchedule(openZoneId);
     } catch (e) {
       if (onError) onError();
       Nobo.toast(e.message, 'error');
@@ -2067,8 +2134,8 @@
 
       <section class="card">
         <h2>Schedules</h2>
-        <p class="zd-sub">Schedules can be shared by several zones. Rename them here,
-        or delete the ones nothing uses.</p>
+        <p class="zd-sub">Schedules can be shared by several zones. Open one here to
+        see and edit the week it contains.</p>
         ${renderScheduleSettings()}
       </section>
 
@@ -2143,6 +2210,9 @@
     root.querySelectorAll('[data-rename-profile]').forEach(b => {
       b.onclick = () => renameWeekProfile(b.dataset.renameProfile);
     });
+    root.querySelectorAll('[data-edit-profile]').forEach(b => {
+      b.onclick = () => editWeekProfile(b.dataset.editProfile);
+    });
     root.querySelectorAll('[data-delete-profile]').forEach(b => {
       b.onclick = () => deleteWeekProfile(b.dataset.deleteProfile);
     });
@@ -2176,12 +2246,14 @@
         return `<li class="schedule-row">
           <div class="schedule-main">
             <span class="schedule-icon" aria-hidden="true">${Nobo.icon('normal')}</span>
-            <span>
+            <span class="schedule-copy">
               <strong>${esc(name)}</strong>
               <small>${esc(profileUsage(profile))}</small>
+              ${renderSchedule(profile.schedule, null, { compact: true, showKey: false, unreadable: profile.unreadable, loadingText: 'Schedule details unavailable.' })}
             </span>
           </div>
           <div class="schedule-row-actions">
+            <button class="btn schedule-edit" type="button" data-edit-profile="${esc(id)}">Edit</button>
             <button class="icon-btn act-rename" type="button" data-rename-profile="${esc(id)}"
               title="Rename schedule" aria-label="Rename ${esc(name)}">${Nobo.icon('rename')}</button>
             <button class="icon-btn act-remove" type="button" data-delete-profile="${esc(id)}"
@@ -2213,7 +2285,7 @@
         if (!name) { Nobo.toast('Give the schedule a name', 'error'); return; }
         okBtn.disabled = true;
         try {
-          await Nobo.api.renameWeekProfile(profileId, name);
+          await Nobo.api.updateWeekProfile(profileId, { name });
           closeSheet();
           Nobo.toast('Schedule renamed');
           await refresh(true);
