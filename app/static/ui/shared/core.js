@@ -105,9 +105,14 @@ const Nobo = (() => {
                                      method: 'PUT', body: JSON.stringify(body) }),
     removeZone:   (zoneId)       => req(`/api/zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
 
-    weekProfiles: () => req('/api/week_profiles').then(r => r.week_profiles || r),
-    setSchedule:  (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
-                                     method: 'POST', body: JSON.stringify(body) }),
+    weekProfiles:      ()              => req('/api/week_profiles').then(r => r.week_profiles || r),
+    renameWeekProfile: (profileId, name) => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, {
+                                           method: 'PATCH', body: JSON.stringify({ name }) }),
+    deleteWeekProfile: (profileId)     => req(`/api/week_profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' }),
+    assignWeekProfile: (zoneId, profileId) => req(`/api/zones/${encodeURIComponent(zoneId)}/week-profile`, {
+                                           method: 'POST', body: JSON.stringify({ profile_id: profileId }) }),
+    setSchedule:       (zoneId, body)  => req(`/api/zones/${encodeURIComponent(zoneId)}/schedule`, {
+                                           method: 'POST', body: JSON.stringify(body) }),
 
     // The command log is one buffer holding three kinds of entry, told apart
     // by `source`: 'api' (a change made through the app), 'schedule' (the away

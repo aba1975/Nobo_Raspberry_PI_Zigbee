@@ -577,6 +577,9 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sched-seg.m-normal  { background: var(--m-sched); }
 .sched-key { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: .7rem; font-size: .76rem; color: var(--ink-soft); }
 .sched-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: .3rem; vertical-align: -1px; }
+.schedule-follow { display: flex; align-items: center; gap: .45rem; }
+.schedule-follow .icon { width: 18px; height: 18px; color: var(--m-sched); flex: none; }
+.schedule-actions { margin: .8rem 0 1rem; }
 
 /* ------------------------------------------------- editing the week */
 
@@ -613,6 +616,19 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .week-tools { display: flex; gap: .55rem; margin-top: .9rem; flex-wrap: wrap; }
 .week-tools .btn { flex: 0 0 auto; }
 .week-tools select { flex: 1 1 12rem; }
+.schedule-choices { display: grid; gap: .55rem; margin-top: .9rem; }
+.schedule-choice {
+  display: grid; grid-template-columns: auto 1fr; gap: .7rem; align-items: center;
+  width: 100%; text-align: left; padding: .75rem .8rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--card); color: var(--ink); font: inherit; cursor: pointer;
+}
+.schedule-choice:hover:not([disabled]) { border-color: var(--pine); background: var(--pine-wash); }
+.schedule-choice[disabled] { opacity: .65; cursor: not-allowed; }
+.schedule-choice-icon { color: var(--m-sched); }
+.schedule-choice-icon .icon { width: 22px; height: 22px; }
+.schedule-choice strong { display: block; }
+.schedule-choice small { display: block; margin-top: .15rem; color: var(--ink-soft); }
 
 /* ------------------------------------------------------------ settings */
 
@@ -642,6 +658,19 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .user-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 .user-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
   padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); }
+.schedule-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .55rem; }
+.schedule-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+}
+.schedule-main { display: flex; align-items: center; gap: .7rem; min-width: 0; }
+.schedule-main strong, .schedule-main small { display: block; }
+.schedule-main small { margin-top: .12rem; color: var(--ink-faint); font-size: .78rem; }
+.schedule-icon { color: var(--m-sched); flex: none; }
+.schedule-icon .icon { width: 22px; height: 22px; }
+.schedule-row-actions { display: flex; gap: .4rem; flex: none; }
+.icon-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.icon-btn[disabled]:hover { background: var(--card); border-color: var(--rule); }
 
 /* --------------------------------------------------------------- sheet */
 
