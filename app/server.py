@@ -4262,46 +4262,86 @@ async def add_device(device: DeviceAdd):
                        f"is already registered{where}",
             )
 
-        # A device has to be paired with the hub over radio before it can be
-        # configured. Pairing only succeeds while the device is in pairing mode,
-        # so a failure here is usually the device, not the app.
-        await hub_command(current_hub.async_send_command(["X03", serial]))
-        paired = await wait_for_hub_state(
-            lambda: tap.take_pair_result(serial), timeout=PAIRING_TIMEOUT
+        # Manual registration is A01 — "Adds a Component to the hub's internal
+        # database" (API_Nobo.pdf). It needs no radio and no pairing mode, which
+        # is exactly what Nobø's own manual describes for a mains-powered
+        # receiver: read the 12-digit code off the unit, type it in, name it,
+        # choose a zone. Nothing happens at the heater.
+        #
+        # X03 is a different operation — "tells the hub to try to pair with a
+        # component with the given serial number" — and the specification scopes
+        # it to the Nobø Switch SW4, TCU 700 and Nobø Sense: battery units that
+        # only really support autosearch and, per the manual, "need pairing with
+        # the Nobø HUB if the ID-code has been added manually".
+        #
+        # This used to send X03 for everything, which could never work for the
+        # commonest case. An R80 RDC 700 is documented as requiring manual
+        # registration and *cannot* be found by autosearch at all, so the hub had
+        # nothing to answer with and the user was told to put a wall heater into
+        # a pairing mode it does not have. Found on real hardware while adding a
+        # heater back after removing it.
+        new_row = [""] * 7
+        new_row[COMPONENT_SERIAL] = serial
+        new_row[COMPONENT_STATUS] = COMPONENT_STATUS_VALUE
+        new_row[COMPONENT_NAME] = (
+            validate_component_name(device.name.strip()) if device.name else ""
         )
-        if paired is None:
-            raise HTTPException(
-                status_code=504,
-                detail="The hub did not answer the pairing request. Put the device "
-                       "into pairing mode and try again.",
-            )
-        if paired is False:
-            raise HTTPException(
-                status_code=502,
-                detail="The hub could not pair with this device. Check the serial "
-                       "number and that the device is in pairing mode and in range.",
-            )
+        new_row[COMPONENT_REVERSE] = "0"
+        new_row[COMPONENT_ZONE_ID] = device.zone_id
+        new_row[COMPONENT_OVERRIDE_ID] = COMPONENT_OVERRIDE_NONE
+        new_row[COMPONENT_TEMP_SENSOR_ZONE] = UNASSIGNED_ZONE_ID
 
+        await hub_command(current_hub.async_send_command(["A01"] + new_row))
         row = await wait_for_hub_state(lambda: tap.component_row(serial))
+
+        if row is None:
+            # A battery unit genuinely does need the radio, so fall back rather
+            # than give up: A01 alone will not bring in an SW4 or a TCU 700.
+            await hub_command(current_hub.async_send_command(["X03", serial]))
+            paired = await wait_for_hub_state(
+                lambda: tap.take_pair_result(serial), timeout=PAIRING_TIMEOUT
+            )
+            if paired is None:
+                raise HTTPException(
+                    status_code=504,
+                    detail="The hub did not accept this serial number, and did not "
+                           "answer a pairing request either. Check the 12-digit code "
+                           "on the device. A battery-powered unit — a Nobø Switch or "
+                           "a TCU 700 — also has to be in pairing mode.",
+                )
+            if paired is False:
+                raise HTTPException(
+                    status_code=502,
+                    detail="The hub could not pair with this device. Check the serial "
+                           "number and that the device is in pairing mode and in range.",
+                )
+            row = await wait_for_hub_state(lambda: tap.component_row(serial))
+
         if row is None:
             raise HTTPException(
                 status_code=502,
-                detail="The device paired but the hub has not reported it yet. "
+                detail="The device was accepted but the hub has not reported it yet. "
                        "Reload the page in a moment.",
             )
 
-        row[COMPONENT_ZONE_ID] = device.zone_id
-        if device.name:
-            row[COMPONENT_NAME] = validate_component_name(device.name.strip())
-        await send_component_update(current_hub, row)
-        await wait_for_component(
-            serial, lambda r: r is not None and r[COMPONENT_ZONE_ID] == device.zone_id
-        )
+        if row[COMPONENT_ZONE_ID] != device.zone_id or (
+            device.name and row[COMPONENT_NAME] != new_row[COMPONENT_NAME]
+        ):
+            # A01 carries the zone and name, but a device that arrived by pairing
+            # instead lands wherever the hub put it.
+            row = list(row)
+            row[COMPONENT_ZONE_ID] = device.zone_id
+            if device.name:
+                row[COMPONENT_NAME] = new_row[COMPONENT_NAME]
+            await send_component_update(current_hub, row)
+            await wait_for_component(
+                serial, lambda r: r is not None and r[COMPONENT_ZONE_ID] == device.zone_id
+            )
 
         add_log_entry(
             "sent",
-            f"Device {format_serial_display(serial)} paired and added to zone {device.zone_id}",
-            command=f"X03 {serial}; U01 {serial} zone_id={device.zone_id}",
+            f"Device {format_serial_display(serial)} registered in zone {device.zone_id}",
+            command=f"A01 {serial} ... zone_id={device.zone_id}",
             source="api",
         )
         await broadcast_zone_update()
