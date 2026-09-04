@@ -100,11 +100,28 @@ class TestDatesFollowTheChosenLocale:
         assert "aug" in out.lower(), out
         assert "30" in out
 
-    def test_norwegian_gives_norwegian_day_names(self):
-        out = run_core("Nobo.setLocale('nb-NO'); return Nobo.dayNames('short');")
-        names = dict(out)
-        assert names["monday"].lower().startswith("man"), names
-        assert names["saturday"].lower().startswith("lør"), names
+    def test_day_names_stay_english_whatever_the_region(self):
+        """
+        The day labels follow the interface's language, not the date format's.
+
+        That setting decides how a date is *written* -- "30. aug. 2026" against
+        "30 Aug 2026" -- and a Norwegian household wants Norwegian dates. It
+        does not decide what language the application is in. The two only
+        collide on the weekly schedule, where a weekday appears as a label
+        rather than as part of a date, and "man. tir. ons." next to Comfort and
+        Save schedule was the result.
+        """
+        for locale in ["nb-NO", "sv-SE", "de-DE", "en-GB"]:
+            out = run_core(f"Nobo.setLocale({json.dumps(locale)}); return Nobo.dayNames('short');")
+            names = dict(out)
+            assert names["monday"] == "Mon", f"{locale}: {names['monday']}"
+            assert names["saturday"] == "Sat", f"{locale}: {names['saturday']}"
+
+    def test_dates_still_follow_the_region(self):
+        """The other half of the same decision: this must not have changed."""
+        out = run_core("Nobo.setLocale('nb-NO'); return Nobo.fmtWhen('2026-08-30T18:00:00');")
+        assert "aug" in out.lower(), out
+        assert "søn" in out.lower(), f"the weekday inside a date is still Norwegian: {out}"
 
     def test_english_still_gives_english(self):
         out = run_core("Nobo.setLocale('en-GB'); return Nobo.dayNames('short');")
@@ -119,9 +136,10 @@ class TestDatesFollowTheChosenLocale:
             out = run_core(f"Nobo.setLocale({json.dumps(locale)}); return Nobo.dayNames('long');")
             names = dict(out)
             # Compare against a date known to be that weekday: 31 Dec 2023 was
-            # a Sunday, so 1 Jan 2024 was a Monday.
-            monday = run_core(f"""
-                return new Intl.DateTimeFormat({json.dumps(locale)}, {{ weekday: 'long' }})
+            # a Sunday, so 1 Jan 2024 was a Monday. English, because that is
+            # now what dayNames answers whatever the region.
+            monday = run_core("""
+                return new Intl.DateTimeFormat('en-GB', { weekday: 'long' })
                   .format(new Date(2024, 0, 1));
             """)
             assert names["monday"] == monday, f"{locale}: {names['monday']} != {monday}"
