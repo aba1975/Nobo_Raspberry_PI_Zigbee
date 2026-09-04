@@ -403,3 +403,40 @@ changed behind its back. Neither happened: every zone came back with
 written to `/tmp`, which Ubuntu clears on boot, so the before-and-after diff had
 to be done by eye against the printed output. Snapshots for a reboot test belong
 somewhere that survives one — `~/nobo-baselines` on the Pi.
+
+---
+
+## Re-verifying that a heater can be removed and added back
+
+4 September 2026, on the current build, because this is the test that decides
+whether the application is sufficient on its own once the official Nobø app is
+retired. If a user cannot get a receiver in and out from here, nothing else it
+does matters very much.
+
+The same heater as during commissioning: `160 001 145 133`, an R80 RDC 700 named
+"Bunk Room by Bathroom" in zone 3, Downstairs Bedrooms.
+
+| Step | Sent | Result |
+|---|---|---|
+| Remove it | `R01 160001145133` | 200; 11 devices → 10; gone from zone 3 |
+| Add it back by serial, into zone 3, with its old name | `A01 160001145133 … zone_id=3` | 200 on the **first attempt** |
+| Compare | — | Device record byte-identical to before: same name, model, zone |
+| Whole system | — | Zones, devices, away settings, set points and hub identity all identical |
+| Zone still works | `A03` Comfort, then Normal | Held Comfort, then released back to its schedule |
+
+**`A01` alone was enough.** No `X03` pairing request, no fallback, no 504, and
+nothing done at the heater — no pressing, no pairing mode, nobody standing in the
+room. This is the behaviour the fix in "Register a device with A01, not a pairing
+request" was aiming for, confirmed again on a later build.
+
+That matters for every house of wall receivers, which is most of them. Nobø's
+manual is explicit that the R80 RDC 700 and RXC 700 *"Require manual
+registration"*, and the NTB-2R is likewise missing from the list of models that
+answer an automatic search. For all three, typing the twelve digits is not a
+workaround — it is the documented method, and the official app has to do the same
+thing.
+
+**Automatic search remains the one untested path** (5.5, 5.6). It is for battery
+units that announce themselves over the radio — the Switch SW4, the TCU 700, Nobø
+Sense — and no device in this house has a pairing mode to enter. Anyone who owns
+one should try it while the official app is still available to fall back on.
