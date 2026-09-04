@@ -83,7 +83,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Changed outside this app** | A Nobø thermostat with a dial rewrites the hub's set point when somebody turns it, and the hub keeps no record of the old value. The app remembers what it set, flags a zone whose temperature no longer matches, and offers to restore it or accept the new value. A global mode change restores the intended set points first. See [When somebody turns a dial](#when-somebody-turns-a-dial). |
 | **Follow Home and Away** | Per zone, and stored on the hub itself, so the Nobø app shows the same setting. On, the whole-house buttons apply to the zone. Off, the zone is independent and keeps whatever it is on. A zone that will not follow the house is marked on the front page, because a room quietly holding Eco while the house says Home is how pipes freeze. See [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
 | **Zones** | Add, rename, re-icon and delete zones. |
-| **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
+| **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 | **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
 
@@ -125,18 +125,22 @@ interface says so rather than pretending the change worked.
 | Edit weekly schedules | ✅ | ✅ |
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
-| **Discover and pair a new device** | ❌ | ⚠️ hub only, model dependent |
+| **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
 
 **Everything on that list has now been run against a real hub**, on a house of
 7 zones and 11 heaters. The exceptions are the two marked above.
 
-**Discovery only finds devices that support it.** Autosearch hears devices in
-pairing mode, and not every model has one — Nobø's manual states that the
-R80 RDC 700 and R80 RXC 700 "must be registered manually". For those, typing the
-12-digit code from the label is the documented method and needs nothing done at
-the heater. Demo mode has no radio at all, so discovery is the one thing it
-cannot offer.
+**Discovery only finds devices that support it, and has never been tested.**
+Autosearch hears devices in pairing mode, and not every model has one — Nobø's
+manual states that the R80 RDC 700 and R80 RXC 700 "must be registered manually".
+For those, typing the 12-digit code from the label is the documented method,
+needs nothing done at the heater, and **has been verified on a real hub**:
+removing a heater here and adding it back by serial put it in the right zone
+under the right name. Autosearch is the one feature written from the protocol
+document that no hardware has ever confirmed, because no heater in the house it
+was built for has a pairing mode. Demo mode has no radio at all, so discovery is
+the one thing it cannot offer.
 
 **Room temperature is the exception worth knowing about.** Of the 25 device
 models this software knows, only the **SW4** control panel has a thermometer.
@@ -1270,13 +1274,61 @@ or switch the Pi to demo mode from **Settings → Hub Connection**, which drops
 the hub connection while leaving the web interface running. Demo mode is
 reversible and never touches your real heating.
 
-### What the app can do that this cannot
+### Can this replace the app entirely?
 
-Adding and removing *receivers* (the units in the heaters) is done with the
-official app, following Nobø's own [user manual](#reference-documents). This web
-interface can register a device by serial number and organise zones, but the app
-remains the tool for the initial pairing of the system. Keeping both connected
-means you never have to disconnect one to use the other.
+For running the heating, yes — and for adding and removing heaters, very
+probably. Worth being precise, because "the app can do it and this cannot" was
+written before any of it had been tried on real hardware, and it was wrong.
+
+**Adding and removing receivers works from here.** Both have been done on a live
+hub: a heater was removed from the system through this interface and added back
+by typing its 12-digit serial, landing in the right zone with the right name,
+confirmed afterwards in the official app. You can also rename a device and move
+it between zones.
+
+For panel heaters this is not a lesser method — it is *the* method. Nobø's own
+[manual](#reference-documents) says of the receivers built into wall heaters:
+
+> **R80 RDC 700 og R80 RXC 700: Require manual registration.**
+
+They have no pairing mode to enter, so the official app registers them by serial
+number too. There is nothing the app can do for these that this cannot. The same
+is true of the NTB-2R: it is absent from the manual's list of models that answer
+an automatic search, so it is a serial-number device as well.
+
+**The one gap is automatic search.** Battery-powered units — the Nobø Switch
+SW4, the TCU 700 room thermostat, Nobø Sense — announce themselves over the
+radio when put into pairing mode, and the manual says they *"need pairing with
+the Nobø HUB if the ID-code has been added manually"*. This interface implements
+that search (**Add a heater → Automatic search**), but it has **never been run
+against real hardware**, because no device in the house it was built for has a
+pairing mode. It is written from the protocol specification, and on this project
+that has been a reliable predictor of something being wrong.
+
+So:
+
+| | Verified on a real hub |
+| --- | --- |
+| Add a heater by serial number | ✅ yes |
+| Remove a heater | ✅ yes |
+| Rename, move between zones | ✅ yes |
+| Automatic search for a battery device in pairing mode | ⚠️ implemented, never tested |
+
+If you own an SW4, a TCU 700 or a Nobø Sense, test the search **while you still
+have the app to fall back on**, and please report what happens.
+
+**If every device you own is a wall receiver — R80 RDC 700, R80 RXC 700, NTB-2R
+and the like — this gap does not affect you.** All of them are registered by
+serial number, which is the tested path. The house this was commissioned in is
+entirely of that kind: eight R80 RDC 700 and three NTB-2R, all of which the app
+itself could only ever have added by typing the number.
+
+Two things this genuinely does not do, and does not try to: set up a hub for the
+first time (it expects a hub that already exists on your network), and update the
+hub's firmware — Nobø publish a separate tool for that.
+
+Keeping both connected costs nothing, so there is no reason to stop using the
+app while it exists.
 
 ## HTTPS on Your Own Network
 
