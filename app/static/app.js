@@ -917,17 +917,17 @@ function renderZoneDetail(zoneId) {
             <div class="temp-control">
                 <span class="temp-label">Comfort temp:</span>
                 <div class="temp-adjuster">
-                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'comfort', -0.5)">−</button>
+                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'comfort', -1)">−</button>
                     <span class="temp-value">${zone.comfort_temperature != null ? zone.comfort_temperature.toFixed(1) : '--'}°C</span>
-                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'comfort', 0.5)">+</button>
+                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'comfort', 1)">+</button>
                 </div>
             </div>
             <div class="temp-control">
                 <span class="temp-label">Eco temp:</span>
                 <div class="temp-adjuster">
-                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'eco', -0.5)">−</button>
+                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'eco', -1)">−</button>
                     <span class="temp-value">${zone.eco_temperature != null ? zone.eco_temperature.toFixed(1) : '--'}°C</span>
-                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'eco', 0.5)">+</button>
+                    <button class="temp-btn" onclick="adjustTemperature('${zone.zone_id}', 'eco', 1)">+</button>
                 </div>
             </div>
             <div class="temp-control temp-locked">
@@ -1117,7 +1117,11 @@ function adjustTemperature(zoneId, tempType, delta) {
     }
     
     let currentTemp = tempType === 'comfort' ? zone.comfort_temperature : zone.eco_temperature;
-    let newTemp = currentTemp + delta;
+    // Whole degrees: the hub stores set points that way, so half steps were
+    // never reachable — plus moved a full degree and minus moved nothing,
+    // because 18 - 0.5 rounds straight back to 18. Rounding the current value
+    // too keeps a half degree set from the official app from making another.
+    let newTemp = Math.round(currentTemp) + delta;
     
     newTemp = Math.max(7, Math.min(30, newTemp));
     
