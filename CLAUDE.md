@@ -169,7 +169,7 @@ code paths are covered separately, against `tests/fake_hub.py`:
 
 **Any change to a protocol assumption belongs in `fake_hub.py` first.**
 
-The code has now been run against real hardware (hub `102 000 147 017`), and it
+The code has now been run against real hardware (a real hub), and it
 worked: seven zones, eleven devices and seven week profiles read correctly, and
 a mode change made in the official app arrived unprompted a few seconds later.
 That exercise also found a connection leak the fake hub could not have caught —

@@ -2,7 +2,53 @@
 
 A containerized deployment of [nobo-web-control](https://github.com/aba1975/nobo-web-control) for Raspberry Pi 4B running Ubuntu Server. Provides local web-based control of your Nobo Energy Hub heating system.
 
-This is a port of the original Windows-based project. The application code is identical; only the deployment method has changed (Docker + systemd instead of Windows Service/Task Scheduler).
+It began as a port of a Windows project and has since grown well past it. It has
+been commissioned against real hardware — a live Nobø Eco Hub running 7 zones and
+11 heaters — and the behaviour described here is what that hub actually does, not
+what the protocol documentation implies. Where the two disagree, this README says
+so.
+
+## Try it first, without a hub
+
+You do not need a Nobø hub to see what this is. With no configuration at all the
+application starts in **demo mode**, against a simulated house of 8 zones and 11
+heaters:
+
+```bash
+git clone https://github.com/aba1975/Nobo_Raspberry_PI.git
+cd Nobo_Raspberry_PI
+docker compose up -d          # no .env needed — the default serial means demo
+```
+
+The first run builds the image, which takes a couple of minutes on a Pi and less
+on a laptop. Then open `http://localhost:8000` and log in with `admin` /
+`nobohub`.
+
+Everything works: zones, both interfaces, schedules, away periods, the lot.
+Nothing reaches a real heater. The demo house is deliberately mixed — some
+heaters can be adjusted remotely and some only by a dial on the wall — so the
+awkward cases are visible rather than hidden.
+
+Two things to know:
+
+- **Run this on Linux** (a Pi, a laptop, a VM). Both containers use
+  `network_mode: host`, which Docker Desktop on macOS and Windows does not
+  implement the same way, so `localhost:8000` will not answer there.
+- **Demo mode is on because the serial defaults to `111111111111`.** Give it a
+  real serial later and it connects to a real hub. There is no separate "demo
+  build".
+
+`docker compose down -v` removes it again, volumes and all.
+
+When you are ready for the real thing, start at [Prerequisites](#prerequisites).
+
+## Contents
+
+- [What This Project Does](#what-this-project-does) · [Features](#features)
+- **Installing:** [Prerequisites](#prerequisites) · [1 Prepare the Pi](#step-1-prepare-the-raspberry-pi) · [2 SSH](#step-2-enable-and-use-ssh) · [3 Docker](#step-3-install-docker-and-docker-compose) · [4 Clone](#step-4-clone-the-repository) · [5 Configure](#step-5-configure-environment-variables) · [6 Start](#step-6-start-the-system) · [7 Start on reboot](#step-7-make-it-start-on-reboot) · [8 Verify](#step-8-verify-it-is-working)
+- **Living with it:** [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
+- **Running it:** [HTTPS](#https-on-your-own-network) · [Updating](#updating-the-software) · [Backups](#backing-up-configuration-and-data) · [Ports](#ports) · [Timezone](#timezone) · [Security notes](#security-notes)
+- **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure)
 
 ## What This Project Does
 
@@ -2145,6 +2191,11 @@ overrides the mounted files, which is exactly the bug this avoids.
   reachable from a web request does not get root on the Pi. The container does
   share the Pi's network (`network_mode: host`), which is required to reach the
   hub, so it is not isolated from your LAN.
+- **Your hub's serial number is a credential, not a model number.** The Nobø
+  protocol authenticates with it, so anyone who has it *and* can reach your
+  network can drive your heating. Keep it out of screenshots, issue reports and
+  public forks — `.env` is gitignored for this reason. The examples in this
+  README use `123456789012`, which is not a real hub.
 - The data volume holds your user accounts. Treat a backup of it like a
   password file.
 

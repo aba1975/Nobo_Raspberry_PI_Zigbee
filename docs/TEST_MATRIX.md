@@ -390,7 +390,7 @@ without being asked politely first.
 | Away schedule and exceptions | identical |
 | `intended_setpoints.json` | survived, and produced **no** false "changed outside app" flags |
 | Follow-global flags | intact — they live on the hub, so the cut could not touch them |
-| HTTPS from outside | `https://nobo.mostugu.no/api/health` → 200 |
+| HTTPS from outside | the public hostname answered 200 |
 | A write after the reboot | reached the hub and came back confirmed |
 
 The set point guard deserves a specific mention. It persists what this app

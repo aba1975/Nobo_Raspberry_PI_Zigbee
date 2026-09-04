@@ -8,10 +8,11 @@ pynobo's client has neither attribute — so the fallbacks were the only answer 
 could ever give, and the mistake was invisible because it looked like a hub that
 had not told us anything.
 
-The real values live in ``hub.hub_info``, filled in from the handshake. From the
-hardware:
+The real values live in ``hub.hub_info``, filled in from the handshake. Shape
+taken from the hardware, with the identifying values replaced — this repository
+is public, and a hub's serial is what the protocol authenticates with:
 
-    {'serial': '102000147017', 'name': 'My\xa0Eco\xa0Hub',
+    {'serial': '123456789012', 'name': 'My\xa0Eco\xa0Hub',
      'software_version': '116', 'hardware_version': '11123610_rev._1',
      'production_date': '20211013', ...}
 
@@ -35,9 +36,9 @@ from server import app
 
 TEST_SESSION_ID = "pytest-fixed-session-id"
 
-# Exactly what the hub in the cabin returns.
+# The shape a real hub returns, with the identifying values replaced.
 REAL_HUB_INFO = {
-    "serial": "102000147017",
+    "serial": "123456789012",
     "name": "My\xa0Eco\xa0Hub",
     "default_away_override_length": "46080",
     "override_id": "88",
@@ -66,8 +67,8 @@ def real_hub(monkeypatch):
     monkeypatch.setattr(server, "DEMO_MODE", False)
     monkeypatch.setattr(server, "hub", fake)
     monkeypatch.setattr(server, "hub_connected", True)
-    monkeypatch.setattr(server, "NOBO_IP", "10.42.0.227")
-    monkeypatch.setattr(server, "NOBO_SERIAL", "102000147017")
+    monkeypatch.setattr(server, "NOBO_IP", "192.0.2.20")
+    monkeypatch.setattr(server, "NOBO_SERIAL", "123456789012")
     return fake
 
 
@@ -89,8 +90,8 @@ class TestTheHubIdentifiesItself:
 
     def test_the_serial_is_grouped_for_reading(self, client, real_hub):
         body = client.get("/api/hub").json()
-        assert body["serial"] == "102000147017"
-        assert body["serial_display"] == "102 000 147 017"
+        assert body["serial"] == "123456789012"
+        assert body["serial_display"] == "123 456 789 012"
 
     def test_the_protocol_version_is_stated(self, client, real_hub):
         """The official app shows 1.1; it should not be a literal here."""
@@ -99,7 +100,7 @@ class TestTheHubIdentifiesItself:
         assert body["api_version"] == pynobo.nobo.API.VERSION == "1.1"
 
     def test_the_hub_address_is_reported(self, client, real_hub):
-        assert client.get("/api/hub").json()["ip"] == "10.42.0.227"
+        assert client.get("/api/hub").json()["ip"] == "192.0.2.20"
 
     def test_a_hub_that_says_nothing_does_not_crash(self, client, real_hub):
         """Some fields can be absent; an empty hub_info must still answer."""
