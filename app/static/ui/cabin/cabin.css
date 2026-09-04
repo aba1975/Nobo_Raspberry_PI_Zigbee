@@ -458,6 +458,23 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .zd-steps { display: flex; gap: .5rem; }
 .zd-steps .step-btn { width: 56px; height: 48px; font-size: 1.4rem; }
 
+/* Both set points, listed. The steppers are smaller than the one that used to
+   sit beside the big number, because there are now two pairs and neither is
+   the headline -- the headline is what the zone is doing right now. */
+.zd-temps { display: grid; gap: .5rem; margin-top: 1.1rem; }
+.zd-temp {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: .75rem;
+  padding: .5rem .7rem; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+}
+.zd-temp-label { font-weight: 620; }
+.zd-temp-value { font-variant-numeric: tabular-nums; font-weight: 660; font-size: 1.15rem; }
+.zd-temp .zd-steps .step-btn { width: 46px; height: 40px; font-size: 1.2rem; }
+.zd-temp-note { font-size: .78rem; color: var(--ink-faint); }
+/* Away is a system-wide anti-frost value, not a zone setting. Shown so the
+   third number is not a mystery, and visibly not a control. */
+.zd-temp-fixed { background: var(--paper); }
+.zd-temp-fixed .zd-temp-label, .zd-temp-fixed .zd-temp-value { color: var(--ink-soft); }
+
 .card {
   background: var(--card); border: 1px solid var(--rule);
   border-radius: var(--radius); padding: 1.15rem 1.2rem;

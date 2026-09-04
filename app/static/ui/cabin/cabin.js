@@ -724,18 +724,30 @@
     });
   }
 
+  /* Which set points have been changed but not yet sent, per zone.
+   *
+   * Both temperatures can now be adjusted at once, and the commit is debounced,
+   * so a naive "send the field I last touched" would drop a comfort change if
+   * an eco change followed within the debounce window. Tracking the fields
+   * means the pending write carries whichever were actually touched. */
+  const dirtyTemps = new Map();
+
   /* Optimistic, debounced, and never fights an in-flight write. */
   const commitTemp = Nobo.debounce(async (zoneId) => {
     const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
     if (!zone) return;
-    const key = setpointKey(zone);
-    if (!key) return;
-    const body = key === 'eco'
-      ? { eco: zone.eco_temperature }
-      : { comfort: zone.comfort_temperature };
+    const fields = dirtyTemps.get(String(zoneId));
+    dirtyTemps.delete(String(zoneId));
+    if (!fields || !fields.size) { state.pending.delete(String(zoneId)); return; }
+    const body = {};
+    if (fields.has('comfort')) body.comfort = zone.comfort_temperature;
+    if (fields.has('eco')) body.eco = zone.eco_temperature;
     try {
       await Nobo.api.setTemps(zoneId, body);
-      Nobo.toast(`${zone.name} set to ${Nobo.fmtTemp(Nobo.targetTemp(zone))}\u00B0`);
+      const said = [];
+      if (fields.has('comfort')) said.push(`comfort ${Nobo.fmtTemp(zone.comfort_temperature, 0)}\u00B0`);
+      if (fields.has('eco')) said.push(`eco ${Nobo.fmtTemp(zone.eco_temperature, 0)}\u00B0`);
+      Nobo.toast(`${zone.name}: ${said.join(', ')}`);
     } catch (e) {
       Nobo.toast(e.message, 'error');
       await refresh(true);
@@ -745,7 +757,7 @@
   }, 700);
 
   /**
-   * Move a zone's set point by whole degrees.
+   * Move one of a zone's set points by whole degrees.
    *
    * The hub stores set points as whole degrees, so half-degree steps were never
    * reachable: pressing + moved the room a full degree, and pressing - moved it
@@ -755,18 +767,29 @@
    * The current value is rounded before stepping as well, so a half degree
    * arriving from the official app cannot produce another one here.
    */
+  function stepZoneField(zoneId, which, delta) {
+    const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
+    if (!zone) return;
+    const field = which === 'eco' ? 'eco_temperature' : 'comfort_temperature';
+    zone[field] = Nobo.clampTemp(Math.round(zone[field] ?? 20) + delta);
+    const key = String(zoneId);
+    if (!dirtyTemps.has(key)) dirtyTemps.set(key, new Set());
+    dirtyTemps.get(key).add(which);
+    state.pending.add(key);
+    hold();
+    if (state.view === 'zone') renderZoneDetail(); else renderZones();
+    commitTemp(zoneId);
+  }
+
+  /* The row on the zone list nudges whichever set point the zone is running on,
+     because there is only room for one pair of buttons there. The zone screen
+     offers both explicitly. */
   function stepZone(zoneId, delta) {
     const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
     if (!zone) return;
     const key = setpointKey(zone);
     if (!key) return;
-    const field = key === 'eco' ? 'eco_temperature' : 'comfort_temperature';
-    const next = Nobo.clampTemp(Math.round(zone[field] ?? 20) + delta);
-    zone[field] = next;
-    state.pending.add(String(zoneId));
-    hold();
-    if (state.view === 'zone') renderZoneDetail(); else renderZones();
-    commitTemp(zoneId);
+    stepZoneField(zoneId, key, delta);
   }
 
   /* ------------------------------------------------------------------
@@ -850,21 +873,38 @@
     const key = setpointKey(zone);
     const target = Nobo.targetTemp(zone);
     const remote = zone.supports_temp_adjust !== false;
-    const adjustable = key !== null && remote;
     const devices = devicesOfZone(zone.zone_id);
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
 
-    const whichSetpoint = key === 'eco' ? 'eco temperature' : key === 'comfort' ? 'comfort temperature' : 'away temperature';
-
-    const headLabel = remote ? `Set to (${whichSetpoint})` : 'Running';
+    const headLabel = remote ? 'Running now' : 'Running';
     const headValue = remote
       ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
       : `<span class="zd-mode">${esc(modeLabel)}</span>`;
     const headSub = !remote
       ? 'The temperature in this zone is set by the dial on each heater'
-      : (zone.current_temperature == null
-          ? 'No temperature sensor in this zone'
-          : 'Measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now');
+      : `${esc(modeLabel)}${zone.current_temperature == null
+          ? ' \u00B7 no temperature sensor in this zone'
+          : ' \u00B7 measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now'}`;
+
+    /* Both set points, always adjustable, whichever mode the zone is in.
+     *
+     * They used to share one pair of buttons that acted on whatever the zone
+     * was running, so changing the eco temperature meant switching the zone to
+     * Eco first -- and leaving a house on the wrong mode because you forgot to
+     * switch it back is a real way to come home to a cold cabin. Away is shown
+     * for completeness and is not adjustable: it is a fixed anti-frost value
+     * set by Nobo, not a per-zone setting. */
+    const tempRow = (which, label, value) => `
+      <div class="zd-temp" data-temp-row="${which}">
+        <span class="zd-temp-label">${esc(label)}</span>
+        <span class="zd-temp-value">${value == null ? '\u2014' : Nobo.fmtTemp(value, 0) + '\u00B0C'}</span>
+        <div class="zd-steps">
+          <button class="step-btn" type="button" data-tstep="down" data-temp="${which}"
+            ${remote ? '' : 'disabled'} aria-label="Lower the ${esc(label.toLowerCase())}">&minus;</button>
+          <button class="step-btn" type="button" data-tstep="up" data-temp="${which}"
+            ${remote ? '' : 'disabled'} aria-label="Raise the ${esc(label.toLowerCase())}">+</button>
+        </div>
+      </div>`;
 
     root.innerHTML = `
       <section class="zd-head">
@@ -872,18 +912,22 @@
         <div class="zd-set">
           <div>
             <div class="zd-big">${headValue}</div>
-            <p class="zd-sub">${esc(headSub)}</p>
-          </div>
-          <div class="zd-steps">
-            <button class="step-btn" type="button" data-zstep="down" ${adjustable ? '' : 'disabled'}
-              aria-label="Lower set temperature">&minus;</button>
-            <button class="step-btn" type="button" data-zstep="up" ${adjustable ? '' : 'disabled'}
-              aria-label="Raise set temperature">+</button>
+            <p class="zd-sub">${headSub}</p>
           </div>
         </div>
-        ${adjustable ? '' : `<div class="note note-warn">${!remote
-          ? 'No heater in this zone can be adjusted from here. You can still switch the zone between comfort, eco, away and its schedule - turn the dial on the heater to change the temperature itself.'
-          : `Away is a fixed ${AWAY_TEMP_LABEL()} anti-frost temperature set by Nobø and cannot be changed per zone. To hold this zone warmer while you are away, put it on Eco, or list it under Settings as a zone that must not get cold.`}</div>`}
+        ${remote ? `
+        <div class="zd-temps">
+          ${tempRow('comfort', 'Comfort', zone.comfort_temperature)}
+          ${tempRow('eco', 'Eco', zone.eco_temperature)}
+          <div class="zd-temp zd-temp-fixed">
+            <span class="zd-temp-label">Away</span>
+            <span class="zd-temp-value">${esc(AWAY_TEMP_LABEL())}</span>
+            <span class="zd-temp-note">set by Nobø</span>
+          </div>
+        </div>` : ''}
+        ${remote ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
+          from here. You can still switch the zone between comfort, eco, away and its schedule -
+          turn the dial on the heater to change the temperature itself.</div>`}
         ${renderSetpointDrift(zone)}
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this zone">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
@@ -927,8 +971,9 @@
         </div>
       </section>`;
 
-    root.querySelectorAll('[data-zstep]').forEach(b => {
-      b.onclick = () => stepZone(zone.zone_id, b.dataset.zstep === 'up' ? 1 : -1);
+    root.querySelectorAll('[data-tstep]').forEach(b => {
+      b.onclick = () => stepZoneField(zone.zone_id, b.dataset.temp,
+        b.dataset.tstep === 'up' ? 1 : -1);
     });
     root.querySelectorAll('[data-zmode]').forEach(b => {
       b.onclick = async () => {
