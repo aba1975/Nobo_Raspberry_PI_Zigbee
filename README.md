@@ -30,10 +30,11 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zone overview** | Every zone with its current temperature, comfort and eco set points, and the mode it is in right now. Updates by itself — you never need to refresh. |
 | **Per-zone override** | Put a single zone into Comfort, Eco or Away, or return it to Normal so it follows its weekly schedule again. |
 | **Global mode** | Put the whole house into Comfort, Eco, Away or Home in one click. |
-| **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. The eco temperature must be lower than the comfort temperature, and values are rounded to whole degrees because that is all the hub stores. |
-| **Weekly schedule** | A per-zone plan of which mode applies at which time on each day of the week (see [Weekly schedule rules](#weekly-schedule-rules)). |
+| **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. Both are adjustable from the zone screen whatever mode the zone is in, so changing the eco temperature never means switching the zone to Eco and remembering to switch it back. The eco temperature must be lower than the comfort temperature, and values are whole degrees because that is all the hub stores — the +/− buttons step by 1 °C. |
+| **Weekly schedule** | A named schedule of which mode applies at which time on each day (see [Weekly schedule rules](#weekly-schedule-rules)). Schedules are shared objects: several zones can follow one, and Settings lists them with the zones that use each. |
 | **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
 | **Rooms that must not get cold** | Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be raised. Nominate the zones that should hold their **Eco** temperature instead — a bathroom with pipes in the wall, a workshop — and they stay on Eco whenever the rest of the house goes Away, whether you pressed Away or an away period started on its own. See [Rooms that must not get cold](#rooms-that-must-not-get-cold). |
+| **Changed outside this app** | A Nobø thermostat with a dial rewrites the hub's set point when somebody turns it, and the hub keeps no record of the old value. The app remembers what it set, flags a zone whose temperature no longer matches, and offers to restore it or accept the new value. A global mode change restores the intended set points first. See [When somebody turns a dial](#when-somebody-turns-a-dial). |
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
@@ -76,8 +77,18 @@ interface says so rather than pretending the change worked.
 | Edit weekly schedules | ✅ | ✅ |
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
-| **Discover and pair a new device** | ❌ | ✅ |
+| **Discover and pair a new device** | ❌ | ⚠️ hub only, model dependent |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
+
+**Everything on that list has now been run against a real hub**, on a house of
+7 zones and 11 heaters. The exceptions are the two marked above.
+
+**Discovery only finds devices that support it.** Autosearch hears devices in
+pairing mode, and not every model has one — Nobø's manual states that the
+R80 RDC 700 and R80 RXC 700 "must be registered manually". For those, typing the
+12-digit code from the label is the documented method and needs nothing done at
+the heater. Demo mode has no radio at all, so discovery is the one thing it
+cannot offer.
 
 **Room temperature is the exception worth knowing about.** Of the 25 device
 models this software knows, only the **SW4** control panel has a thermometer.
@@ -85,11 +96,8 @@ The NTB-2R, the R80 RDC 700 and every other receiver control the temperature
 without reporting it, so a blank room temperature is correct behaviour and not
 a fault. It is not the setpoint, and the app will not substitute one. This
 matters beyond cosmetics: it decides which [alerts](#alerts) can work.
-
-Everything on that list is now implemented in both modes. The one asymmetry is
-device discovery: it asks the hub to listen on its radio for devices in pairing
-mode, and demo mode has no radio. In demo mode you type a serial number in by
-hand instead.
+**Confirmed on a real hub during commissioning:** every component reported
+`tempsensor_for_zone_id = None` and the hub's temperature table was empty.
 
 You do not have to remember this table. The application asks the server what it
 can do (`GET /api/capabilities`) and greys out anything the current mode cannot
@@ -198,7 +206,27 @@ that starts read-only and keeps every step reversible.
 
 ### Weekly schedule rules
 
-When you edit a schedule, the whole week is sent at once and it must describe
+A schedule is a **shared object on the hub**, not a property of one zone. Several
+zones can follow the same one, which is the point: two bedrooms that want the
+same week should share a schedule rather than have two that happen to match.
+**Settings → Schedules** lists every schedule with the zones that use it, and
+lets you add, edit, rename and delete them.
+
+Because they are shared, editing matters in two different places:
+
+- **From a zone's week** you are adjusting *that zone*. If the schedule is
+  shared, the app asks whether to change just this zone — which gives it a copy
+  of its own — or every zone using it. It also offers to save the edit as a new
+  named schedule and point the zone at it.
+- **From Settings** you picked a named schedule out of a list of schedules, so
+  the edit changes the schedule, and every zone following it. The interface
+  names those zones before saving.
+
+The hub's own built-in schedules cannot be changed. It accepts the command and
+silently ignores it, so the app refuses up front rather than reporting a success
+that did not happen.
+
+When you save a schedule, the whole week is sent at once and it must describe
 every minute of every day:
 
 - All seven days must be present.
@@ -206,14 +234,53 @@ every minute of every day:
 - Blocks must be in order, and each must be at least one minute long.
 - Each block's mode is `comfort`, `eco`, `away` or `off`.
 - Times are in the Raspberry Pi's own timezone, not UTC (see [Timezone](#timezone)).
+- The hub stores times to the quarter hour; the editor snaps to it and says so.
 
-`off` means the heating is switched off for that period. It is a schedule state
-only — there is no "off" override, so `POST /api/zones/{id}/override/off` is
-rejected.
+**`off` is accepted but no longer offered.** It is valid in a week profile — the
+hub stores it, and a schedule made in the official Nobø app may contain one — so
+the app reads, writes and displays it. It is not offered as a choice, because in
+a building left empty it means no frost protection at all, and Away's fixed 7 °C
+already covers "as cold as is safe". A block that is already `off` still shows
+as such and can be changed. There is no "off" override either, so
+`POST /api/zones/{id}/override/off` is rejected.
 
 A partial update is rejected rather than merged, so that a saved schedule is
 never half old and half new. The editor in the web interface builds a valid
 week for you; these rules matter if you call the API yourself.
+
+### When somebody turns a dial
+
+A Nobø thermostat with a dial does **not** create an override when somebody
+turns it. It rewrites the zone's comfort or eco temperature on the hub outright,
+permanently, and the hub keeps no record of what the value used to be. Confirmed
+on real hardware: turning an NTB-2R moved `comfort` from 17.0 to 21.0 with no
+override created, and Comfort, Eco and Schedule afterwards all left it at 21.0.
+
+There is no override to cancel and nothing to read back, so this app remembers
+instead. Every temperature it sets is written down as the intended value, and a
+zone whose temperature no longer matches is flagged with two ways out:
+
+- **Restore** — put back the temperature set here.
+- **Keep** — accept the new value as the intended one.
+
+Choosing a **global mode** — Comfort, Eco, Away, or letting the schedule run —
+restores the intended set points first, because that is the owner saying "use my
+settings". Otherwise a temperature dialled in on a wall silently becomes the one
+the whole house uses.
+
+Two things this deliberately does not do:
+
+- **It does not claim where the change came from.** The official Nobø app
+  rewrites the same field in the same way, so a dial and a phone are
+  indistinguishable from here. The wording says only that it was not changed
+  from this system.
+- **It does not store a warning.** The difference is recomputed from the
+  intended value and the hub's current value whenever anything asks, so a flag
+  cannot be stranded by a missed message — and a dial turned while the Pi was
+  switched off is still visible when it comes back.
+
+The intended set points live in `data/intended_setpoints.json` and are included
+in a backup.
 
 ### Rooms that must not get cold
 
@@ -1496,10 +1563,25 @@ devices first, then delete the zone.
 
 ### I changed one zone's schedule and expected other zones to change too
 
-Weekly schedules on a hub are shared objects, and every zone starts on the same
-factory schedule. The first time you save a schedule for a zone, that zone gets
-its own copy so no other room is changed by accident. The schedule editor shows
-a note when a schedule is still shared. To change several zones, edit each one.
+Schedules on a hub are **shared objects**, and several zones can follow the same
+one. When you save a schedule that is shared, the app asks which you meant:
+
+- **Just this zone** — it gets a copy of its own, and the others keep the
+  schedule as it was.
+- **Every zone using it** — the schedule itself changes, so every zone following
+  it changes with it.
+
+If you wanted several zones on one schedule, that is the second option, or use
+**Use a different schedule** on each zone to point them all at the same one.
+**Settings → Schedules** shows every schedule with the zones that use it.
+
+Editing from **Settings** always means the second thing: you picked a named
+schedule out of a list of schedules, so the edit changes the schedule and the
+app names the affected zones before saving.
+
+One thing you cannot do: change the hub's own built-in schedules. The hub accepts
+the command and ignores it, so the app disables those rather than reporting a
+success that did not happen. Make a new schedule instead.
 
 ### "permission denied while trying to connect to the Docker daemon socket"
 
@@ -1590,7 +1672,9 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 
 - `.env` — your hub configuration (serial, IP)
 - `data/` volume — user accounts, away schedules, demo zone state, zone icons
-  (`zone_icons.json`), the system name (`site.json`) and server state
+  (`zone_icons.json`), the system name (`site.json`), the intended set points
+  (`intended_setpoints.json`, see [When somebody turns a dial](#when-somebody-turns-a-dial))
+  and server state
 - `caddy-data` volume — TLS certificates and, if you use Caddy's own CA, its
   private root. Only present when HTTPS is switched on. Worth having: that root
   is the one you installed on every phone and laptop, and losing it means
@@ -1672,10 +1756,14 @@ There are two interfaces, and both are installed in every build.
 
 **Cabin** is the current interface. It is arranged around the away period, because a cabin stands
 empty most of the year: it leads with "I'm leaving" and "I'm back" rather than raw hub modes, shows
-the temperature a room is *set* to as the headline with the measured temperature underneath, flags
-heaters whose temperature can only be turned by hand, lets you add a room and register a heater by
-serial number, keeps an activity log under **Settings → Diagnostics**, and installs on an iPhone
-home screen.
+what a zone is doing right now with both its set points adjustable underneath, flags heaters whose
+temperature can only be turned by hand, manages named schedules that several zones can share, lets
+you add a zone and register a heater by serial number, keeps an activity log under
+**Settings → Diagnostics**, and installs on an iPhone home screen.
+
+It says **zone**, not "room". A zone is what shares a schedule and a comfort/eco pair, and in a
+house where several rooms share one — both first-floor bedrooms on one schedule, both second-floor
+bedrooms on another — calling it a room hides the fact that the grouping is the point.
 
 **Classic** is the original interface, unchanged.
 
@@ -1754,8 +1842,9 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/status` | Connection status, demo mode, away schedule and the timezone in use |
 | `GET /api/capabilities` | Which features work in the current mode (see [What works with a real hub](#what-works-with-a-real-hub-and-what-does-not)) |
 | `GET /api/zones` | All zones with current status |
-| `GET /api/zones/{zone_id}/schedule` | One zone's weekly schedule |
-| `GET /api/week_profiles` | Week profiles as the hub stores them |
+| `GET /api/zones/{zone_id}/schedule` | One zone's weekly schedule, the schedule's name, and which other zones share it |
+| `GET /api/week_profiles` | Every schedule on the hub: its decoded week, the zones using it, and whether it can be edited or deleted |
+| `GET /api/hub` | What the hub says about itself: name, firmware, hardware version, production date, protocol version, serial |
 | `GET /api/devices` | All devices, with their friendly names and zone assignment |
 | `GET /api/devices/search` | What a running device search has heard so far (real hub only) |
 | `GET /api/hub/config` | Current hub connection settings |
@@ -1773,14 +1862,29 @@ Note that `/auth/login` takes form fields, not JSON.
 | --- | --- |
 | `POST /api/zones/{zone_id}/override/{mode}` | Set one zone to `comfort`, `eco`, `away` or `normal` |
 | `POST /api/global/override/{mode}` | Set every zone at once. Here `home` is accepted as another word for `normal`; on the per-zone endpoint above it is not. |
-| `POST /api/zones/{zone_id}/temperature` | Set `comfort` and/or `eco` for a zone |
+| `POST /api/zones/{zone_id}/temperature` | Set `comfort` and/or `eco` for a zone. Supplying one fills the other in from the hub, so the pair is always validated together. |
+| `POST /api/zones/{zone_id}/restore-setpoints` | Put a zone back to the temperatures set here (see [When somebody turns a dial](#when-somebody-turns-a-dial)). `400` if it already matches. |
+| `POST /api/zones/{zone_id}/accept-setpoints` | Accept the zone's current temperatures as the intended ones |
 | `PUT /api/zones/{zone_id}` | Rename a zone or change its icon |
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
 | `PUT /api/notifications` | Change alert settings. Admin only. Partial: omitted fields keep their value, and an omitted password keeps the stored one. Refuses to enable alerts that could not be delivered. |
+| `POST /api/log/clear` | Discard the command log. Changes no setting and no zone — it only throws away the record. |
 | `POST /api/notifications/test` | Send a test email, optionally using settings in the body that have not been saved yet. Admin only. Returns the mail server's own error on failure. |
-| `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week (see [Weekly schedule rules](#weekly-schedule-rules)) |
+| `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week. Optional `apply_to`: `"zone"` (default) copies a shared schedule so only this zone changes; `"profile"` changes the schedule itself and therefore every zone using it. See [Weekly schedule rules](#weekly-schedule-rules). |
+
+### Schedules
+
+A schedule is shared: several zones can follow one. See
+[Weekly schedule rules](#weekly-schedule-rules).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/week_profiles` | Create a schedule. Body `{"name": "...", "schedule": {...}}`. The hub assigns the id, so use the one in the reply. |
+| `PATCH /api/week_profiles/{profile_id}` | Change a schedule's `name`, its `schedule`, or both. Changes every zone following it. `409` if the hub refuses, which it does silently for its own built-in schedules. |
+| `DELETE /api/week_profiles/{profile_id}` | Delete a schedule. `409` while a zone still uses it, or if it is one of the hub's own. |
+| `POST /api/zones/{zone_id}/week-profile` | Point a zone at an existing schedule (`{"profile_id": "23"}`) |
 
 ### Zones and devices
 
@@ -1790,7 +1894,7 @@ These work in both demo mode and against a real hub, except where noted.
 | --- | --- |
 | `POST /api/zones` | Create a zone. The hub assigns the id, so use the one in the reply. |
 | `DELETE /api/zones/{zone_id}` | Delete a zone. Refused with `409` while it still contains devices. |
-| `POST /api/devices` | Add a device to a zone by serial number. Against a real hub this pairs it, so the device must be in pairing mode. |
+| `POST /api/devices` | Add a device to a zone by serial number. Registers it in the hub's database, which needs no pairing mode — that is how Nobø documents adding a mains-powered receiver. A battery unit (Nobø Switch, TCU 700) that the hub will not take this way falls back to a pairing request, and does need to be in pairing mode. |
 | `PATCH /api/devices/{serial}/name` | Rename a device |
 | `POST /api/devices/{serial}/move` | Move a device to another zone (`{"new_zone_id": "2"}`) |
 | `PUT /api/devices/{serial}` | Replace a device with a new one (`{"new_serial": "..."}`). Pairs the new one first, then removes the old. |
@@ -1798,9 +1902,16 @@ These work in both demo mode and against a real hub, except where noted.
 | `POST /api/devices/search` | Ask the hub to listen for devices in pairing mode (real hub only) |
 | `DELETE /api/devices/search` | Stop the search (real hub only) |
 
-Pairing a device takes up to 30 seconds, because it waits for the hub to
-confirm. `502` means the hub answered but refused or said nothing useful;
-`504` means it never answered at all. In both cases nothing was changed.
+Adding a device is usually a database operation and takes effect at once. A
+battery unit that needs the radio can take up to 30 seconds, because it waits
+for the hub to confirm the pairing. `502` means the hub answered but refused or
+said nothing useful; `504` means it never answered at all. In both cases nothing
+was changed.
+
+**Autosearch does not work with every model.** Nobø's manual is explicit that
+the R80 RDC 700 and R80 RXC 700 "must be registered manually" and lists them
+outside the models that support it. Typing the 12-digit code in is the documented
+route for those, and needs nothing done at the heater.
 
 ### Administration
 

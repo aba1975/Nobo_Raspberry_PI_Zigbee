@@ -11,21 +11,31 @@ Raspberry Pi 4B (ARM64 / Ubuntu Server) deployment of [nobo-web-control](https:/
 Read this before offering to "add tests" or "verify" something. It is the
 difference between what has been proven and what has only been reasoned about.
 
-**Proven against real hardware.** The application has been connected to a real
-Nobø Hub and read it correctly: zones, devices, week profiles, and non-ASCII
-names. A mode change made in the official phone app arrived on the Pi
-unprompted a few seconds later, with both connected at once. The connection
-held for eighteen minutes with no drops.
+**Commissioned against real hardware, September 2026.** A live Nobø Hub
+(firmware 116, 7 zones, 11 heaters) in the house it was built for. Phases 1–5
+and 7 of `docs/TEST_MATRIX.md` were run. That found **nine defects that had all
+passed the automated suite** — see the record at the end of the matrix, which is
+worth reading before writing anything that touches the hub.
 
-**Never run against real hardware.** Everything in Phase 5 of
-`docs/TEST_MATRIX.md`: **device discovery, pairing, and editing a week
-profile**. Those paths are written from `API_Nobo.pdf` and from pynobo's
-handling, and they are exercised only against `tests/fake_hub.py` — which
-encodes the same reading of the specification the application does, so it
-cannot disagree with it. Expect surprises there, and do not describe those
-paths as verified.
+**Still never run against real hardware:** the power cut (test 1.6), and device
+**discovery and pairing** (5.5, 5.6). The last two cannot be run on this house at
+all: autosearch only finds devices in pairing mode, and neither the R80 RDC 700
+nor the NTB-2R supports it. Nobø's own manual says the RDC "must be registered
+manually". Testing pairing needs an SW4, a TCU 700 or another searchable model.
 
-**Proven only in demo mode.** Everything else, including the whole interface.
+**Two lessons from the commissioning, both worth keeping.**
+
+*Demo mode used to be more forgiving than the hardware.* It stored set points as
+floats where the hub sends **strings**, and tidied up state the hub leaves alone.
+Two defects passed their tests *because* of that — the tests were asserting
+demo's behaviour, not the hub's. Demo has since been changed to model the hub:
+string set points, and a zone override that survives a global change. If you add
+demo behaviour, make it match the hub even when the hub is less tidy.
+
+*A desktop browser is not the device.* The week editor could not be used on a
+phone for months: every change rebuilt the row list, which destroys the `<input>`
+mid-gesture, because a time input fires `change` *while* a touch picker is being
+spun. Check UI work under touch emulation, not just a desktop window.
 
 **The honest limit of the fake hub.** It answers each connection faithfully,
 but nothing in a functional test counts open sockets or measures how long they
@@ -33,11 +43,26 @@ live. Two real bugs were found with `ss -tn` after the fake-hub suite passed —
 see rule 4 under "Talking to a Real Hub". Anything about *how many* connections
 exist needs real sockets.
 
-`docs/TEST_MATRIX.md` is the checklist for closing that gap. It is ordered so
-the read-only checks come first, and every step that changes something says how
-to undo it. Test 4.2 — standing next to the heater — is the only one that
-proves the hub reached the hardware; everything else proves a message reached
-the hub.
+**Facts established on hardware, so they need not be re-derived:**
+
+- A **zone override outranks the global override**. The away-exception feature
+  depends on it.
+- `off` is a valid **schedule** state (wire status 4) but **not** a valid
+  override — `POST /api/zones/{id}/override/off` returns 400. It is no longer
+  offered as a choice, but is still read and displayed.
+- The hub **silently ignores** `U02` for its own built-in schedules. It reports
+  no error and changes nothing, so success has to be checked, not assumed.
+- The hub stores set points as **whole degrees**. Half-degree steps are not
+  merely imprecise; a half step down rounds back to where it started.
+- **No temperature reaches this hub at all.** All 11 components report
+  `tempsensor_for_zone_id = None`. Of the 25 models pynobo knows, only the SW4
+  has a thermometer, so a blank room temperature is correct behaviour.
+- A **dial on a thermostat rewrites the hub's set point outright** — no override
+  is created, and the old value is not recoverable from the hub. That is why
+  `app/setpoint_guard.py` exists.
+
+Test 4.2 — standing next to the heater — is still the only test that proves the
+hub reached the hardware; everything else proves a message reached the hub.
 
 ## Architecture
 
@@ -53,7 +78,8 @@ the hub.
 - `app/server.py` — the FastAPI application (~4,300 lines), every API endpoint, and both interfaces' HTML for the sign-in page
 - `app/auth.py` — session auth with bcrypt. Five failed attempts lock a username for 60s, which is sized for a LAN and thin for the internet
 - `app/away_schedule.py` — the scheduled away window. `away_schedule_loop()` is the only thing that writes to the hub unprompted, and both its paths require `enabled: true`
-- `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, away exceptions, site identity
+- `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, away exceptions, applied away exceptions, intended set points, site identity
+- `app/setpoint_guard.py` — what temperatures this system *means* each zone to have. A dial on a thermostat rewrites the hub's set point outright and the hub keeps no history, so this is the only record that a room was ever meant to be something else. Drift is derived on read, never stored
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
@@ -164,6 +190,21 @@ about *how many* connections exist, or how long they live, needs real sockets or
   through `Intl` in `core.js` with `hourCycle: 'h23'` forced — so a locale that
   would normally use AM/PM still renders 24-hour. Never format a date by hand
   with a table of month names; that is what this replaced.
+- **Day names are not part of that setting.** The regional format decides how a
+  date is *written*; it does not decide what language the application is in. The
+  schedule labels are English whatever the region, because "man. tir. ons." next
+  to Comfort and Save schedule is neither one language nor the other.
+- **Set points are whole degrees.** The hub stores nothing else, so the +/−
+  buttons step by 1 and the current value is rounded before stepping. A
+  half-degree step is not merely imprecise: the server rounds to nearest, so a
+  half step *down* returns to where it started and the button appears dead.
+- **Both set points are editable regardless of mode.** Making the stepper act on
+  whichever set point the zone was running meant changing the zone's mode to
+  edit the other one — and a mode left switched is how a cabin gets cold.
+- **A week profile is a shared object.** Several zones can follow one. Editing
+  from a zone's week copies it when shared; editing from Settings changes the
+  schedule itself and every zone on it. That distinction is the feature, not an
+  implementation detail — see the README's schedule rules before changing it.
 
 ## Talking to a Real Hub
 

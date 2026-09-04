@@ -59,7 +59,7 @@ ip route get 1.1.1.1 # the address it uses to reach the world, and on which inte
 **From another machine on the same network**, if the Pi is headless:
 
 ```bash
-ping nobohub.local              # works if the router publishes mDNS names
+ping nobopi.local               # works if the router publishes mDNS names
 nmap -sn 192.168.1.0/24         # or whatever your subnet is
 arp -a | findstr /i "b8:27:eb dc:a6:32 e4:5f:01"   # Windows; Raspberry Pi MAC prefixes
 ```
@@ -203,7 +203,7 @@ Do these one at a time and confirm each before moving on.
 | 4.1 | Comfort override | 👥 | Set the test room to Comfort | Mode changes in UI and app | Set back to Schedule |
 | 4.2 | The heater actually responds | 👤 | Stand at the heater during 4.1 | It clicks / warms. **This is the only test that proves the radio works end to end** | — |
 | 4.3 | Eco override | 👥 | Set Eco | Mode and setpoint change | Back to Schedule |
-| 4.4 | Off override | 👥 | Set Off | Heater stops | Back to Schedule |
+| 4.4 | ~~Off override~~ | — | **Not a test.** `off` is not a valid override: `POST /api/zones/{id}/override/off` returns 400, and the interface does not offer it. It is a *schedule* state only. Confirmed against the hub during commissioning. | — | — |
 | 4.5 | Back to Schedule | 👥 | Clear the override | Returns to whatever the week profile says now | — |
 | 4.6 | Change comfort temperature | 👥 | Set the test room's comfort to a distinct value like 23 | Shows 23 in UI and app | Set it back to the original |
 | 4.7 | Global Away | 👥 | Set the whole house Away | Every room follows | Set back to Home |
@@ -313,3 +313,47 @@ If you only have twenty minutes: **1.3, 2.2, 2.7, 3.1, 4.1, 4.2, 6.3.**
 That is: the app is up, the hub is connected, no connections are leaking, sync
 works both ways, a room responds, **a heater physically responds**, and nothing
 leaks after a reconnect. Those seven cover the failure modes that actually bite.
+
+---
+
+## What the first real run found
+
+Run against a live hub (firmware 116, 7 zones, 11 heaters) in September 2026.
+Every phase except 1.6 and parts of 5 was completed. **Nine defects were found,
+and every one of them had passed the automated suite**, so they are worth
+recording as a pattern rather than a list.
+
+| Found | Why it was invisible before |
+|---|---|
+| Setting a temperature returned 500 | Demo stores set points as floats; the hub sends **strings**, and `'15' + 0.5` raised TypeError |
+| A room excluded from Away never came home | Demo's Home blanket-assigns every zone; the hub cancels only the **global** override, leaving the zone override standing |
+| Hub firmware showed "Unknown" | Read through `getattr(hub, 'hub_version', 'Unknown')` — pynobo has no such attribute, so the fallback was the only possible answer |
+| Adding a device by serial always failed | Sent `X03` (pair over radio) for every model. Manual registration is `A01`, and an R80 RDC 700 has no pairing mode to enter |
+| "Those controls are greyed out here" | A fixed sentence describing a restriction that had been removed |
+| Week profile names came out as `Teknisk\xa0Rom` | Missing `decode_hub_name()` on one endpoint |
+| Editing a hub built-in reported success | The hub accepts `U02` for its own schedules and silently ignores it |
+| The temperature **minus** button did nothing | Both interfaces stepped 0.5; the hub stores whole degrees, so a half step down rounded back to where it started |
+| The week editor could not be used on a phone | Every change rebuilt the row list, destroying the `<input>` mid-gesture — a time input fires `change` *while* a touch picker is being spun |
+
+Two lessons behind almost all of them:
+
+**Demo mode was more forgiving than the hardware.** It stored floats where the
+hub sends strings, and tidied up state the hub leaves alone. Both of the first
+two defects passed their tests *because* of that. Demo mode has since been
+changed to model the hub's actual behaviour, and the tests that had been passing
+alongside those bugs now fail against the old code.
+
+**A desktop browser is not the device.** The week editor bug was reachable only
+by touch, and had been present for months. UI work now gets checked under touch
+emulation, not just a desktop window.
+
+Three things were also established as facts rather than assumptions:
+
+- A **zone override outranks the global override** on the hub. The away-exception
+  feature depends on this and it had never been verified.
+- **Copy-on-write for schedules works**, and 5.12's worst case — silently
+  rescheduling the whole house — does not happen.
+- **No temperature reaches this hub at all.** All 11 components report
+  `tempsensor_for_zone_id = None` and `hub.temperatures` is empty. Of the 25
+  models pynobo knows, only the SW4 has a thermometer. A blank room temperature
+  is correct, not a fault.
