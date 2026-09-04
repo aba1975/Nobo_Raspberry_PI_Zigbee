@@ -717,7 +717,7 @@
       b.onclick = () => showZone(b.dataset.open);
     });
     list.querySelectorAll('[data-step]').forEach(b => {
-      b.onclick = () => stepZone(b.dataset.zone, b.dataset.step === 'up' ? 0.5 : -0.5);
+      b.onclick = () => stepZone(b.dataset.zone, b.dataset.step === 'up' ? 1 : -1);
     });
     list.querySelectorAll('[data-setpoint-action]').forEach(b => {
       b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
@@ -744,13 +744,24 @@
     }
   }, 700);
 
+  /**
+   * Move a zone's set point by whole degrees.
+   *
+   * The hub stores set points as whole degrees, so half-degree steps were never
+   * reachable: pressing + moved the room a full degree, and pressing - moved it
+   * nowhere at all, because the server rounds to nearest and 18 - 0.5 rounds
+   * straight back to 18. The minus button had simply never worked.
+   *
+   * The current value is rounded before stepping as well, so a half degree
+   * arriving from the official app cannot produce another one here.
+   */
   function stepZone(zoneId, delta) {
     const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
     if (!zone) return;
     const key = setpointKey(zone);
     if (!key) return;
     const field = key === 'eco' ? 'eco_temperature' : 'comfort_temperature';
-    const next = Nobo.clampTemp((zone[field] ?? 20) + delta);
+    const next = Nobo.clampTemp(Math.round(zone[field] ?? 20) + delta);
     zone[field] = next;
     state.pending.add(String(zoneId));
     hold();
@@ -917,7 +928,7 @@
       </section>`;
 
     root.querySelectorAll('[data-zstep]').forEach(b => {
-      b.onclick = () => stepZone(zone.zone_id, b.dataset.zstep === 'up' ? 0.5 : -0.5);
+      b.onclick = () => stepZone(zone.zone_id, b.dataset.zstep === 'up' ? 1 : -1);
     });
     root.querySelectorAll('[data-zmode]').forEach(b => {
       b.onclick = async () => {

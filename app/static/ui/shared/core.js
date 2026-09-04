@@ -445,10 +445,16 @@ const Nobo = (() => {
    * prints an explicit "No sensor" state beside the number, so a zone without a
    * reading shows nothing here instead of a placeholder that would either shout
    * or repeat the label next to it.
+   *
+   * Whole degrees print without a decimal. This is only ever a set point, and
+   * the hub stores those as whole degrees, so a permanent ".0" was noise that
+   * also suggested half degrees were available when they are not. A value that
+   * genuinely has a fraction — one set from the official app — still shows it.
    */
   function bigTemp(value, unit = '\u00B0C') {
     if (value == null) return '';
-    return `${value.toFixed(1)}<span class="deg">${unit}</span>`;
+    const text = Number.isInteger(value) ? String(value) : value.toFixed(1);
+    return `${text}<span class="deg">${unit}</span>`;
   }
 
   /** Debounce with a flush, so a slider can commit immediately on release. */
