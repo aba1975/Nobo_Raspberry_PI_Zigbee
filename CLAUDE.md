@@ -280,6 +280,12 @@ Also worth knowing:
 - pynobo has no handling for `Y00`/`Y01`/`Y03`/`Y04`, so device search and
   pairing go entirely through `HubProtocolTap`.- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
   not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.
+- **Design note: no picker opens by itself.** A sheet focuses its first control
+  when it opens, which is right for a keyboard — but on iOS focusing a `date` or
+  `time` input opens its picker immediately, so tapping "I'm leaving" threw a
+  full-screen calendar over the sheet before you had read a word of it.
+  `sheetFocusTarget()` in `cabin.js` skips picker-type inputs. If you add a
+  control that opens something on focus, add its type to `PICKER_TYPES`.
 - Week profile states are `0=Comfort, 1=Eco, 2=Away, 4=Off`. `API_Nobo.pdf`
   page 6 says "3: Off" and is wrong — pynobo's `validate_week_profile` accepts
   only `0124`, and it is pynobo that talks to the hub.

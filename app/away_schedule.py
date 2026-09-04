@@ -92,17 +92,27 @@ def validate_schedule(
     """
     Validate schedule fields.
     Returns (is_valid: bool, error_message: str | None).
+
+    ``end_at`` is optional. A cabin that is let out has a known handover date and
+    an unknown return: the owner knows the tenants leave on Sunday but not when
+    anybody is next in the building. Such a period starts on its date and then
+    holds Away until somebody ends it, which is what "I'm back" is for.
     """
     if not enabled:
         # When disabling we don't require dates
         return True, None
 
-    if not start_at or not end_at:
-        return False, "start_at and end_at are required when enabling a schedule"
+    if not start_at:
+        return False, "start_at is required when enabling a schedule"
 
     start_dt = parse_iso_dt(start_at)
     if start_dt is None:
         return False, f"Invalid start_at datetime: {start_at!r}"
+
+    if not end_at:
+        # Open-ended: nothing more to check. It cannot "never run" the way a
+        # period ending in the past can, because it has no end to have missed.
+        return True, None
 
     end_dt = parse_iso_dt(end_at)
     if end_dt is None:
@@ -132,6 +142,10 @@ def validate_schedule(
 def is_schedule_active(schedule: dict, now: Optional[datetime] = None) -> bool:
     """
     Return True if the schedule is enabled and *now* falls within [start_at, end_at).
+
+    An open-ended period — one with no ``end_at`` — is active from its start
+    onwards and does not stop by itself. Only "I'm back" ends it.
+
     *now* defaults to datetime.now(timezone.utc) if not provided.
     """
     if not schedule.get("enabled"):
@@ -143,14 +157,24 @@ def is_schedule_active(schedule: dict, now: Optional[datetime] = None) -> bool:
     start_dt = parse_iso_dt(schedule.get("start_at"))
     end_dt = parse_iso_dt(schedule.get("end_at"))
 
-    if start_dt is None or end_dt is None:
+    if start_dt is None:
         return False
+
+    if end_dt is None:
+        return start_dt <= now
 
     return start_dt <= now < end_dt
 
 
 def is_schedule_expired(schedule: dict, now: Optional[datetime] = None) -> bool:
-    """Return True if the schedule is enabled but end_at is in the past."""
+    """
+    Return True if the schedule is enabled but end_at is in the past.
+
+    An open-ended period never expires, which is the whole point of it: the
+    heating stays on Away until somebody says they are back. The scheduler
+    returns the house to Home from this function alone, so returning False here
+    is what keeps an open-ended period running.
+    """
     if not schedule.get("enabled"):
         return False
 

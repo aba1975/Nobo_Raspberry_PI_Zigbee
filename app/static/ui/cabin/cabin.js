@@ -84,6 +84,27 @@
   let sheetCleanup = null;
   const onSheetClose = (fn) => { sheetCleanup = fn; };
 
+  /* Where focus should land when a sheet opens.
+   *
+   * Focusing the first control is right for a keyboard, but on iOS focusing a
+   * date or time input opens its picker immediately — so tapping "I'm leaving"
+   * threw a full-screen calendar over the sheet before the user had read a word
+   * of it. Those inputs are skipped here, so the picker appears only when the
+   * field is actually tapped.
+   *
+   * Nothing else is treated specially: a text field still takes focus, which is
+   * what somebody renaming a zone wants. */
+  const PICKER_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week', 'color', 'file']);
+
+  function sheetFocusTarget(root) {
+    const controls = root.querySelectorAll('input, select, button, textarea');
+    for (const el of controls) {
+      if (el.tagName === 'INPUT' && PICKER_TYPES.has((el.type || '').toLowerCase())) continue;
+      return el;
+    }
+    return null;
+  }
+
   function openSheet(title, html, wire) {
     lastFocus = document.activeElement;
     $('#sheetTitle').textContent = title;
@@ -91,7 +112,7 @@
     sheetEl.hidden = false;
     scrimEl.hidden = false;
     if (wire) wire(sheetBody);
-    const first = sheetBody.querySelector('input, select, button');
+    const first = sheetFocusTarget(sheetBody);
     if (first) first.focus();
     document.addEventListener('keydown', onSheetKey);
   }
@@ -249,19 +270,28 @@
 
     if (a.enabled && a.currently_active) {
       card.classList.add('is-away');
-      stateEl.textContent = 'Empty until ' + Nobo.fmtWhen(a.end_at);
-      detail.textContent  = `Every zone is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
-      drawTimeline(a.start_at, a.end_at);
+      if (a.end_at) {
+        stateEl.textContent = 'Empty until ' + Nobo.fmtWhen(a.end_at);
+        detail.textContent  = `Every zone is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
+        drawTimeline(a.start_at, a.end_at);
+      } else {
+        /* No return date, on purpose. Nothing will end this, so the card says
+           so plainly and keeps the way out in front of you. */
+        stateEl.textContent = 'Empty, with no return date';
+        detail.textContent  = `Away since ${Nobo.fmtWhen(a.start_at)}. Every zone holds the away temperature until somebody says they are back.`;
+      }
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
-        <button class="btn" data-act="plan" type="button">Change return</button>
+        <button class="btn" data-act="plan" type="button">${a.end_at ? 'Change return' : 'Set a return date'}</button>
         <button class="btn btn-danger" data-act="delete-trip" type="button">Delete away period</button>`;
 
     } else if (a.enabled && a.start_at) {
       card.classList.add('is-away');
       stateEl.textContent = 'Away from ' + Nobo.fmtWhen(a.start_at);
-      detail.textContent  = `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then zones follow their normal schedules.`;
-      drawTimeline(a.start_at, a.end_at);
+      detail.textContent  = a.end_at
+        ? `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then zones follow their normal schedules.`
+        : `Starts ${Nobo.fmtUntil(a.start_at)}, with no return date set. Until then zones follow their normal schedules.`;
+      if (a.end_at) drawTimeline(a.start_at, a.end_at);
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="plan" type="button">Change plan</button>
         <button class="btn btn-danger" data-act="delete-trip" type="button">Delete away period</button>`;
@@ -373,13 +403,18 @@
 
       <label class="field">
         <span>Back</span>
-        <div class="field-row">
+        <div class="seg" role="group" aria-label="Do you know when you are back?">
+          <button type="button" class="seg-btn" data-back="date" aria-pressed="true">On a date</button>
+          <button type="button" class="seg-btn" data-back="unknown" aria-pressed="false">I don't know yet</button>
+        </div>
+        <div class="field-row" id="tsEndRow">
           <input type="date" id="tsEndDate" value="${esc(b.date)}">
           <input type="time" id="tsEndTime" value="${esc(b.time)}">
         </div>
+        <small class="field-hint" id="tsBackHint"></small>
       </label>
 
-      <label class="field">
+      <label class="field" id="tsHeadField">
         <span>Start heating before I arrive</span>
         <select id="tsHead">
           <option value="0">When I arrive</option>
@@ -398,10 +433,10 @@
       </div>
 
       <div class="sheet-alt">
-        <p class="zd-sub">Not sure when you are back?</p>
-        <button class="btn btn-wide" data-act="constant" type="button">Stay away with no return date</button>
-        <small class="field-hint">The same as the Away button: every zone holds the away
-        temperature until you come back and end it yourself.</small>
+        <p class="zd-sub">Leaving this minute?</p>
+        <button class="btn btn-wide" data-act="constant" type="button">Go to Away right now</button>
+        <small class="field-hint">Skips the dates entirely: every zone holds the away
+        temperature from this moment until you end it yourself.</small>
       </div>
 
       ${a.enabled ? `
@@ -411,8 +446,17 @@
       </div>` : ''}
     `, (root) => {
       const hint = root.querySelector('#tsHint');
+      const backHint = root.querySelector('#tsBackHint');
+      const endRow = root.querySelector('#tsEndRow');
+      const headField = root.querySelector('#tsHeadField');
+
+      /* Whether a return date is known. A let cabin has a known handover and an
+         unknown return, so this is a first-class choice rather than a fallback
+         hidden at the bottom of the sheet. */
+      let knowReturn = !(a.enabled && a.start_at && !a.end_at);
 
       const computedEnd = () => {
+        if (!knowReturn) return null;
         const iso = Nobo.toIsoInstant(root.querySelector('#tsEndDate').value,
                                       root.querySelector('#tsEndTime').value);
         if (!iso) return null;
@@ -421,13 +465,33 @@
       };
 
       const updateHint = () => {
+        if (!knowReturn) {
+          backHint.textContent = 'The heating stays on Away until somebody presses "I\u2019m back".';
+          hint.textContent = '';
+          return;
+        }
+        backHint.textContent = '';
         const end = computedEnd();
         hint.textContent = end
           ? 'Heating resumes ' + Nobo.fmtWhen(end) + '.'
           : 'Pick the date you are coming back.';
       };
+
+      const paintBack = () => {
+        endRow.hidden = !knowReturn;
+        headField.hidden = !knowReturn;
+        root.querySelectorAll('[data-back]').forEach(b => {
+          const on = (b.dataset.back === 'date') === knowReturn;
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        updateHint();
+      };
+
+      root.querySelectorAll('[data-back]').forEach(b => {
+        b.onclick = () => { knowReturn = b.dataset.back === 'date'; paintBack(); };
+      });
       root.querySelectorAll('input, select').forEach(el => el.addEventListener('input', updateHint));
-      updateHint();
+      paintBack();
 
       root.querySelector('[data-act="dismiss"]').onclick = closeSheet;
       root.querySelector('[data-act="constant"]').onclick = () => stayAwayIndefinitely();
@@ -436,18 +500,22 @@
       root.querySelector('[data-act="save"]').onclick = async () => {
         const start = Nobo.toIsoInstant(root.querySelector('#tsStartDate').value,
                                         root.querySelector('#tsStartTime').value);
+        if (!start) { Nobo.toast('Enter the date you are leaving', 'error'); return; }
+
         const end = computedEnd();
-        if (!start || !end) { Nobo.toast('Enter both a leaving and a return date', 'error'); return; }
-        if (new Date(end) <= new Date(start)) {
-          Nobo.toast('Your return has to be after you leave', 'error'); return;
-        }
-        if (new Date(end) <= new Date()) {
-          Nobo.toast('That return time has already passed - check the year', 'error'); return;
+        if (knowReturn) {
+          if (!end) { Nobo.toast('Enter a return date, or choose "I don\u2019t know yet"', 'error'); return; }
+          if (new Date(end) <= new Date(start)) {
+            Nobo.toast('Your return has to be after you leave', 'error'); return;
+          }
+          if (new Date(end) <= new Date()) {
+            Nobo.toast('That return time has already passed - check the year', 'error'); return;
+          }
         }
         try {
           await Nobo.api.setAwaySchedule({ enabled: true, start_at: start, end_at: end });
           closeSheet();
-          Nobo.toast('Away period saved');
+          Nobo.toast(end ? 'Away period saved' : 'Away period saved \u2014 no return date');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };

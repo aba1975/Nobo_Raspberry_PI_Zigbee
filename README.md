@@ -78,7 +78,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Global mode** | Put the whole house into Comfort, Eco, Away or Home in one click. Zones that are set to follow it are released from any mode they were holding, so the instruction actually reaches them — see [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
 | **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. Both are adjustable from the zone screen whatever mode the zone is in, so changing the eco temperature never means switching the zone to Eco and remembering to switch it back. The eco temperature must be lower than the comfort temperature, and values are whole degrees because that is all the hub stores — the +/− buttons step by 1 °C. |
 | **Weekly schedule** | A named schedule of which mode applies at which time on each day (see [Weekly schedule rules](#weekly-schedule-rules)). Schedules are shared objects: several zones can follow one, and Settings lists them with the zones that use each. |
-| **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
+| **Scheduled away** | Set a holiday period. The house goes to Away when it starts, and back to Home when it ends. The return date is optional — a cabin that is let out has a known handover and an unknown return, so a period can be left open and ended with **I'm back** whenever somebody actually turns up. See [Leaving without knowing when you are back](#leaving-without-knowing-when-you-are-back). |
 | **Rooms that must not get cold** | Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be raised. Nominate the zones that should hold their **Eco** temperature instead — a bathroom with pipes in the wall, a workshop — and they stay on Eco whenever the rest of the house goes Away, whether you pressed Away or an away period started on its own. See [Rooms that must not get cold](#rooms-that-must-not-get-cold). |
 | **Changed outside this app** | A Nobø thermostat with a dial rewrites the hub's set point when somebody turns it, and the hub keeps no record of the old value. The app remembers what it set, flags a zone whose temperature no longer matches, and offers to restore it or accept the new value. A global mode change restores the intended set points first. See [When somebody turns a dial](#when-somebody-turns-a-dial). |
 | **Follow Home and Away** | Per zone, and stored on the hub itself, so the Nobø app shows the same setting. On, the whole-house buttons apply to the zone. Off, the zone is independent and keeps whatever it is on. A zone that will not follow the house is marked on the front page, because a room quietly holding Eco while the house says Home is how pipes freeze. See [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
@@ -372,6 +372,39 @@ in the Nobø app too, and a change made there shows up here.
 The scheduler behaves exactly like the buttons. An away period that starts while
 nobody is in the cabin releases the same zones a pressed Away would, which is
 precisely when an overlooked zone would otherwise go unnoticed for a fortnight.
+
+### Leaving without knowing when you are back
+
+The return date is optional. In the **I'm leaving** sheet, under *Back*, choose
+**I don't know yet**.
+
+The period then starts on the date you set and holds Away until somebody presses
+**I'm back**. Nothing ends it on a timer, which is the whole point: an empty
+building does not quietly start heating itself because a date passed.
+
+This exists because a let cabin has an asymmetric calendar. You know exactly when
+the tenants hand back the keys; you often have no idea when you or the next guest
+will arrive. Before this, that trip could not be planned at all — the only
+open-ended option was the Away button, which starts this instant rather than on
+Sunday evening.
+
+The card on the front page says **"Empty, with no return date"** rather than
+showing a countdown to nothing, and it keeps both ways out in front of you:
+**I'm back now**, or **Set a return date** if you find out later. Adding a return
+date afterwards is an ordinary edit and loses nothing.
+
+With no return date there is no arrival to warm up for, so the *"start heating
+before I arrive"* setting is hidden while that option is chosen. It comes back
+the moment you give a date.
+
+Two related things that are *not* the same:
+
+- **Go to Away right now**, at the bottom of the same sheet, skips the dates
+  entirely and is identical to pressing the Away button. Use it when you are
+  walking out of the door.
+- **Rooms that must not get cold** still applies to an open-ended period exactly
+  as it does to any other, so a bathroom with pipes in the wall holds its Eco
+  temperature for however long the building stays empty.
 
 ### Rooms that must not get cold
 
@@ -2021,7 +2054,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `POST /api/zones/{zone_id}/restore-setpoints` | Put a zone back to the temperatures set here (see [When somebody turns a dial](#when-somebody-turns-a-dial)). `400` if it already matches. |
 | `POST /api/zones/{zone_id}/accept-setpoints` | Accept the zone's current temperatures as the intended ones |
 | `PUT /api/zones/{zone_id}` | Rename a zone, change its icon, or set `follow_global_mode` (see [Zones that follow the whole house](#zones-that-follow-the-whole-house-and-zones-that-do-not)). Name and flag are written as one hub command, because they share one record. |
-| `PUT /api/global-mode/away-schedule` | Set the holiday period |
+| `PUT /api/global-mode/away-schedule` | Set the holiday period. `start_at` is required; `end_at` is optional and may be omitted or `null` for a period that runs until somebody presses "I'm back" (see [Leaving without knowing when you are back](#leaving-without-knowing-when-you-are-back)). A period *with* an end must still finish after it starts and in the future. |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |
 | `PUT /api/notifications` | Change alert settings. Admin only. Partial: omitted fields keep their value, and an omitted password keeps the stored one. Refuses to enable alerts that could not be delivered. |

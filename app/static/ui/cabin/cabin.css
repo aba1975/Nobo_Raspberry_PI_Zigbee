@@ -701,6 +701,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* ------------------------------------------------------------ settings */
 
 .field { display: block; margin-bottom: .95rem; }
+/* `hidden` loses to any component rule that sets display, and .field sets it. */
+.field[hidden] { display: none; }
 .field > span { display: block; font-size: .8rem; font-weight: 620; margin-bottom: .32rem; }
 .field input[type="text"], .field input[type="date"], .field input[type="time"],
 .field input[type="password"], .field select,
@@ -711,6 +713,22 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .field-hint { display: block; margin-top: .3rem; font-size: .77rem; color: var(--ink-faint); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.field-row[hidden] { display: none; }
+
+/* Two mutually exclusive answers, shown side by side rather than hidden behind
+   a checkbox: knowing your return date and not knowing it are equally normal
+   ways to leave a cabin, and a let property is usually the second. Same 44px
+   target as every other control here, so it is thumb-sized on a phone. */
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-bottom: .55rem; }
+.seg-btn {
+  font: inherit; min-height: 44px; padding: .55rem .7rem;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink-soft); cursor: pointer;
+}
+.seg-btn:hover { border-color: var(--pine); color: var(--ink); }
+.seg-btn[aria-pressed="true"] {
+  background: var(--pine-wash); border-color: var(--pine); color: var(--pine); font-weight: 620;
+}
 
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .3rem 0; }
 .switch-text strong { display: block; font-size: .95rem; }
