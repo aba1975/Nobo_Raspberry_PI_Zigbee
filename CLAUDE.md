@@ -17,11 +17,17 @@ and 7 of `docs/TEST_MATRIX.md` were run. That found **ten defects that had all
 passed the automated suite** — see the record at the end of the matrix, which is
 worth reading before writing anything that touches the hub.
 
-**Still never run against real hardware:** the power cut (test 1.6), and device
-**discovery and pairing** (5.5, 5.6). The last two cannot be run on this house at
-all: autosearch only finds devices in pairing mode, and neither the R80 RDC 700
-nor the NTB-2R supports it. Nobø's own manual says the RDC "must be registered
-manually". Testing pairing needs an SW4, a TCU 700 or another searchable model.
+**Still never run against real hardware:** device **discovery and pairing** (5.5,
+5.6). These cannot be run on this house at all: autosearch only finds devices in
+pairing mode, and neither the R80 RDC 700 nor the NTB-2R supports it. Nobø's own
+manual says the RDC "must be registered manually". Testing pairing needs an SW4,
+a TCU 700 or another searchable model.
+
+**The power cut (1.6) has now been run** — 4 September 2026, mains pulled for two
+minutes. Clean boot, service up by itself 36 s later, hub reconnected, exactly
+one socket, and every zone, set point, schedule and persisted file identical
+afterwards. The set point guard came back with no false drift flags. Details at
+the end of `docs/TEST_MATRIX.md`.
 
 **Two lessons from the commissioning, both worth keeping.**
 

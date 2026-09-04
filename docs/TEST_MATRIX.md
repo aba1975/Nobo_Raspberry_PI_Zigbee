@@ -152,7 +152,7 @@ Test 6.6 covers this.
 | 1.3 | Health endpoint answers | 🤖 | `curl -s localhost:8000/api/health` | `{"status":"ok", …}` |
 | 1.4 | Correct branch and version deployed | 🤖 | `git log --oneline -1` | Matches what we intended to deploy |
 | 1.5 | Survives a reboot unattended | 👥 | `sudo reboot`, then wait | App answers again within ~60s, no login needed, data intact |
-| 1.6 | Survives a **power cut** | 👤 | Pull the plug, wait 10s, plug in | Same as 1.5. This is the one that matters in a cabin |
+| 1.6 | Survives a **power cut** | 👤 | Pull the plug, wait 10s, plug in | Same as 1.5. This is the one that matters in a cabin. **Run 4 Sep 2026 — passed**, see below |
 | 1.7 | Disk is not filling up | 🤖 | `df -h /` | Comfortably under 80% |
 | 1.8 | Clock is correct and in the right timezone | 🤖 | `timedatectl` | Correct local time — schedules are wall-clock, so a wrong clock heats at the wrong hour |
 
@@ -364,3 +364,42 @@ Three things were also established as facts rather than assumptions:
   `tempsensor_for_zone_id = None` and `hub.temperatures` is empty. Of the 25
   models pynobo knows, only the SW4 has a thermometer. A blank room temperature
   is correct, not a fault.
+
+---
+
+## Test 1.6: the power cut
+
+Run 4 September 2026 on the production Pi, with mains pulled for roughly two
+minutes. This was the last item on the matrix and the one that matters most in a
+cabin: an unattended box on a mountain will lose power, and it will lose it
+without being asked politely first.
+
+**It passed on every count.**
+
+| Checked | Result |
+|---|---|
+| Boot | clean, 12:58:37 |
+| Service started itself | `nobo-control` active at 12:59:13 — 36 s after boot, no login, no intervention |
+| Containers | both `healthy` |
+| Filesystem | root still `rw`, no ext4 recovery, orphan or corruption messages |
+| Hub reconnected | yes, `connected: true` |
+| Sockets on `:27779` | **exactly one** — no duplicate from the reconnect |
+| Zones, set points, modes | identical to the snapshot taken before the cut |
+| Devices | 11, same zone assignments |
+| Week profiles | 6, same assignments |
+| Away schedule and exceptions | identical |
+| `intended_setpoints.json` | survived, and produced **no** false "changed outside app" flags |
+| Follow-global flags | intact — they live on the hub, so the cut could not touch them |
+| HTTPS from outside | `https://nobo.mostugu.no/api/health` → 200 |
+| A write after the reboot | reached the hub and came back confirmed |
+
+The set point guard deserves a specific mention. It persists what this app
+intends, and a restart is exactly the moment a naive implementation would either
+forget its intentions or, worse, wake up and decide that every zone had been
+changed behind its back. Neither happened: every zone came back with
+`setpoint_changed_outside: null`.
+
+**One thing worth writing down for next time.** The baseline snapshots were
+written to `/tmp`, which Ubuntu clears on boot, so the before-and-after diff had
+to be done by eye against the printed output. Snapshots for a reboot test belong
+somewhere that survives one — `~/nobo-baselines` on the Pi.
