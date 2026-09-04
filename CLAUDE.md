@@ -234,6 +234,14 @@ about *how many* connections exist, or how long they live, needs real sockets or
 
 ## Talking to a Real Hub
 
+Comments throughout the code cite `API_Nobo.pdf` (Nobø Hub API v1.1) and
+`Manual_Nobo.pdf`. **Neither is in the repository** — they are Glen Dimplex
+Nordic's copyright, and this repo is public. See "Reference documents" in the
+README for where to get them. The short version: the manual is still published
+by Nobø, and the API spec no longer is anywhere — the vendor's URLs 404 and only
+Internet Archive captures of their own server survive. Keep local copies if you
+are working on the protocol; `.gitignore` covers them.
+
 Four rules, each learned from a bug:
 
 1. **Never call pynobo's synchronous wrappers from a request handler.** They

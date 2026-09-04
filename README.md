@@ -48,7 +48,7 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 - **Installing:** [Prerequisites](#prerequisites) · [1 Prepare the Pi](#step-1-prepare-the-raspberry-pi) · [2 SSH](#step-2-enable-and-use-ssh) · [3 Docker](#step-3-install-docker-and-docker-compose) · [4 Clone](#step-4-clone-the-repository) · [5 Configure](#step-5-configure-environment-variables) · [6 Start](#step-6-start-the-system) · [7 Start on reboot](#step-7-make-it-start-on-reboot) · [8 Verify](#step-8-verify-it-is-working)
 - **Living with it:** [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
 - **Running it:** [HTTPS](#https-on-your-own-network) · [Updating](#updating-the-software) · [Backups](#backing-up-configuration-and-data) · [Ports](#ports) · [Timezone](#timezone) · [Security notes](#security-notes)
-- **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure)
+- **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure) · [Reference documents](#reference-documents)
 
 ## What This Project Does
 
@@ -1211,7 +1211,7 @@ You do not have to choose. The Pi and the official Nobø Energy Control app can
 be connected to the hub at the same time, and there is nothing to switch.
 
 This is stated in the official protocol specification
-([`API_Nobo.pdf`](API_Nobo.pdf), Nobø Hub API v1.1):
+([Nobø Hub API v1.1](#reference-documents)):
 
 > **Two devices can be connected directly via LAN to one Hub at the same time.**
 > (In addition, up to 10 devices can be simultaneously connected via the
@@ -1273,10 +1273,10 @@ reversible and never touches your real heating.
 ### What the app can do that this cannot
 
 Adding and removing *receivers* (the units in the heaters) is done with the
-official app, following [`Manual_Nobo.pdf`](Manual_Nobo.pdf). This web interface
-can register a device by serial number and organise zones, but the app remains
-the tool for the initial pairing of the system. Keeping both connected means you
-never have to disconnect one to use the other.
+official app, following Nobø's own [user manual](#reference-documents). This web
+interface can register a device by serial number and organise zones, but the app
+remains the tool for the initial pairing of the system. Keeping both connected
+means you never have to disconnect one to use the other.
 
 ## HTTPS on Your Own Network
 
@@ -2198,6 +2198,62 @@ overrides the mounted files, which is exactly the bug this avoids.
   README use `123456789012`, which is not a real hub.
 - The data volume holds your user accounts. Treat a backup of it like a
   password file.
+
+## Reference documents
+
+The code and comments cite two of Nobø's own documents by name. They are **not**
+included in this repository — they are Glen Dimplex Nordic's copyright, not ours
+to redistribute — so here is where to get them.
+
+### `API_Nobo.pdf` — Nobø Hub API v1.1
+
+*"Nobø Hub – API version 1.1 … Integration for advanced users."* The local TCP
+protocol on port 27779: the command and response codes (`G00`, `H01`, `A03`,
+`U00` …), the record layouts, and the override and week-profile structures.
+Everything this project does to a hub comes from here.
+
+**Glen Dimplex no longer publishes it.** The old `glendimplex.no` and
+`glendimplex.se` sites now redirect to `nobo.no` / `nobo.se`, and every
+`/media/…` path returns 404. The document is absent from the new sites entirely
+— it is not in their content library, and their own search returns nothing for
+it. Every third-party integration that cites it, including
+[pynobo](https://github.com/echoromeo/pynobo) and the openHAB binding, now links
+to a dead URL.
+
+The only working copies are Internet Archive captures of the manufacturer's own
+server:
+
+- [Nobø Hub API v1.1 (Internet Archive, capture of `glendimplex.se`, 2024-12-29)](https://web.archive.org/web/20241229052955id_/https://www.glendimplex.se/media/15650/nobo-hub-api-v-1-1-integration-for-advanced-users.pdf)
+- [the same document captured from `glendimplex.no`, 2024-06-26](https://web.archive.org/web/20240626104610id_/https://www.glendimplex.no/media/15650/nobo-hub-api-v-1-1-integration-for-advanced-users.pdf)
+
+If both ever fail, the practical substitute is the `nobo.API` class in
+[pynobo](https://github.com/echoromeo/pynobo), which encodes the same v1.1
+command table in Python.
+
+### `Manual_Nobo.pdf` — Nobø Eco Hub user manual
+
+Still published, and the place to look for pairing, registering receivers, and
+what each device model can do. Document 802124-I.
+
+- [Nobø Hub product page](https://en.nobo.no/product/nobo-hub) — "Manuals and
+  user guides" ([Norwegian](https://www.nobo.no/produkt/nobo-hub))
+- [The manual online](https://help.nobo.no/en/user-manual/), which is easier to
+  search than the PDF
+
+This is the source for a claim made in several places here — that some receivers
+cannot be found by an automatic search. The manual states it plainly:
+
+> **R80 RDC 700 og R80 RXC 700: Require manual registration.**
+
+Which is why [`POST /api/devices`](#controlling) registers a device by serial
+number first and only falls back to a radio search.
+
+### A note on trademarks
+
+Nobø, Eco Hub, Orion 700 and the device model names belong to Glen Dimplex
+Nordic. This project is not affiliated with, supported by, or endorsed by them.
+Neither document carries a redistribution licence, which is exactly why they are
+linked here rather than committed.
 
 ## License
 

@@ -68,3 +68,10 @@ docker-compose.override.yml
 # for one session, which is exactly the sort of thing that gets committed by
 # accident.
 .pi/
+
+# Nobo's own documents. Useful to have locally while working on the protocol,
+# but they are Glen Dimplex Nordic's copyright and are not ours to redistribute.
+# See "Reference documents" in the README for where to get them.
+API_Nobo.pdf
+Manual_Nobo.pdf
+*.pdf
