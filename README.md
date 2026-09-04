@@ -2201,7 +2201,15 @@ overrides the mounted files, which is exactly the bug this avoids.
 
 ## License
 
-This project is provided as-is for personal use. See the original project at [nobo-web-control](https://github.com/aba1975/nobo-web-control).
+[MIT](LICENSE). Use it, change it, redistribute it; keep the copyright notice,
+and it comes with no warranty. Heating a building is your responsibility, not
+this software's.
+
+The libraries it builds on keep their own licences — notably
+[pynobo](https://github.com/echoromeo/pynobo), which does the actual talking to
+the hub, and [FastAPI](https://fastapi.tiangolo.com/). Nobø, Eco Hub and the
+device names are trademarks of Glen Dimplex Nordic; this project is not
+affiliated with or endorsed by them.
 
 ## Acknowledgments
 
