@@ -290,6 +290,26 @@ class FakeHub:
         await self._broadcast(["B02"] + record)
 
     async def _add_override(self, writer: asyncio.StreamWriter, command: List[str]) -> None:
+        # The hub keeps at most one override per target: a new one for the same
+        # target replaces whatever was there, and an override in NORMAL mode is
+        # how a target is cleared rather than a record in its own right.
+        #
+        # Modelling that here matters. Without it a cancelled override lingers,
+        # pynobo keeps reporting the old mode, and a test would happily pass
+        # while the zone stayed stuck — which is the exact defect this models.
+        target_type = command[6] if len(command) > 6 else None
+        target_id = command[7] if len(command) > 7 else None
+        superseded = [
+            override_id for override_id, record in self.overrides.items()
+            if record[5] == target_type and record[6] == target_id
+        ]
+        for override_id in superseded:
+            record = self.overrides.pop(override_id)
+            await self._broadcast(["S03", override_id] + record[1:])
+
+        if command[2] == "0":  # NORMAL — the target is simply left with none
+            return
+
         override_id = str(self._next_override_id)
         self._next_override_id += 1
         record = [override_id] + command[2:8]

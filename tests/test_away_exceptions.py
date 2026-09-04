@@ -225,7 +225,14 @@ class TestComingHomeReleasesTheRoom:
         """
         The hub's ranking, now modelled in demo. Proven on real hardware:
         zone Eco held while the other six rooms went Away.
+
+        The ranking is only observable on a zone that has been told not to
+        follow global modes. On any other zone the app now releases the zone
+        override first, precisely so the ranking cannot strand a room — see
+        test_zone_follows_global.py. Turning the flag off is what makes a zone
+        genuinely independent, and that independence is what this pins down.
         """
+        client.put("/api/zones/1", json={"follow_global_mode": False})
         client.post("/api/zones/1/override/comfort")
         client.post("/api/global/override/away")
         assert zone_mode("1") == "comfort", "zone override wins"

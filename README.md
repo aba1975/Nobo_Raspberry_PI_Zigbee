@@ -29,12 +29,13 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | --- | --- |
 | **Zone overview** | Every zone with its current temperature, comfort and eco set points, and the mode it is in right now. Updates by itself — you never need to refresh. |
 | **Per-zone override** | Put a single zone into Comfort, Eco or Away, or return it to Normal so it follows its weekly schedule again. |
-| **Global mode** | Put the whole house into Comfort, Eco, Away or Home in one click. |
+| **Global mode** | Put the whole house into Comfort, Eco, Away or Home in one click. Zones that are set to follow it are released from any mode they were holding, so the instruction actually reaches them — see [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
 | **Temperature set points** | Set the comfort and eco temperature per zone, between 7 °C and 30 °C. Both are adjustable from the zone screen whatever mode the zone is in, so changing the eco temperature never means switching the zone to Eco and remembering to switch it back. The eco temperature must be lower than the comfort temperature, and values are whole degrees because that is all the hub stores — the +/− buttons step by 1 °C. |
 | **Weekly schedule** | A named schedule of which mode applies at which time on each day (see [Weekly schedule rules](#weekly-schedule-rules)). Schedules are shared objects: several zones can follow one, and Settings lists them with the zones that use each. |
 | **Scheduled away** | Set a holiday period. The house goes to Away when it starts and back to Home when it ends. |
 | **Rooms that must not get cold** | Nobø's Away is a fixed 7 °C anti-frost temperature and cannot be raised. Nominate the zones that should hold their **Eco** temperature instead — a bathroom with pipes in the wall, a workshop — and they stay on Eco whenever the rest of the house goes Away, whether you pressed Away or an away period started on its own. See [Rooms that must not get cold](#rooms-that-must-not-get-cold). |
 | **Changed outside this app** | A Nobø thermostat with a dial rewrites the hub's set point when somebody turns it, and the hub keeps no record of the old value. The app remembers what it set, flags a zone whose temperature no longer matches, and offers to restore it or accept the new value. A global mode change restores the intended set points first. See [When somebody turns a dial](#when-somebody-turns-a-dial). |
+| **Follow Home and Away** | Per zone, and stored on the hub itself, so the Nobø app shows the same setting. On, the whole-house buttons apply to the zone. Off, the zone is independent and keeps whatever it is on. A zone that will not follow the house is marked on the front page, because a room quietly holding Eco while the house says Home is how pipes freeze. See [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices. With a real hub, the hub can also search for a device in pairing mode so you do not have to read its serial number off the back. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
@@ -72,6 +73,7 @@ interface says so rather than pretending the change worked.
 | Per-zone and global overrides | ✅ | ✅ |
 | Change comfort / eco temperatures | ✅ | ✅ |
 | Rename a zone | ✅ | ✅ |
+| Follow / ignore the whole-house modes per zone | ✅ | ✅ |
 | Scheduled away | ✅ | ✅ |
 | View weekly schedules | ✅ | ✅ |
 | Edit weekly schedules | ✅ | ✅ |
@@ -281,6 +283,45 @@ Two things this deliberately does not do:
 
 The intended set points live in `data/intended_setpoints.json` and are included
 in a backup.
+
+### Zones that follow the whole house, and zones that do not
+
+Pressing **Home**, **Comfort**, **Eco** or **Away** on the front page sends the
+hub one *global* override. On the hub, a zone's own override always outranks
+that global one. Both facts are useful — the away exception below depends on
+them — but together they used to produce a genuinely dangerous outcome:
+
+> A zone was put on Eco by hand. Later, Home was pressed. The global override was
+> cancelled, the interface showed the house on Home, and that zone stayed on Eco.
+> Nothing ever released it. In a cabin, a room silently holding Eco through a
+> winter is how pipes freeze.
+
+The hub already has the setting that resolves this. Each zone carries an
+`override_allowed` flag — field 6 of its record, and the same checkbox the Nobø
+app shows on a zone — which decides whether the global override reaches it. This
+app calls it **Follow Home and Away** and puts it on the zone screen, under the
+mode buttons.
+
+- **On** (the hub's factory setting, and what a zone gets if the flag is
+  missing). The whole-house buttons apply. Anything the zone was holding is
+  released first, so the mode you asked for actually takes effect. This is the
+  safe default: a zone that follows the house cannot be forgotten.
+- **Off.** The zone is deliberately independent — a workshop, a cellar, a room
+  with its own routine. It keeps whatever it is on and ignores the whole-house
+  buttons entirely. Its weekly schedule still runs.
+
+Because Off is a standing risk rather than a passing state, a zone with it turned
+off is marked **Ignores Home/Away** in amber on the front page, and the zone
+screen says what it is holding and that only that screen can change it. A zone
+that is merely set by hand but still follows the house is marked **Set by hand**
+in a quieter style, since the next whole-house mode will release it.
+
+The flag lives on the hub, not here, so turning it off in this app turns it off
+in the Nobø app too, and a change made there shows up here.
+
+The scheduler behaves exactly like the buttons. An away period that starts while
+nobody is in the cabin releases the same zones a pressed Away would, which is
+precisely when an overlooked zone would otherwise go unnoticed for a fortnight.
 
 ### Rooms that must not get cold
 
@@ -1583,6 +1624,22 @@ One thing you cannot do: change the hub's own built-in schedules. The hub accept
 the command and ignores it, so the app disables those rather than reporting a
 success that did not happen. Make a new schedule instead.
 
+### A zone ignored Home, Comfort, Eco or Away
+
+Look at the zone on the front page. If it is marked **Ignores Home/Away**, then
+its **Follow Home and Away** setting is off, and that is exactly what off means:
+the zone keeps whatever it is on and the whole-house buttons do not touch it.
+Open the zone and turn the setting back on, or set the zone's mode there
+directly.
+
+This setting lives on the hub, so it may have been turned off in the Nobø app
+rather than here. It is shown on the zone screen either way.
+
+If the zone is *not* marked, and still did not follow the house, that is a fault
+worth reporting — check `GET /api/log` for the `create_override` that should have
+released it. See [Zones that follow the whole house, and zones that do
+not](#zones-that-follow-the-whole-house-and-zones-that-do-not).
+
 ### "permission denied while trying to connect to the Docker daemon socket"
 
 Your user is not in the `docker` group yet, or you have not logged out since being added. Fix it:
@@ -1861,11 +1918,11 @@ Note that `/auth/login` takes form fields, not JSON.
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/zones/{zone_id}/override/{mode}` | Set one zone to `comfort`, `eco`, `away` or `normal` |
-| `POST /api/global/override/{mode}` | Set every zone at once. Here `home` is accepted as another word for `normal`; on the per-zone endpoint above it is not. |
+| `POST /api/global/override/{mode}` | Set every zone at once. Here `home` is accepted as another word for `normal`; on the per-zone endpoint above it is not. Zone-level overrides are released for zones whose `follows_global_mode` is true, and the released ids come back as `zone_overrides_released`. |
 | `POST /api/zones/{zone_id}/temperature` | Set `comfort` and/or `eco` for a zone. Supplying one fills the other in from the hub, so the pair is always validated together. |
 | `POST /api/zones/{zone_id}/restore-setpoints` | Put a zone back to the temperatures set here (see [When somebody turns a dial](#when-somebody-turns-a-dial)). `400` if it already matches. |
 | `POST /api/zones/{zone_id}/accept-setpoints` | Accept the zone's current temperatures as the intended ones |
-| `PUT /api/zones/{zone_id}` | Rename a zone or change its icon |
+| `PUT /api/zones/{zone_id}` | Rename a zone, change its icon, or set `follow_global_mode` (see [Zones that follow the whole house](#zones-that-follow-the-whole-house-and-zones-that-do-not)). Name and flag are written as one hub command, because they share one record. |
 | `PUT /api/global-mode/away-schedule` | Set the holiday period |
 | `DELETE /api/global-mode/away-schedule` | Clear the holiday period |
 | `PUT /api/global-mode/away-exceptions` | Replace the list of zones held on Eco during Away. Body `{"zone_ids": ["1","4"]}`. Applied immediately if the house is already away. |

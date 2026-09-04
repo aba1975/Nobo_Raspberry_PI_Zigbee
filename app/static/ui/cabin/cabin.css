@@ -378,6 +378,22 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    space for them. */
 .badge-drift { background: var(--amber-wash); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
 
+/* A zone that has been set by hand and is holding that mode instead of running
+   its schedule. Neutral, because it is now released the moment a global mode is
+   chosen - worth knowing, not worth worrying about. */
+.badge-held { background: transparent; color: var(--ink-soft); border-color: var(--rule); }
+
+/* A zone that has been told to ignore Home and Away. This one is a standing
+   risk rather than a passing state: it will sit on whatever it is on while the
+   front page says the whole house is somewhere else, which in a cabin is how a
+   room gets left cold all winter. Amber, and it says what it does in words. */
+.badge-detached { background: var(--amber-wash); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+
+/* The follow-global row sits directly under the mode buttons, because it
+   governs them. A rule above it separates it from the modes without needing a
+   second card. */
+.zd-follow { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--rule); }
+
 /* --------------------------------------------------------- system box */
 
 .sysbox {

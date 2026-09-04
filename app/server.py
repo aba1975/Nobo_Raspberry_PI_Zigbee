@@ -740,6 +740,10 @@ class ZoneAdd(BaseModel):
 class ZoneUpdate(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
+    # The hub's own ``override_allowed`` flag, phrased the way it behaves.
+    # True: Home, Away, Comfort and Eco from the front page apply to this zone.
+    # False: the zone keeps whatever it was set to and ignores them.
+    follow_global_mode: Optional[bool] = None
 
 
 class HubConfigUpdate(BaseModel):
@@ -1606,6 +1610,45 @@ def get_zones_data() -> List[Dict[str, Any]]:
     return zones
 
 
+def zone_follows_global_mode(zone: Dict[str, Any]) -> bool:
+    """
+    Whether a global override reaches this zone.
+
+    This is the hub's own ``override_allowed`` flag — field 6 of the zone
+    struct, and the same checkbox the Nobø app shows on a zone. It is *not*
+    something this app invented, so a change made here is visible in the
+    official app and the other way round.
+
+    Absent or unrecognised means allowed, which is the hub's factory setting
+    and the safe answer: a zone that follows Home and Away cannot be forgotten
+    on Eco through the winter.
+    """
+    return str(zone.get('override_allowed', '1')) != '0'
+
+
+def _zones_with_own_override(current_hub) -> Set[str]:
+    """
+    Zone ids currently held by a zone-level override.
+
+    A zone override outranks the global one on the hub — proven on the
+    hardware, and the whole reason the away-exception feature works — so these
+    are exactly the zones that will ignore a global mode unless something
+    releases them first.
+
+    Overrides in NORMAL mode are the hub's way of saying "no override", so they
+    are not a hold and are skipped.
+    """
+    found: Set[str] = set()
+    if not current_hub:
+        return found
+    for override in (getattr(current_hub, 'overrides', None) or {}).values():
+        if str(override.get('mode')) == pynobo.nobo.API.OVERRIDE_MODE_NORMAL:
+            continue
+        if str(override.get('target_type')) == pynobo.nobo.API.OVERRIDE_TARGET_ZONE:
+            found.add(str(override.get('target_id')))
+    return found
+
+
 def _build_zones_data() -> List[Dict[str, Any]]:
     """Get current data for all zones"""
     with connection_lock:
@@ -1656,6 +1699,10 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'current_mode': demo_zone['mode'],
                 'schedule_mode': get_current_schedule_mode(demo_zone['zone_id']) if demo_zone['mode'] == 'normal' else None,
                 'active_override_id': demo_zone.get('override_id'),
+                # Same two facts the hub reports, so the interface cannot tell
+                # demo and hardware apart.
+                'follows_global_mode': zone_follows_global_mode(demo_zone),
+                'has_zone_override': str(demo_zone['zone_id']) in DEMO_ZONE_OVERRIDES,
                 'device_type': device_name,
                 'supports_comfort': any_supports_temp,
                 'supports_eco': any_supports_temp,
@@ -1674,6 +1721,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
     
     zones = []
     try:
+        zones_holding_override = _zones_with_own_override(current_hub)
         for zone_id, zone in current_hub.zones.items():
             zone_name = decode_hub_name(zone.get('name', f'Zone {zone_id}'))
             
@@ -1740,6 +1788,12 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'current_mode': mode,
                 'schedule_mode': get_current_schedule_mode(str(zone_id)) if mode == 'normal' else None,
                 'active_override_id': zone.get('deprecated_override_id'),
+                # Whether the front page's Home / Away / Comfort / Eco reaches
+                # this zone at all, and whether something is currently holding
+                # it against them. Together these are what makes a zone able to
+                # sit on Eco while the rest of the house is told to come Home.
+                'follows_global_mode': zone_follows_global_mode(zone),
+                'has_zone_override': str(zone_id) in zones_holding_override,
                 'device_type': device_name,
                 'supports_comfort': any_supports_temp,
                 'supports_eco': any_supports_temp,
@@ -2497,6 +2551,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
                 demo_zone['name'] = update.name.strip()
             if update.icon is not None:
                 demo_zone['icon'] = update.icon.strip()
+            if update.follow_global_mode is not None:
+                demo_zone['override_allowed'] = '1' if update.follow_global_mode else '0'
 
             add_log_entry(
                 "sent",
@@ -2505,7 +2561,9 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             )
             logger.info(f"Demo mode: Zone {zone_id} updated")
             config_persistence.save_demo_zones(DEMO_ZONES)
-            return {"status": "success", "zone_id": zone_id, "name": demo_zone['name'], "icon": demo_zone['icon']}
+            return {"status": "success", "zone_id": zone_id, "name": demo_zone['name'],
+                    "icon": demo_zone['icon'],
+                    "follow_global_mode": zone_follows_global_mode(demo_zone)}
 
         # Real hub mode. The name lives on the hub; the icon is this app's own
         # setting and is stored locally, exactly as it is in demo mode.
@@ -2518,12 +2576,33 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
         zone = current_hub.zones[zone_id]
         old_name = decode_hub_name(zone.get('name', zone_id))
 
-        if update.name is not None:
-            await hub_command(current_hub.async_update_zone(zone_id, update.name.strip()))
+        # Name and the follow-global flag are both fields of the same U00
+        # record, and pynobo rebuilds that record from its cached copy of the
+        # zone. Sending them as two commands would have the second one write
+        # back the name from a cache the hub had not yet refreshed, silently
+        # undoing the rename. One command carries both.
+        if update.name is not None or update.follow_global_mode is not None:
+            kwargs: Dict[str, Any] = {}
+            described: List[str] = []
+            if update.name is not None:
+                kwargs['name'] = update.name.strip()
+                described.append(f"name='{update.name.strip()}'")
+            if update.follow_global_mode is not None:
+                kwargs['override_allowed'] = (
+                    pynobo.nobo.API.OVERRIDE_ALLOWED if update.follow_global_mode
+                    else pynobo.nobo.API.OVERRIDE_NOT_ALLOWED
+                )
+                described.append(
+                    f"override_allowed={kwargs['override_allowed']} "
+                    f"({'follows' if update.follow_global_mode else 'ignores'} the global mode)"
+                )
+            await hub_command(current_hub.async_update_zone(zone_id, **kwargs))
             add_log_entry(
                 "sent",
-                f"update_zone({zone_id}, '{update.name.strip()}')",
-                command=f"update_zone zone_id={zone_id} name={update.name.strip()}",
+                f"update_zone({zone_id}, {', '.join(described)})",
+                command=f"update_zone zone_id={zone_id} " + " ".join(
+                    f"{k}={v}" for k, v in kwargs.items()
+                ),
                 source="api",
             )
 
@@ -2537,6 +2616,10 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             "zone_id": zone_id,
             "name": update.name.strip() if update.name is not None else old_name,
             "icon": zone_icons.get(str(zone_id), ''),
+            "follow_global_mode": (
+                update.follow_global_mode if update.follow_global_mode is not None
+                else zone_follows_global_mode(current_hub.zones.get(zone_id, {}))
+            ),
         }
 
     except HTTPException:
@@ -3065,8 +3148,10 @@ async def set_global_override(mode: str):
         if DEMO_MODE:
             for demo_zone in DEMO_ZONES:
                 # A zone override outranks the global one on the hub, so a zone
-                # that has its own override is left alone here â€” same as the
-                # hardware. Whoever set it is responsible for clearing it.
+                # that has its own override is left alone here — same as the
+                # hardware. Zones that follow the global mode have that
+                # override released just below, which is what lets the change
+                # actually reach them.
                 if str(demo_zone.get('zone_id')) in DEMO_ZONE_OVERRIDES:
                     continue
                 # For home mode, set to 'normal' which means following schedule
@@ -3085,9 +3170,11 @@ async def set_global_override(mode: str):
             global_mode_source = "manual"
             config_persistence.save_demo_zones(DEMO_ZONES)
             config_persistence.save_server_state({"global_mode_source": global_mode_source})
+            released = await _release_zone_overrides_for_global(mode)
             exceptions = await _sync_away_exceptions(mode)
             return {"status": "success", "mode": mode, "source": "manual",
                     "away_exceptions_applied": exceptions,
+                    "zone_overrides_released": released,
                     "setpoints_restored": restored_setpoints}
         
         # Real hub mode — use a single global override command instead of per-zone
@@ -3124,9 +3211,14 @@ async def set_global_override(mode: str):
         
         global_mode_source = "manual"
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
+        # The global override is in place first, so a zone released here lands
+        # straight on the mode that was just asked for rather than dropping to
+        # its schedule for a moment on the way.
+        released = await _release_zone_overrides_for_global(mode)
         exceptions = await _sync_away_exceptions(mode)
         return {"status": "success", "mode": mode, "source": "manual",
                 "away_exceptions_applied": exceptions,
+                "zone_overrides_released": released,
                 "setpoints_restored": restored_setpoints}
     except HTTPException:
         raise
@@ -3481,6 +3573,88 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
     return applied
 
 
+async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> List[str]:
+    """
+    Let a global mode actually reach the zones that are supposed to follow it.
+
+    A zone-level override outranks the global override on the hub. That is
+    deliberate and useful — it is how the away exception keeps one room warmer
+    than 7 °C — but it also meant that a zone put on Eco by hand stayed on Eco
+    for ever. Pressing Home on the front page cancelled the *global* override
+    and changed nothing about that zone, and the interface then showed a house
+    on Home containing a room quietly holding Eco. In a cabin that is how pipes
+    freeze.
+
+    So every zone that is marked as following the global mode has its own
+    override released here. A zone with the flag turned off is left exactly as
+    it is, which is the whole point of the flag: that zone has been declared
+    independent on purpose.
+
+    Away exceptions are re-applied straight after this by
+    ``_sync_away_exceptions``, so releasing them here is safe; the bookkeeping
+    is kept in step so a released zone is not counted as still overridden.
+
+    Returns the zone ids that were released.
+    """
+    global _away_exception_zones_applied
+
+    with connection_lock:
+        current_hub = hub
+
+    released: List[str] = []
+
+    if DEMO_MODE:
+        settled = 'normal' if mode in ('home', 'normal') else mode
+        for demo_zone in DEMO_ZONES:
+            zone_id = str(demo_zone.get('zone_id'))
+            if zone_id not in DEMO_ZONE_OVERRIDES:
+                continue
+            if not zone_follows_global_mode(demo_zone):
+                continue
+            DEMO_ZONE_OVERRIDES.discard(zone_id)
+            demo_zone['mode'] = settled
+            released.append(zone_id)
+        if released:
+            config_persistence.save_demo_zones(DEMO_ZONES)
+            add_log_entry(
+                "sent",
+                f"[DEMO] Zone overrides released so global {mode} applies: {', '.join(released)}",
+                command=f"create_override normal NOW ZONE {','.join(released)}",
+                source=source,
+            )
+    elif current_hub:
+        for zone_id in sorted(_zones_with_own_override(current_hub)):
+            zone = current_hub.zones.get(zone_id)
+            if zone is None or not zone_follows_global_mode(zone):
+                continue
+            try:
+                await hub_command(current_hub.async_create_override(
+                    pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
+                    pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                    pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
+                    zone_id,
+                ))
+                released.append(zone_id)
+                add_log_entry(
+                    "sent",
+                    f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) — "
+                    f"released so global {mode} applies",
+                    command=f"create_override normal NOW ZONE {zone_id}",
+                    source=source,
+                )
+            except Exception as exc:
+                # One stubborn zone must not stop the rest of the house from
+                # following the mode that was just asked for.
+                logger.error("Could not release zone override on zone %s: %s", zone_id, exc)
+
+    if released:
+        # These are no longer held by us, whatever put them there.
+        _away_exception_zones_applied -= set(released)
+        _record_away_exceptions_applied()
+
+    return released
+
+
 async def _sync_away_exceptions(mode: str, source: str = "api") -> List[str]:
     """
     Keep the away exceptions in step with the global mode.
@@ -3537,6 +3711,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     if DEMO_MODE:
         for demo_zone in DEMO_ZONES:
             # As on the hub, a zone-level override survives a global change.
+            # The ones that are meant to follow it are released just below.
             if str(demo_zone.get('zone_id')) in DEMO_ZONE_OVERRIDES:
                 continue
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
@@ -3549,6 +3724,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         global_mode_source = source
         config_persistence.save_demo_zones(DEMO_ZONES)
         config_persistence.save_server_state({"global_mode_source": global_mode_source})
+        await _release_zone_overrides_for_global(mode, source=source)
         await _sync_away_exceptions(mode, source=source)
         return
 
@@ -3577,6 +3753,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     global_mode_source = source
     config_persistence.save_server_state({"global_mode_source": global_mode_source})
     await asyncio.sleep(0.5)
+    await _release_zone_overrides_for_global(mode, source=source)
     await _sync_away_exceptions(mode, source=source)
 
 

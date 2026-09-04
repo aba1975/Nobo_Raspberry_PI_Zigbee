@@ -578,6 +578,31 @@
     return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
   }
 
+  /* A zone that will not do what the front page says.
+   *
+   * Two different situations, and only one of them is dangerous. A zone set by
+   * hand now gets released the next time a global mode is chosen, so it is
+   * worth mentioning but not worth alarming anybody about. A zone told to
+   * ignore global modes will hold what it is on through Home and Away alike --
+   * that is the one that can leave a room cold all winter, so it gets the
+   * warning colour and says so plainly. */
+  function zoneOverrideBadge(zone) {
+    const follows = zone.follows_global_mode !== false;
+    const held = !!zone.has_zone_override;
+    if (follows && !held) return '';
+
+    const mode = Nobo.effectiveMode(zone);
+    const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
+
+    if (!follows) {
+      const what = held
+        ? `It is holding ${modeLabel} and will stay there until you change it here.`
+        : 'It follows its own schedule and nothing else.';
+      return `<span class="badge badge-detached" title="Home, Away, Comfort and Eco on the front page do not apply to this zone. ${esc(what)}">Ignores Home/Away</span>`;
+    }
+    return `<span class="badge badge-held" title="This zone was set by hand, so it is holding ${esc(modeLabel)} instead of following its schedule. Choosing a mode on the front page will release it.">Set by hand</span>`;
+  }
+
   function renderSetpointDriftBadge(zone) {
     if (!zone.setpoint_changed_outside) return '';
     return `<span class="badge badge-drift" title="${esc(setpointDriftText(zone))} Open the zone to restore or keep it.">Changed outside app</span>`;
@@ -679,7 +704,7 @@
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
-        <div class="zone-meta">${modeBadge}${manualBadge}${renderSetpointDriftBadge(zone)}</div>
+        <div class="zone-meta">${modeBadge}${manualBadge}${zoneOverrideBadge(zone)}${renderSetpointDriftBadge(zone)}</div>
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -861,6 +886,69 @@
     if (state.view === 'zone') renderZoneDetail();
   }
 
+  /**
+   * The zone's own copy of the hub's "override allowed" flag.
+   *
+   * On the hub this is a field of the zone itself, not something this app keeps,
+   * so turning it off here turns it off in the Nobø app too. Left on, the zone
+   * follows Home, Away, Comfort and Eco chosen on the front page. Turned off,
+   * the zone is deliberately independent -- useful for a workshop or a cellar
+   * that should never be dragged along with the rest of the house.
+   *
+   * The warning below it is the important part: a zone that is both independent
+   * and holding a mode by hand is the one that can sit cold all winter while
+   * the front page cheerfully says Home.
+   */
+  function renderFollowGlobal(zone) {
+    const follows = zone.follows_global_mode !== false;
+    const held = !!zone.has_zone_override;
+    const mode = Nobo.effectiveMode(zone);
+    const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
+
+    let note = '';
+    if (!follows) {
+      note = `
+        <div class="note note-warn">
+          <strong>This zone ignores Home and Away</strong>
+          <div>${held
+            ? `It is holding ${esc(modeLabel)} and will stay there until you change it on this screen.`
+            : `It follows its own schedule. Choosing a mode on the front page will not change it.`}</div>
+        </div>`;
+    } else if (held) {
+      note = `
+        <div class="note">
+          Set by hand, so it is holding ${esc(modeLabel)} rather than following its
+          schedule. Choosing a mode on the front page, or pressing Schedule above,
+          will release it.
+        </div>`;
+    }
+
+    return `
+      <div class="switch zd-follow">
+        <div class="switch-text">
+          <strong>Follow Home and Away</strong>
+          <span>Modes chosen on the front page apply to this zone.</span>
+        </div>
+        <button class="btn" type="button" data-act="follow-global"
+          aria-pressed="${follows ? 'true' : 'false'}">${follows ? 'On' : 'Off'}</button>
+      </div>
+      ${note}`;
+  }
+
+  async function setFollowGlobal(zone, follow) {
+    hold();
+    try {
+      await Nobo.api.updateZone(zone.zone_id, { follow_global_mode: follow });
+      Nobo.toast(follow
+        ? `${zone.name} follows Home and Away`
+        : `${zone.name} now ignores Home and Away`);
+      await refresh(true);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+      await refresh(true);
+    }
+  }
+
   function renderZoneDetail() {
     const zone = state.zones.find(z => String(z.zone_id) === state.zoneId);
     const root = $('#viewZone');
@@ -937,6 +1025,7 @@
               ${esc((Nobo.MODES[m] || {}).label || m)}
             </button>`).join('')}
         </div>
+        ${renderFollowGlobal(zone)}
       </section>
 
       <section class="card">
@@ -987,6 +1076,10 @@
     root.querySelectorAll('[data-setpoint-action]').forEach(b => {
       b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
+    const followBtn = root.querySelector('[data-act="follow-global"]');
+    if (followBtn) {
+      followBtn.onclick = () => setFollowGlobal(zone, zone.follows_global_mode === false);
+    }
     root.querySelectorAll('[data-remove-device]').forEach(b => {
       b.onclick = () => removeDevice(b.dataset.removeDevice);
     });

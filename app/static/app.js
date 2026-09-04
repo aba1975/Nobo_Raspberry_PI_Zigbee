@@ -93,6 +93,24 @@ function setpointChangeActionLabel(zone, field) {
     return (field === 'intended' ? 'Restore ' : 'Keep ') + values.join(' / ');
 }
 
+/* Whether a zone will actually do what the global buttons say.
+ *
+ * A zone-level override outranks the global one on the hub, and a zone can also
+ * be told outright to ignore global modes. Either way the front page could
+ * otherwise claim the house is Home while a room sits on Eco. */
+function renderZoneFollowBadge(zone) {
+    const follows = zone.follows_global_mode !== false;
+    const held = !!zone.has_zone_override;
+    if (follows && !held) return '';
+    if (!follows) {
+        const what = held
+            ? `It is holding ${getModeLabel(zone.current_mode || 'normal')} and will stay there until you change it.`
+            : 'It follows its own schedule only.';
+        return `<div class="zone-list-detached" title="${escapeHtml('Home, Away, Comfort and Eco do not apply to this zone. ' + what)}">Ignores Home/Away</div>`;
+    }
+    return `<div class="zone-list-held" title="${escapeHtml('Set by hand. Choosing a global mode will release it.')}">Set by hand</div>`;
+}
+
 function renderSetpointChangeBadge(zone) {
     if (!zone.setpoint_changed_outside) return '';
     const title = `${setpointChangeSummary(zone)} Open the room to restore or keep it.`;
@@ -571,6 +589,37 @@ async function setGlobalMode(mode) {
     }
 }
 
+/**
+ * Turn the hub's own "override allowed" flag on or off for a zone.
+ *
+ * On means the global buttons reach this zone, which is the safe default: a
+ * zone that follows Home and Away cannot be forgotten on Eco for a season. Off
+ * makes the zone deliberately independent.
+ */
+async function setZoneFollowGlobal(zoneId, follow) {
+    try {
+        const response = await fetch(`/api/zones/${encodeURIComponent(zoneId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ follow_global_mode: follow })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to change the setting');
+        }
+
+        await fetchZones();
+        renderZoneDetail(zoneId);
+        showToast(follow
+            ? 'This zone now follows Home and Away'
+            : 'This zone now ignores Home and Away', 'success');
+    } catch (error) {
+        console.error('Error setting follow-global flag:', error);
+        showToast('Failed to change the setting', 'error');
+    }
+}
+
 async function setZoneOverride(zoneId, mode) {
     try {
         const response = await fetch(`/api/zones/${zoneId}/override/${mode}`, {
@@ -866,6 +915,7 @@ function createZoneListItem(zone) {
             <div class="zone-list-bottom">
                 <div class="zone-list-temp">${setTemp}</div>
                 <div class="zone-list-mode${modeCssClass ? ' ' + modeCssClass : ''}">${modeLabel}</div>
+                ${renderZoneFollowBadge(zone)}
                 ${renderSetpointChangeBadge(zone)}
             </div>
         </div>
@@ -955,6 +1005,14 @@ function renderZoneDetail(zoneId) {
     `;
     
     // Override section
+    const followsGlobal = zone.follows_global_mode !== false;
+    const followNote = !followsGlobal
+        ? `<div class="follow-global-warn">This zone ignores Home and Away. ${hasOverride
+            ? `It is holding ${getModeLabel(mode)} until you change it here.`
+            : 'It follows its own schedule only.'}</div>`
+        : (hasOverride
+            ? `<div class="follow-global-note">Set by hand. Choosing a global mode will release it.</div>`
+            : '');
     const overrideSection = `
         <div class="detail-section">
             <h3>Override</h3>
@@ -964,6 +1022,15 @@ function renderZoneDetail(zoneId) {
                 <button class="override-btn ${mode === 'away' ? 'active' : ''}" onclick="setZoneOverride('${zone.zone_id}', 'away')">🏖️ Away</button>
             </div>
             ${hasOverride ? `<button class="cancel-override-btn" onclick="setZoneOverride('${zone.zone_id}', 'normal')">✖ Cancel Override — Return to Schedule</button>` : ''}
+            <div class="follow-global-row">
+                <div class="follow-global-text">
+                    <strong>Follow Home and Away</strong>
+                    <span>Global modes apply to this zone.</span>
+                </div>
+                <button class="btn btn-sm" onclick="setZoneFollowGlobal('${zone.zone_id}', ${!followsGlobal})"
+                    aria-pressed="${followsGlobal ? 'true' : 'false'}">${followsGlobal ? 'On' : 'Off'}</button>
+            </div>
+            ${followNote}
         </div>
     `;
     

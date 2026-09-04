@@ -13,7 +13,7 @@ difference between what has been proven and what has only been reasoned about.
 
 **Commissioned against real hardware, September 2026.** A live Nobø Hub
 (firmware 116, 7 zones, 11 heaters) in the house it was built for. Phases 1–5
-and 7 of `docs/TEST_MATRIX.md` were run. That found **nine defects that had all
+and 7 of `docs/TEST_MATRIX.md` were run. That found **ten defects that had all
 passed the automated suite** — see the record at the end of the matrix, which is
 worth reading before writing anything that touches the hub.
 
@@ -45,8 +45,18 @@ exist needs real sockets.
 
 **Facts established on hardware, so they need not be re-derived:**
 
-- A **zone override outranks the global override**. The away-exception feature
-  depends on it.
+- A **zone override outranks the global override**, whatever `override_allowed`
+  says. The away-exception feature depends on it. It is also why choosing a
+  global mode now releases the zone overrides of every zone that is set to
+  follow the house — otherwise a zone put on Eco by hand held it for ever.
+- Each zone carries **`override_allowed`** (field 6 of its record, and the
+  checkbox the Nobø app shows). It gates only the *global* override, never a
+  zone-level one. Absent means allowed. Surfaced here as **Follow Home and
+  Away**.
+- `U00` carries the **whole zone record**, and pynobo rebuilds it from its own
+  cache. Two updates in quick succession therefore fight: the second writes back
+  a field the hub has not yet echoed. Name and `override_allowed` are sent as one
+  command for exactly this reason.
 - `off` is a valid **schedule** state (wire status 4) but **not** a valid
   override — `POST /api/zones/{id}/override/off` returns 400. It is no longer
   offered as a choice, but is still read and displayed.
@@ -129,6 +139,16 @@ running container. Mount the repository as above instead.
 needs node on the path. Without it those tests **skip** rather than fail, which
 is easy to miss — see the container command in the README for how to include
 it.
+
+**Reach the app through `server.<name>`, never `from server import <name>`.**
+`tests/test_site_name.py` and `tests/test_ui_switch.py` call
+`importlib.reload(server)`. Reload rebinds the module's globals while reusing the
+module `__dict__`, so the request handlers pick up the new `DEMO_ZONES` while any
+name a test module imported earlier still points at the old list. A test file
+that ran after those two would then assert against a list nothing writes to, and
+pass or fail for reasons unrelated to the code — the symptom is a test that
+passes alone and fails in the full suite. `conftest.py` already resets
+`DEMO_ZONE_OVERRIDES` and the applied-exception set for the same reason.
 
 Most tests run in demo mode, so they never touch a real Nobø Hub. The real-hub
 code paths are covered separately, against `tests/fake_hub.py`:

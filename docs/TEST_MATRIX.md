@@ -319,7 +319,7 @@ leaks after a reconnect. Those seven cover the failure modes that actually bite.
 ## What the first real run found
 
 Run against a live hub (firmware 116, 7 zones, 11 heaters) in September 2026.
-Every phase except 1.6 and parts of 5 was completed. **Nine defects were found,
+Every phase except 1.6 and parts of 5 was completed. **Ten defects were found,
 and every one of them had passed the automated suite**, so they are worth
 recording as a pattern rather than a list.
 
@@ -334,6 +334,7 @@ recording as a pattern rather than a list.
 | Editing a hub built-in reported success | The hub accepts `U02` for its own schedules and silently ignores it |
 | The temperature **minus** button did nothing | Both interfaces stepped 0.5; the hub stores whole degrees, so a half step down rounded back to where it started |
 | The week editor could not be used on a phone | Every change rebuilt the row list, destroying the `<input>` mid-gesture — a time input fires `change` *while* a touch picker is being spun |
+| **A zone set by hand ignored every global mode, for ever** | The suite asserted the opposite: a test named "a zone override outranks a global one" pinned the hub's ranking as the *app's* behaviour, so the stuck zone looked like the specification. Nobody had asked what should then release it |
 
 Two lessons behind almost all of them:
 
@@ -346,6 +347,12 @@ alongside those bugs now fail against the old code.
 **A desktop browser is not the device.** The week editor bug was reachable only
 by touch, and had been present for months. UI work now gets checked under touch
 emulation, not just a desktop window.
+
+**A passing test can be pinning down the wrong thing.** The stuck-zone defect had
+a test sitting directly on top of it, asserting that a zone override survives a
+global mode. That was a true statement about the hub and a dangerous one about
+the app, and it made the bug look intended. When a test encodes hardware
+behaviour, say what the *app* should do about that behaviour as well.
 
 Three things were also established as facts rather than assumptions:
 
