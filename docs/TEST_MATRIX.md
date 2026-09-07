@@ -333,6 +333,7 @@ recording as a pattern rather than a list.
 | Week profile names came out as `Teknisk\xa0Rom` | Missing `decode_hub_name()` on one endpoint |
 | Editing a hub built-in reported success | The hub accepts `U02` for its own schedules and silently ignores it |
 | The temperature **minus** button did nothing | Both interfaces stepped 0.5; the hub stores whole degrees, so a half step down rounded back to where it started |
+| **Every override expired at the next schedule change** | The suite drove overrides through the API and asserted on the resulting *mode*, which was correct in both cases. The lifetime is a separate field on the wire that no API response reflects, so nothing ever looked at it. Found by the owner in use: an away period with no return date ended itself and the cabin warmed back up |
 | The week editor could not be used on a phone | Every change rebuilt the row list, destroying the `<input>` mid-gesture — a time input fires `change` *while* a touch picker is being spun |
 | **A zone set by hand ignored every global mode, for ever** | The suite asserted the opposite: a test named "a zone override outranks a global one" pinned the hub's ranking as the *app's* behaviour, so the stuck zone looked like the specification. Nobody had asked what should then release it |
 
@@ -440,3 +441,59 @@ thing.
 units that announce themselves over the radio — the Switch SW4, the TCU 700, Nobø
 Sense — and no device in this house has a pairing mode to enter. Anyone who owns
 one should try it while the official app is still available to fall back on.
+
+---
+
+## The override lifetime defect
+
+Found 7 September 2026 by the owner, in ordinary use, on the production system.
+
+An away period was set with no return date. The official Nobø app showed it as
+**"automatic return"** rather than **"konstant"**, and some hours later the zones
+had gone back to their weekly schedules — while this app's front page still said
+Away, with an "I'm back now" button.
+
+**Root cause.** Every override carries a lifetime alongside its mode:
+
+| Value | The Nobø app calls it | Effect |
+|---|---|---|
+| `OVERRIDE_TYPE_NOW` | automatic return | Hub cancels it at the next week-profile switch point |
+| `OVERRIDE_TYPE_CONSTANT` | konstant | Holds until explicitly cancelled |
+
+All nine `async_create_override` calls sent `NOW`. Confirmed against Home
+Assistant's own `nobo_hub` integration, which offers both and describes them as:
+*"Select 'Now' to end the override on the next week profile change, or
+'Constant' to keep it until manually cleared."* Home Assistant defaults to
+`CONSTANT`.
+
+**Three features were affected, only one of them visibly:**
+
+1. An away period with no return date ended itself. The cabin warmed back up
+   while empty, and the interface went on claiming it was away.
+2. A zone set to Eco by hand reverted at the next schedule transition.
+3. **The away exception silently stopped working.** That feature exists to hold
+   a room *above* the fixed 7 °C anti-frost temperature — pipes in a wall. Its
+   Eco override expired at the first schedule change and the room fell to 7 °C
+   for the rest of the trip. Nothing reported it. This is the most consequential
+   of the three and nobody had noticed it.
+
+**Why the tests missed it.** They drove overrides through the HTTP API and
+asserted on the resulting *mode*, which was right in every case at the moment of
+asserting. The lifetime is a wire field that no API response reflects, and the
+fake hub stored it without anyone ever reading it back. The new tests in
+`tests/test_override_lifetime.py` assert on the stored record, and one of them
+fails if `OVERRIDE_TYPE_NOW` appears anywhere in `server.py` again.
+
+**A second, independent defect surfaced by the same report.** The front page
+stated the plan rather than the truth: an away period this app believed was
+running was rendered as "Empty until…" regardless of what the zones were
+actually doing. It now detects the divergence, says *"Away period is not being
+honoured"*, and offers both **Put it back on Away** and **End the away period**.
+It deliberately does not re-apply Away by itself — the scheduler stopped doing
+that on purpose, because somebody who comes home early and presses Comfort
+should not be overruled thirty seconds later.
+
+**Lesson.** *A test that asserts the observable outcome can still miss the
+instruction that produced it.* Both the mode and the lifetime were sent on the
+same command; only one of them was ever checked, and the wrong one was invisible
+until a schedule transition hours later — long after any test had finished.

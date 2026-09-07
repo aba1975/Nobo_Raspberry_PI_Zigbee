@@ -268,6 +268,33 @@
 
     const mode = Nobo.houseMode(state.zones);
 
+    /* An away period this app believes is running, on a house that is not
+       actually away.
+       
+       The card used to state the plan rather than the truth, so it kept saying
+       "Empty until Sunday" with an "I'm back now" button while every zone had
+       quietly gone back to its weekly schedule. Something else had moved the
+       house on: an override that expired by itself, or a change made in the
+       official Nobø app.
+
+       This is deliberately not corrected by silently re-applying Away. The
+       scheduler stopped doing that on purpose — somebody who comes home early
+       and presses Comfort should not be forced back to Away half a minute
+       later. So the card reports the disagreement and offers both ways out. */
+    if (a.enabled && a.currently_active && mode !== 'away') {
+      card.classList.add('is-away');
+      stateEl.textContent = 'Away period is not being honoured';
+      detail.textContent =
+        `This app has an away period running${a.end_at ? ' until ' + Nobo.fmtWhen(a.end_at) : ''}, `
+        + `but ${SITE_IN()} is ${mode === 'home' ? 'following its normal schedules' : 'on ' + mode} instead. `
+        + 'Something changed it — most likely the Nobø app.';
+      actions.innerHTML = `
+        <button class="btn btn-primary" data-act="reapply" type="button">Put it back on Away</button>
+        <button class="btn" data-act="arrive" type="button">End the away period</button>`;
+      wireTripActions(actions);
+      return;
+    }
+
     if (a.enabled && a.currently_active) {
       card.classList.add('is-away');
       if (a.end_at) {
@@ -335,8 +362,19 @@
         if (act === 'leave' || act === 'plan') openTripSheet();
         if (act === 'arrive') arriveNow();
         if (act === 'delete-trip') deleteAwayPeriod();
+        if (act === 'reapply') reapplyAway();
       };
     });
+  }
+
+  /** Put the house back on Away, for an away period that stopped being honoured. */
+  async function reapplyAway() {
+    hold();
+    try {
+      await Nobo.api.setGlobalMode('away');
+      Nobo.toast(`${SITE_IN()} is back on Away`);
+      await refresh(true);
+    } catch (e) { Nobo.toast(e.message, 'error'); }
   }
 
   /** Remove the away window entirely. Reachable from the card and the sheet. */

@@ -406,6 +406,45 @@ Two related things that are *not* the same:
   as it does to any other, so a bathroom with pipes in the wall holds its Eco
   temperature for however long the building stays empty.
 
+### How long an override lasts, and why it matters
+
+Every override this app sends carries a **lifetime** as well as a mode, and the
+Nobø app shows the same choice when you set Away by hand:
+
+| Lifetime | The official app calls it | What the hub does |
+| --- | --- | --- |
+| `NOW` | "automatic return" | Cancels the override at the **next week-profile switch point** |
+| `CONSTANT` | "konstant" | Holds it until something explicitly cancels it |
+
+**This app always sends `CONSTANT`.** Nothing here wants an override that
+disappears on its own: the away period ends itself on its return date, **I'm
+back** ends it early, and choosing a whole-house mode releases zone overrides
+deliberately. Those are all explicit cancellations, which is exactly what
+`CONSTANT` waits for.
+
+It used to send `NOW`, and that quietly broke three promises — an away period
+with no return date ended at the next scheduled change and the cabin warmed
+itself back up; a zone set by hand did the same; and the Eco override that keeps
+a room above 7 °C during Away expired at the first schedule transition, so the
+pipes-in-the-wall protection stopped working part way through every trip. If you
+are comparing against an older version, that is the difference.
+
+The command log names the lifetime on every line, so
+`create_override(AWAY, CONSTANT, GLOBAL)` is what you should see.
+
+### When the house is not doing what the away period says
+
+The front page will occasionally tell you **"Away period is not being
+honoured"**. That means this app has an away period running, but the zones are
+not on Away — something moved them, most likely the official Nobø app, or a
+person pressing a button.
+
+The card offers **Put it back on Away** and **End the away period**, and does not
+choose for you. It deliberately does not re-apply Away by itself: the scheduler
+used to re-send it every 30 seconds, which meant somebody who came home early and
+pressed Comfort was forced back to Away half a minute later with no explanation.
+Reporting the disagreement is more useful than silently winning it.
+
 ### Rooms that must not get cold
 
 **Away is 7 °C, and that is fixed.** It is an anti-frost setting decided by the

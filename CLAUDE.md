@@ -55,6 +55,14 @@ exist needs real sockets.
   says. The away-exception feature depends on it. It is also why choosing a
   global mode now releases the zone overrides of every zone that is set to
   follow the house — otherwise a zone put on Eco by hand held it for ever.
+- Every override carries a **lifetime**. `OVERRIDE_TYPE_NOW` is cancelled by the
+  hub at the next week-profile switch point — the official app calls it
+  "automatic return" — and `OVERRIDE_TYPE_CONSTANT` holds until something
+  cancels it. This app sends `CONSTANT` everywhere, via
+  `OVERRIDE_UNTIL_CANCELLED`. Sending `NOW` silently expired open-ended away
+  periods, hand-set zones, and the away exceptions that keep a room above
+  7 °C. There is a test that fails if `OVERRIDE_TYPE_NOW` reappears in
+  `server.py` at all.
 - Each zone carries **`override_allowed`** (field 6 of its record, and the
   checkbox the Nobø app shows). It gates only the *global* override, never a
   zone-level one. Absent means allowed. Surfaced here as **Follow Home and

@@ -216,6 +216,36 @@ def _drop_impossible_demo_temperatures(zones: list) -> int:
 # Away temperature (set by Nobø, not configurable)
 AWAY_TEMPERATURE = 7.0
 
+# How long an override lives.
+#
+# Every override carries a *lifetime* as well as a mode, and the two choices
+# behave very differently:
+#
+#   NOW       the hub cancels the override at the next week-profile switch
+#             point. The official app calls this "automatic return".
+#   CONSTANT  the override stands until something explicitly cancels it. The
+#             official app calls this "konstant".
+#
+# This application sent NOW for everything, which quietly broke three separate
+# promises. An away period with no return date ended itself at the next
+# scheduled change, so a cabin left empty warmed back up on its own while the
+# front page still said Away. A zone put on Eco by hand did the same. Worst of
+# all, the Eco override that keeps a room *above* the 7 °C anti-frost
+# temperature during Away — the pipes-in-the-wall feature — expired at the first
+# schedule transition and let that room fall to 7 °C after all.
+#
+# Nothing in this application wants an override that disappears on its own. The
+# away schedule ends its own period, "I'm back" ends it early, and a global mode
+# change releases zone overrides deliberately (see
+# _release_zone_overrides_for_global). All of those are explicit cancellations,
+# which is exactly what CONSTANT waits for.
+OVERRIDE_UNTIL_CANCELLED = pynobo.nobo.API.OVERRIDE_TYPE_CONSTANT
+"""The lifetime to send with every override this application creates.
+
+Cancelling an override (mode ``NORMAL``) removes the record outright, so the
+lifetime carries no meaning there — it is passed for consistency only.
+"""
+
 # Default demo schedule — shared by get_current_schedule_mode() and get_zone_schedule()
 DEFAULT_DEMO_SCHEDULE = {
     'monday':    [{'start': '00:00', 'end': '07:00', 'mode': 'eco'},
@@ -2747,8 +2777,8 @@ async def set_zone_override(zone_id: str, mode: str):
                 DEMO_ZONE_OVERRIDES.add(zone_id)
             add_log_entry(
                 "sent",
-                f"[DEMO] Would send: create_override(now, 0, {mode.upper()}, zone_{zone_id})",
-                command=f"create_override now 0 {mode} {zone_id}",
+                f"[DEMO] Would send: create_override({mode.upper()}, CONSTANT, ZONE, zone_{zone_id})",
+                command=f"create_override {mode} CONSTANT ZONE {zone_id}",
                 source="api",
             )
             add_log_entry(
@@ -2767,28 +2797,28 @@ async def set_zone_override(zone_id: str, mode: str):
             # Remove override - return to schedule
             await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
             ))
             add_log_entry(
                 "sent",
-                f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) — cancel override",
-                command=f"create_override NORMAL NOW ZONE {zone_id}",
+                f"create_override(NORMAL, CONSTANT, ZONE, zone_{zone_id}) — cancel override",
+                command=f"create_override NORMAL CONSTANT ZONE {zone_id}",
                 source="api",
             )
         else:
             # Set override mode
             await hub_command(current_hub.async_create_override(
                 mode_map[mode],
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
             ))
             add_log_entry(
                 "sent",
-                f"create_override({mode.upper()}, NOW, ZONE, zone_{zone_id})",
-                command=f"create_override {mode} NOW ZONE {zone_id}",
+                f"create_override({mode.upper()}, CONSTANT, ZONE, zone_{zone_id})",
+                command=f"create_override {mode} CONSTANT ZONE {zone_id}",
                 source="api",
             )
         
@@ -3158,8 +3188,8 @@ async def set_global_override(mode: str):
                 demo_zone['mode'] = 'normal' if mode == 'home' else mode
             add_log_entry(
                 "sent",
-                f"[DEMO] Would send: create_override(now, 0, {mode.upper()}, all zones)",
-                command=f"create_override now 0 {mode} all",
+                f"[DEMO] Would send: create_override({mode.upper()}, CONSTANT, GLOBAL)",
+                command=f"create_override {mode} CONSTANT GLOBAL",
                 source="api",
             )
             add_log_entry(
@@ -3184,25 +3214,25 @@ async def set_global_override(mode: str):
         if mode == 'normal' or mode == 'home':
             await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
             ))
             add_log_entry(
                 "sent",
-                "create_override(NORMAL, NOW, GLOBAL) — cancel all overrides",
-                command="create_override NORMAL NOW GLOBAL",
+                "create_override(NORMAL, CONSTANT, GLOBAL) — cancel all overrides",
+                command="create_override NORMAL CONSTANT GLOBAL",
                 source="api",
             )
         else:
             await hub_command(current_hub.async_create_override(
                 mode_map[mode],
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
             ))
             add_log_entry(
                 "sent",
-                f"create_override({mode.upper()}, NOW, GLOBAL)",
-                command=f"create_override {mode} NOW GLOBAL",
+                f"create_override({mode.upper()}, CONSTANT, GLOBAL)",
+                command=f"create_override {mode} CONSTANT GLOBAL",
                 source="api",
             )
         
@@ -3422,7 +3452,7 @@ async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home
     Release the zone-level Eco overrides that ``_apply_away_exceptions`` created.
 
     A zone override outranks the global override on the hub, which is exactly why
-    the away exception works â€” and exactly why coming home does not undo it.
+    the away exception works — and exactly why coming home does not undo it.
     ``create_override(NORMAL, GLOBAL)`` cancels the *global* override only, so
     without this the excluded room holds Eco for ever and no amount of pressing
     Home will free it.
@@ -3460,7 +3490,7 @@ async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home
             add_log_entry(
                 "sent",
                 f"[DEMO] Away exceptions released: {', '.join(released)}",
-                command=f"create_override normal NOW ZONE {','.join(released)}",
+                command=f"create_override normal CONSTANT ZONE {','.join(released)}",
                 source=source,
             )
         _away_exception_zones_applied = set()
@@ -3478,15 +3508,15 @@ async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home
         try:
             await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
             ))
             released.append(zone_id)
             add_log_entry(
                 "sent",
-                f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) â€” away exception released",
-                command=f"create_override normal NOW ZONE {zone_id}",
+                f"create_override(NORMAL, CONSTANT, ZONE, zone_{zone_id}) — away exception released",
+                command=f"create_override normal CONSTANT ZONE {zone_id}",
                 source=source,
             )
         except Exception as exc:
@@ -3534,7 +3564,7 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
             add_log_entry(
                 "sent",
                 f"[DEMO] Away exceptions kept on Eco: {', '.join(applied)}",
-                command=f"create_override now 0 eco {','.join(applied)}",
+                command=f"create_override eco CONSTANT ZONE {','.join(applied)}",
                 source=source,
             )
         _away_exception_zones_applied.update(applied)
@@ -3553,15 +3583,15 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
         try:
             await hub_command(current_hub.async_create_override(
                 pynobo.nobo.API.OVERRIDE_MODE_ECO,
-                pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                OVERRIDE_UNTIL_CANCELLED,
                 pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                 zone_id,
             ))
             applied.append(zone_id)
             add_log_entry(
                 "sent",
-                f"create_override(ECO, NOW, ZONE, zone_{zone_id}) — away exception",
-                command=f"create_override eco NOW ZONE {zone_id}",
+                f"create_override(ECO, CONSTANT, ZONE, zone_{zone_id}) — away exception",
+                command=f"create_override eco CONSTANT ZONE {zone_id}",
                 source=source,
             )
         except Exception as exc:
@@ -3619,7 +3649,7 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
             add_log_entry(
                 "sent",
                 f"[DEMO] Zone overrides released so global {mode} applies: {', '.join(released)}",
-                command=f"create_override normal NOW ZONE {','.join(released)}",
+                command=f"create_override normal CONSTANT ZONE {','.join(released)}",
                 source=source,
             )
     elif current_hub:
@@ -3630,16 +3660,16 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
             try:
                 await hub_command(current_hub.async_create_override(
                     pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
-                    pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+                    OVERRIDE_UNTIL_CANCELLED,
                     pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
                     zone_id,
                 ))
                 released.append(zone_id)
                 add_log_entry(
                     "sent",
-                    f"create_override(NORMAL, NOW, ZONE, zone_{zone_id}) — "
+                    f"create_override(NORMAL, CONSTANT, ZONE, zone_{zone_id}) — "
                     f"released so global {mode} applies",
-                    command=f"create_override normal NOW ZONE {zone_id}",
+                    command=f"create_override normal CONSTANT ZONE {zone_id}",
                     source=source,
                 )
             except Exception as exc:
@@ -3717,8 +3747,8 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
         add_log_entry(
             "sent",
-            f"[DEMO] Schedule: create_override(now, 0, {mode.upper()}, all zones)",
-            command=f"create_override now 0 {mode} all",
+            f"[DEMO] Schedule: create_override({mode.upper()}, CONSTANT, GLOBAL)",
+            command=f"create_override {mode} CONSTANT GLOBAL",
             source=source,
         )
         global_mode_source = source
@@ -3741,13 +3771,13 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     if mode == 'normal' or mode == 'home':
         await hub_command(current_hub.async_create_override(
             pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
-            pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+            OVERRIDE_UNTIL_CANCELLED,
             pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
         ))
     else:
         await hub_command(current_hub.async_create_override(
             mode_map[mode],
-            pynobo.nobo.API.OVERRIDE_TYPE_NOW,
+            OVERRIDE_UNTIL_CANCELLED,
             pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL,
         ))
     global_mode_source = source
