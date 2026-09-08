@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
@@ -68,18 +68,18 @@ class SensorSettings:
 class AutomationZoneState:
     """What this automation is in the middle of, for one zone.
 
-    ``owned_with_override`` records that the hold was only permitted because
-    the zone had ``override_all_modes`` set. It has to be remembered rather
-    than re-derived: while our own override is in place it masks the mode the
-    room would otherwise be showing, so there is nothing left to compare
-    against once the hold exists.
+    Three facts and no more: when the room was first opened, whether its
+    left-open warning has been raised, and which override — if any — this
+    automation put there and is therefore entitled to take away.
+
+    Deliberately nothing about who has "taken over". Which mode should be
+    running is worked out from what is true now, not from the order in which
+    people pressed things, so there is nothing else to remember.
     """
 
     open_started_at: Optional[float] = None
     warning_raised: bool = False
     owned_action: Optional[ActionWhenOpen] = None
-    suppressed: bool = False
-    owned_with_override: bool = False
 
     def __post_init__(self):
         if self.owned_action is not None:
@@ -138,9 +138,15 @@ _POLICY_FIELDS = {
         "warning_delay_seconds", "action_when_open",
         "action_delay_seconds", "override_all_modes",
     }),
+    4: frozenset({
+        "warning_delay_seconds", "action_when_open",
+        "action_delay_seconds", "override_all_modes",
+    }),
 }
 
-# The same, for what the automation had in flight when it was last saved.
+# The same, for what the automation had in flight when it was last saved. The
+# suppression flags v1-v3 carried are read and discarded: the rule no longer
+# remembers who last touched a room, it re-decides from what is true now.
 _AUTOMATION_FIELDS = {
     1: frozenset({"open_started_at", "warning_raised", "eco_owned", "suppressed"}),
     2: frozenset({"open_started_at", "warning_raised", "owned_action", "suppressed"}),
@@ -148,6 +154,7 @@ _AUTOMATION_FIELDS = {
         "open_started_at", "warning_raised", "owned_action",
         "suppressed", "owned_with_override",
     }),
+    4: frozenset({"open_started_at", "warning_raised", "owned_action"}),
 }
 
 
@@ -188,7 +195,7 @@ def _load(path: Path, default: Any, validator):
 
 
 def _parse_settings(payload: Any) -> SensorSettings:
-    doc = _document(payload, (1, 2, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
     enabled = _require_bool(doc.get("enabled"), "enabled")
     provider = doc.get("provider")
     if provider != "simulated":
@@ -218,7 +225,7 @@ def _parse_settings(payload: Any) -> SensorSettings:
             # wanting past it, so they migrate with the escape hatch shut.
             override_all_modes=(
                 _require_bool(item["override_all_modes"], "override_all_modes")
-                if version == SCHEMA_VERSION
+                if version >= 3
                 else False
             ),
         )
@@ -245,7 +252,7 @@ _SENSOR_FIELDS = {
 
 
 def _parse_sensors(payload: Any) -> list[dict]:
-    doc = _document(payload, (1, 2, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
     rows = doc.get("sensors")
     if type(rows) is not list:
         raise InvalidSensorData("sensors must be an array")
@@ -299,7 +306,7 @@ def save_simulated_sensors(sensors: list[Mapping[str, Any]], path: Optional[Path
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
-    doc = _document(payload, (1, 2, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
     version = doc["schema_version"]
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
@@ -329,16 +336,6 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
             owned_action=owned_action,
-            suppressed=_require_bool(row["suppressed"], "suppressed"),
-            owned_with_override=(
-                _require_bool(row["owned_with_override"], "owned_with_override")
-                if version == SCHEMA_VERSION
-                # Older builds applied holds with no warmth ordering at all, so
-                # a hold carried over from one of them cannot be shown to be
-                # permitted now. Marking it as override-created means the next
-                # evaluation hands it back unless the zone opts in.
-                else owned_action is not None
-            ),
         )
     return result
 

@@ -9,11 +9,21 @@ testable on a fake clock with no hub of any kind.
 Two ideas carry most of the weight.
 
 **Warmth has an order.** ``off`` is colder than ``away``, which is colder than
-``eco``, which is colder than ``comfort``. A contact rule is a safety net, not
-a thermostat, so by default it is only allowed to move a room *down* that
-order. A window left open in a house that is already Away must not pull the
-room up to Eco. A zone whose policy has ``override_all_modes`` set has said, in
-so many words, "ignore that" — and that is the only way past it.
+``eco``, which is colder than ``comfort``.
+
+**While a contact is open, the room runs whichever is colder: what the rule
+asks for, or what the room would be doing anyway.** That single sentence is the
+whole policy, and it is worked out afresh on every pass rather than remembered.
+Press Comfort for the house with a window open and an Eco rule, and the room
+goes back to Eco — the rule has not been "overruled", it is simply still the
+colder of the two. Press Away and Away wins, because now *that* is colder. A
+zone whose policy has ``override_all_modes`` set skips the comparison: its
+action holds until the contact closes, whatever anyone else asks for.
+
+Deciding this from scratch each time is what makes it predictable. An earlier
+version remembered that somebody had "taken over" and stood down for the rest
+of the open cycle, which meant the room's temperature depended on the order
+things had happened in rather than on what was true now.
 
 **Only what we created is ours to undo.** An override this automation applied
 is written down, and on closure exactly that override is cancelled with a
@@ -47,6 +57,22 @@ HEATING_PRIORITY = {
     "eco": 1,
     "comfort": 2,
 }
+
+# How long an open room may go without its decision being re-taken. Which mode
+# should be running depends on the week profile, and a profile switching from
+# Comfort to Eco at ten at night is not an event anything here can subscribe
+# to. A minute is far below the resolution anybody heats a room at, and it only
+# applies while something is actually open.
+RECHECK_WHILE_OPEN_SECONDS = 60
+
+# How long a zone we have just written to is allowed to disagree with us before
+# we believe it. A real hub applies an override asynchronously and only shows it
+# once it echoes back, so for a moment after sending one the zone still reports
+# its old mode and no override at all. Without this, the very next evaluation —
+# and any contact anywhere in the house triggers one — would read that as
+# "somebody has taken the room off us" and send the same command again.
+SETTLING_SECONDS = 5.0
+
 
 def is_colder(candidate: str, reference: str) -> Optional[bool]:
     """Whether *candidate* is colder than *reference*, or None if unrankable."""
@@ -93,25 +119,16 @@ class AggregateState(str, Enum):
 class ActionStatus(str, Enum):
     """What the zone's heating rule is doing, for the interface to explain."""
 
-    IDLE = "idle"                # no open contact, or nothing left to do
-    PENDING = "pending"          # open, waiting for the action delay
-    ACTIVE = "active"            # this automation is holding an override
-    BLOCKED = "blocked"          # due, but not permitted — see ``block_reason``
-    SUPPRESSED = "suppressed"    # somebody took the zone over this open cycle
+    IDLE = "idle"        # no open contact, or nothing that needs doing
+    PENDING = "pending"  # open, waiting for the action delay
+    ACTIVE = "active"    # this automation is holding an override
+    BLOCKED = "blocked"  # due, but standing down — see ``block_reason``
 
 
 class BlockReason(str, Enum):
-    COLDER_MODE = "colder_mode"                # already at or below the target
-    MANUAL_OVERRIDE = "manual_override"        # somebody else's zone override
-    NO_EQUIPMENT = "no_equipment"              # monitoring-only room
-    DISCONNECTED = "disconnected"              # no hub to ask
-    NOTHING_TO_RELEASE = "nothing_to_release"  # "Follow schedule" with no hold
-
-
-@dataclass(frozen=True)
-class Permission:
-    allowed: bool
-    reason: Optional[BlockReason] = None
+    COLDER_MODE = "colder_mode"      # the room is already colder than the rule
+    NO_EQUIPMENT = "no_equipment"    # monitoring-only room
+    DISCONNECTED = "disconnected"    # no hub to ask
 
 
 @dataclass(frozen=True)
@@ -126,7 +143,6 @@ class ZoneAggregate:
     warning_deadline: Optional[float]
     action_deadline: Optional[float]
     owned_action: Optional[ActionWhenOpen]
-    suppressed: bool
     action_status: ActionStatus = ActionStatus.IDLE
     block_reason: Optional[BlockReason] = None
 
@@ -180,10 +196,31 @@ class _ZonePass:
     zone: Optional[HeatingZone]
     now: float
 
+    settling: bool = False
     changed: bool = False
-    released_this_pass: bool = False
     status: ActionStatus = ActionStatus.IDLE
     block_reason: Optional[BlockReason] = None
+
+    @property
+    def owns_override(self) -> bool:
+        return self.state.owned_action is not None
+
+    @property
+    def ambient_mode(self) -> str:
+        """What this room would be running if this automation did nothing.
+
+        While we hold the override it is masking whatever the house would
+        otherwise be showing, so the answer is the zone's fallback — the global
+        override if one is active and the zone follows it, else the week
+        profile. When we hold nothing, what the room is running *is* the
+        answer, including somebody else's hold on it.
+        """
+        if self.zone is None:
+            return ""
+        return (
+            self.zone.fallback_mode if self.owns_override
+            else self.zone.effective_mode
+        )
 
     @property
     def any_open(self) -> bool:
@@ -232,59 +269,41 @@ class SensorAutomation:
                 open_started_at=state.open_started_at,
                 warning_raised=state.warning_raised,
                 owned_action=state.owned_action,
-                suppressed=state.suppressed,
-                owned_with_override=state.owned_with_override,
             )
             for zone_id, state in (states or {}).items()
         }
         self._save_fn = save
         self._commands = commands
         self._clock = clock
+        # When we last sent a command for each zone. In memory only and on
+        # purpose: it exists to cover the gap before a hub confirms a write,
+        # and a restart means there is nothing in flight to cover.
+        self._commanded_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
-    # Permission
+    # Deciding
     # ------------------------------------------------------------------
 
     @staticmethod
-    def permission(
-        zone: Optional[HeatingZone], policy: ZoneSensorPolicy
-    ) -> Permission:
-        """Whether this zone's configured action may run right now.
+    def mode_to_hold(
+        action: ActionWhenOpen, ambient: str, override_all_modes: bool
+    ) -> Optional[ActionWhenOpen]:
+        """Which mode this rule should be holding, or None to hold nothing.
 
-        The rules differ by kind of action, but the shape is the same: the room
-        has to be reachable and heatable, nobody else may be holding it, and —
-        unless the zone has explicitly opted out — the result has to be colder
-        than what the room is doing already.
+        The whole policy, in one place. With the escape hatch off, the rule
+        gets its way only while its mode is colder than what the room would be
+        doing anyway; the moment the house asks for something colder still,
+        that wins and this holds nothing. With it on, the rule always wins.
+
+        ``ambient`` unrankable — a mode this build does not know — is treated
+        as "leave it alone", because guessing at an unfamiliar mode is how a
+        room ends up warmer than somebody meant it to be.
         """
-        action = policy.action_when_open
-        if action is ActionWhenOpen.NOTHING:
-            return Permission(False)
-        if zone is None or not zone.connected:
-            return Permission(False, BlockReason.DISCONNECTED)
-        if not zone.has_equipment:
-            return Permission(False, BlockReason.NO_EQUIPMENT)
-
-        if action is ActionWhenOpen.SCHEDULE:
-            # Letting go of a hold rather than taking one. There has to be a
-            # hold to let go of, and where the room would land has to be colder
-            # — releasing a manual Away onto a Comfort week profile is a warming
-            # change like any other.
-            if not zone.has_zone_override:
-                return Permission(False, BlockReason.NOTHING_TO_RELEASE)
-            if policy.override_all_modes:
-                return Permission(True)
-            if is_colder(zone.fallback_mode, zone.effective_mode):
-                return Permission(True)
-            return Permission(False, BlockReason.COLDER_MODE)
-
-        # Taking a hold. Somebody else's zone override outranks us, always.
-        if zone.has_zone_override:
-            return Permission(False, BlockReason.MANUAL_OVERRIDE)
-        if policy.override_all_modes:
-            return Permission(True)
-        if is_colder(action.value, zone.effective_mode):
-            return Permission(True)
-        return Permission(False, BlockReason.COLDER_MODE)
+        if action not in HOLD_ACTIONS:
+            return None
+        if override_all_modes:
+            return action
+        return action if is_colder(action.value, ambient) else None
 
     # ------------------------------------------------------------------
     # Evaluation
@@ -319,11 +338,11 @@ class SensorAutomation:
                 contacts=grouped[zone_id],
                 zone=heating.get(zone_id),
                 now=now,
+                settling=self._settling(zone_id, now),
             )
 
             self._drop_ownership_taken_by_others(step)
             self._begin_cycle_if_newly_open(step)
-            await self._release_ownership_the_policy_no_longer_allows(step, actions)
             self._raise_warning_if_due(step, events)
             await self._run_action_if_due(step, actions)
             await self._finish_cycle_if_settled(step, actions, events)
@@ -343,6 +362,20 @@ class SensorAutomation:
             for deadline in (aggregate.warning_deadline, aggregate.action_deadline)
             if deadline is not None and deadline > now
         ]
+        if any(
+            aggregate.open_started_at is not None
+            and policies[zone_id].action_when_open is not ActionWhenOpen.NOTHING
+            for zone_id, aggregate in aggregates.items()
+        ):
+            deadlines.append(now + RECHECK_WHILE_OPEN_SECONDS)
+        # Look again as soon as a zone stops settling, so a change made while
+        # our own write was in flight is honoured in seconds rather than at the
+        # next routine re-check.
+        deadlines.extend(
+            sent + SETTLING_SECONDS
+            for sent in self._commanded_at.values()
+            if sent + SETTLING_SECONDS > now
+        )
         return AutomationResult(
             zones=aggregates,
             actions=tuple(actions),
@@ -351,21 +384,26 @@ class SensorAutomation:
         )
 
     def _drop_ownership_taken_by_others(self, step: _ZonePass) -> None:
-        """Let go the moment the zone stops looking like what we applied.
+        """Stop claiming a zone that no longer looks like what we applied.
 
-        Somebody turning a room to Comfort in the official app is a decision,
-        and it outranks a window. Ownership is dropped without sending
-        anything, and the rest of this open cycle is suppressed so we do not
-        immediately undo them.
+        Somebody has changed it in the official app, or a global mode has
+        released our override. Nothing is sent: we simply stop calling it ours,
+        and the next decision is taken against what the room is now doing. If
+        that new mode is warmer than the rule asks for, the rule takes the room
+        back on this same pass — the colder of the two always runs.
         """
         state, zone = step.state, step.zone
         if state.owned_action is None or zone is None or not zone.connected:
             return
         if self._still_ours(zone, state.owned_action):
+            self._commanded_at.pop(step.zone_id, None)
+            return
+        if step.settling:
+            # We wrote to this zone a moment ago and the hub has not echoed it
+            # back yet. Disagreement this soon is our own command in flight,
+            # not somebody overruling us.
             return
         state.owned_action = None
-        state.owned_with_override = False
-        state.suppressed = state.open_started_at is not None
         step.changed = True
 
     def _begin_cycle_if_newly_open(self, step: _ZonePass) -> None:
@@ -374,40 +412,6 @@ class SensorAutomation:
             return
         state.open_started_at = step.now
         state.warning_raised = False
-        state.suppressed = False
-        step.changed = True
-
-    async def _release_ownership_the_policy_no_longer_allows(
-        self, step: _ZonePass, actions: list[RequestedAction]
-    ) -> None:
-        """Hand back an override the current policy would not create today.
-
-        Two ways that happens: the action was changed to something else, or
-        Sensor override was switched off under a hold that only existed because
-        it was on. Whether the hold is still permitted cannot be re-derived once
-        it is in place — our own override masks the mode the room would
-        otherwise show — which is exactly why that flag is recorded alongside
-        the ownership rather than worked out again here.
-        """
-        state = step.state
-        if state.owned_action is None or step.contacts_settled:
-            return
-        stale_action = state.owned_action is not step.policy.action_when_open
-        lost_permission = (
-            state.owned_with_override and not step.policy.override_all_modes
-        )
-        if not (stale_action or lost_permission):
-            return
-        if not self._still_ours(step.zone, state.owned_action):
-            return
-        action = await self._command_release(step.zone_id)
-        actions.append(action)
-        step.released_this_pass = True
-        if not action.succeeded:
-            return
-        state.owned_action = None
-        state.owned_with_override = False
-        state.suppressed = True
         step.changed = True
 
     def _raise_warning_if_due(
@@ -427,55 +431,99 @@ class SensorAutomation:
     async def _run_action_if_due(
         self, step: _ZonePass, actions: list[RequestedAction]
     ) -> None:
-        """Apply or release once the action delay has passed, if permitted."""
-        state, policy = step.state, step.policy
-        if policy.action_when_open is ActionWhenOpen.NOTHING:
+        """Bring the room to whichever is colder, the rule or the house.
+
+        Re-decided on every pass, so pressing Comfort for the house while a
+        window is open puts the room straight back on the rule's mode, and
+        pressing Away lets Away through — without either being remembered as
+        having "won".
+        """
+        state, policy, zone = step.state, step.policy, step.zone
+        action = policy.action_when_open
+        if action is ActionWhenOpen.NOTHING:
             return
         if state.open_started_at is None or step.contacts_settled:
-            return
-        if state.owned_action is not None:
-            step.status = ActionStatus.ACTIVE
-            return
-        if state.suppressed:
-            step.status = ActionStatus.SUPPRESSED
             return
         if step.now < state.open_started_at + policy.action_delay_seconds:
             step.status = ActionStatus.PENDING
             return
-
-        permission = self.permission(step.zone, policy)
-        if not permission.allowed:
-            # "Nothing to release" is the resting state of a Follow schedule
-            # rule, not a fault worth colouring a card over.
-            step.status = (
-                ActionStatus.IDLE
-                if permission.reason is BlockReason.NOTHING_TO_RELEASE
-                else ActionStatus.BLOCKED
-            )
-            step.block_reason = permission.reason
+        if zone is None or not zone.connected:
+            step.status = ActionStatus.BLOCKED
+            step.block_reason = BlockReason.DISCONNECTED
+            return
+        if not zone.has_equipment:
+            step.status = ActionStatus.BLOCKED
+            step.block_reason = BlockReason.NO_EQUIPMENT
             return
 
-        if policy.action_when_open not in HOLD_ACTIONS:
-            # Follow schedule. One-shot, and self-limiting: once the hold is
-            # gone the permission check above reports nothing left to release,
-            # so it cannot loop.
-            action = await self._command_release(step.zone_id)
-            actions.append(action)
-            step.released_this_pass = True
-            step.status = (
-                ActionStatus.IDLE if action.succeeded else ActionStatus.PENDING
-            )
+        if action not in HOLD_ACTIONS:
+            await self._return_zone_to_its_schedule(step, actions)
             return
 
-        action = await self._command_apply(step.zone_id, policy.action_when_open)
-        actions.append(action)
-        if not action.succeeded:
+        wanted = self.mode_to_hold(action, step.ambient_mode, policy.override_all_modes)
+        if wanted is None:
+            # The house is asking for something at least as cold as the rule,
+            # so there is nothing for the rule to add. Anything we were holding
+            # goes back, which is what lets a global Away through.
+            if state.owned_action is not None:
+                await self._hand_back_ownership(step, actions)
+            step.status = ActionStatus.BLOCKED
+            step.block_reason = BlockReason.COLDER_MODE
+            return
+
+        if state.owned_action is wanted:
+            step.status = ActionStatus.ACTIVE
+            return
+
+        # A zone override replaces whatever override was on the zone, so this
+        # is one command whether we are taking a warmer hold off somebody or
+        # starting from nothing.
+        applied = await self._command_apply(step.zone_id, wanted)
+        actions.append(applied)
+        if not applied.succeeded:
             step.status = ActionStatus.PENDING
             return
-        state.owned_action = policy.action_when_open
-        state.owned_with_override = policy.override_all_modes
+        state.owned_action = wanted
         step.status = ActionStatus.ACTIVE
         step.changed = True
+
+    async def _return_zone_to_its_schedule(
+        self, step: _ZonePass, actions: list[RequestedAction]
+    ) -> None:
+        """Cancel the hold on a room so the house decides what it does.
+
+        The one action that lets go rather than taking hold. Nothing is owned
+        afterwards — there is no override left to give back when the contact
+        closes — and it is self-limiting, because once the hold is gone there
+        is nothing here to cancel.
+        """
+        state, zone = step.state, step.zone
+        if step.settling:
+            # A release is already on its way; sending a second would achieve
+            # nothing except another line in the hub log.
+            step.status = ActionStatus.IDLE
+            return
+        if not zone.has_zone_override:
+            step.status = ActionStatus.IDLE
+            return
+        # Letting go warms the room whenever the schedule is warmer than the
+        # hold, so it answers to the same ordering as everything else.
+        if not (
+            step.policy.override_all_modes
+            or is_colder(zone.fallback_mode, zone.effective_mode)
+        ):
+            step.status = ActionStatus.BLOCKED
+            step.block_reason = BlockReason.COLDER_MODE
+            return
+        released = await self._command_release(step.zone_id)
+        actions.append(released)
+        if not released.succeeded:
+            step.status = ActionStatus.PENDING
+            return
+        if state.owned_action is not None:
+            state.owned_action = None
+            step.changed = True
+        step.status = ActionStatus.IDLE
 
     async def _finish_cycle_if_settled(
         self,
@@ -493,23 +541,16 @@ class SensorAutomation:
         state = step.state
         if not step.contacts_settled:
             return
-        if state.owned_action is not None and not step.released_this_pass:
+        if state.owned_action is not None:
             if not await self._hand_back_ownership(step, actions):
                 return
-        if state.owned_action is not None:
-            return
-        if (
-            state.open_started_at is None
-            and not state.warning_raised
-            and not state.suppressed
-        ):
+        if state.open_started_at is None and not state.warning_raised:
             return
 
         if state.warning_raised:
             events.append(ConditionEvent(step.zone_id, ConditionEventKind.RECOVERY))
         state.open_started_at = None
         state.warning_raised = False
-        state.suppressed = False
         step.changed = True
 
     async def _hand_back_ownership(
@@ -524,7 +565,6 @@ class SensorAutomation:
             # Drop the ledger without sending NORMAL, which would wipe out
             # their choice instead of ours.
             state.owned_action = None
-            state.owned_with_override = False
             step.changed = True
             return True
         action = await self._command_release(step.zone_id)
@@ -532,7 +572,6 @@ class SensorAutomation:
         if not action.succeeded:
             return False
         state.owned_action = None
-        state.owned_with_override = False
         step.changed = True
         return True
 
@@ -549,7 +588,6 @@ class SensorAutomation:
             if open_cycle
             and policy.action_when_open is not ActionWhenOpen.NOTHING
             and state.owned_action is None
-            and not state.suppressed
             else None
         )
         status = step.status
@@ -571,7 +609,6 @@ class SensorAutomation:
             warning_deadline=warning_deadline,
             action_deadline=action_deadline,
             owned_action=state.owned_action,
-            suppressed=state.suppressed,
             action_status=status,
             block_reason=step.block_reason if status is ActionStatus.BLOCKED else None,
         )
@@ -596,8 +633,8 @@ class SensorAutomation:
                     if not action.succeeded:
                         continue
                 state.owned_action = None
-                state.owned_with_override = False
             del self.states[zone_id]
+            self._commanded_at.pop(zone_id, None)
             changed = True
         return changed
 
@@ -616,9 +653,6 @@ class SensorAutomation:
         if state is None:
             return
         state.owned_action = None
-        state.owned_with_override = False
-        if state.open_started_at is not None:
-            state.suppressed = True
         self._save()
 
     def reconcile_owned(self, heating: Mapping[str, HeatingZone]) -> None:
@@ -637,8 +671,6 @@ class SensorAutomation:
                 and not self._still_ours(zone, state.owned_action)
             ):
                 state.owned_action = None
-                state.owned_with_override = False
-                state.suppressed = state.open_started_at is not None
                 changed = True
         if changed:
             self._save()
@@ -656,13 +688,11 @@ class SensorAutomation:
                 continue
             if not self._still_ours(zone, state.owned_action):
                 state.owned_action = None
-                state.owned_with_override = False
                 changed = True
                 continue
             action = await self._command_release(zone_id)
             if action.succeeded:
                 state.owned_action = None
-                state.owned_with_override = False
                 changed = True
             else:
                 success = False
@@ -686,6 +716,11 @@ class SensorAutomation:
             return AggregateState.CLOSED
         return AggregateState.UNKNOWN
 
+    def _settling(self, zone_id: str, now: float) -> bool:
+        """Whether a command we sent for this zone may still be in flight."""
+        sent = self._commanded_at.get(zone_id)
+        return sent is not None and now - sent < SETTLING_SECONDS
+
     @staticmethod
     def _still_ours(
         zone: Optional[HeatingZone], action: Optional[ActionWhenOpen]
@@ -707,6 +742,7 @@ class SensorAutomation:
                 zone_id, ActionKind.APPLY_OVERRIDE, action, False,
                 "no command adapter configured",
             )
+        self._commanded_at[zone_id] = self._clock()
         try:
             await self._commands.apply_override(zone_id, action)
             return RequestedAction(zone_id, ActionKind.APPLY_OVERRIDE, action, True)
@@ -721,6 +757,7 @@ class SensorAutomation:
                 zone_id, ActionKind.RELEASE_OVERRIDE, None, False,
                 "no command adapter configured",
             )
+        self._commanded_at[zone_id] = self._clock()
         try:
             await self._commands.release_override(zone_id)
             return RequestedAction(zone_id, ActionKind.RELEASE_OVERRIDE, None, True)

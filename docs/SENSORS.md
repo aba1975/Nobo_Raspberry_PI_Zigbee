@@ -63,27 +63,41 @@ is the odd one out: it cancels a zone override rather than creating one, so
 there is nothing to give back when the contact closes. It is one-shot and
 self-limiting — once the hold is gone there is nothing left to release.
 
-### Warmth has an order
+### The rule
 
 `off` is colder than `away`, which is colder than `eco`, which is colder than
-`comfort`. A contact rule is a safety net, not a thermostat, so by default it
-may only move a room *down* that order:
+`comfort`.
 
-- an Eco rule leaves a room that is already Away alone;
-- a Comfort rule cannot pull an Away or Eco room up;
-- **Return to schedule** will not release a manual Away hold onto a Comfort
-  week profile, because letting go would warm the room just as surely as
-  setting it.
+> **While a contact is open, the room runs whichever is colder: what the rule
+> asks for, or what the room would be doing anyway.**
 
-The per-zone **Override colder modes** switch is the only way past this. With
-it on, the chosen action applies whatever the room is doing, until a global
-mode or the zone itself is set by hand. Switching it back off hands back any
-hold that only existed because it was on.
+That is the whole policy, and it is worked out afresh on every pass rather than
+remembered. What "the room would be doing anyway" means depends on who is
+holding it: the global override or week profile when this automation holds the
+zone, and whatever mode is actually running when somebody else does.
 
-Judging "would this warm the room?" needs two facts about a zone, and the
-server sends both: what it is running now, and what it would run with its own
-override cancelled — the global override if one is active and the zone follows
-it, otherwise the week profile.
+| While a window is open with an **Eco** rule | The room runs |
+| --- | --- |
+| Home, week profile says Comfort | Eco — the rule is colder |
+| Home, week profile says Away | Away — the house is colder |
+| Away chosen for the house | Away |
+| Comfort chosen for the house *while it is still open* | Eco |
+| Somebody sets this room to Comfort by hand | Eco |
+| Somebody sets this room to Away by hand | Away |
+
+Deciding from scratch each time is what makes it predictable. An earlier
+version remembered that somebody had "taken over" and stood the rule down for
+the rest of the open cycle, which meant a room's temperature depended on the
+order things had happened in rather than on what was true now — and choosing
+Home after Away left the window rule switched off without anything saying so.
+
+**Override colder modes** is the per-zone way out. With it on, the comparison
+is skipped and the rule's mode holds until the contact closes, whatever anyone
+else asks for in the meantime.
+
+**Return to schedule** cancels a hold rather than taking one, so nothing is
+owned afterwards. Letting go warms a room whenever the schedule is warmer than
+the hold, so it answers to the same ordering as everything else.
 
 ### Ownership
 
@@ -93,16 +107,14 @@ a Nobø `NORMAL`; the current global mode or week profile then decides what the
 room does. Comfort is never sent to "restore" a room, because there is no
 record that Comfort is where it came from.
 
-Anything that stops matching what we applied — a person in the official app, a
-global mode, an away exception — ends ownership immediately and without a
-command, and suppresses further sensor actions until every contact has closed.
-An unknown or unavailable contact is not closed, so it can neither clear a
-left-open warning nor release a hold.
+A hub applies an override asynchronously and only shows it once it echoes back,
+so for a few seconds after writing to a zone this automation does not treat
+disagreement as somebody overruling it — otherwise every evaluation in that gap
+would send the same command again.
 
-When a rule stands down it says why, and the interface repeats it: the room is
-already colder, it is held by hand, it has no heater, or the hub is
-unreachable. A rule that is deliberately staying out of the way and a rule that
-is broken look identical otherwise.
+An unknown or unavailable contact is not closed, so it can neither clear a
+left-open warning nor release a hold. A room says why its rule is standing
+down: already colder, no heater, or no hub.
 
 ### Simulated hub state
 

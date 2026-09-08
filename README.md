@@ -173,11 +173,13 @@ to its schedule, or do nothing. A warning stays until every assigned sensor
 explicitly reports closed; unknown and unavailable are shown as their own
 states and never guessed to mean closed.
 
-**A sensor may cool a room down, but not warm it up.** Off is colder than Away,
-Away colder than Eco, Eco colder than Comfort, and a rule that would move a
-room *up* that order stands down and says so on the room. The per-room
-**Override colder modes** switch is the only way past it, and any later global
-mode or hand-set zone takes the room back for the rest of that open cycle.
+**While something is open, the room runs whichever is colder** — what the rule
+asks for, or what the house is doing. Off is colder than Away, Away than Eco,
+Eco than Comfort. So an Eco rule takes a Comfort room down to Eco, leaves an
+Away room on Away, and — if you choose Comfort for the house while the window
+is still open — puts the room straight back on Eco. Choose Away and Away wins.
+The per-room **Override colder modes** switch skips the comparison and lets the
+rule hold until the contact closes.
 
 On closure the automation cancels exactly the override it created and nothing
 else, so the room returns to whatever the current global mode or week profile

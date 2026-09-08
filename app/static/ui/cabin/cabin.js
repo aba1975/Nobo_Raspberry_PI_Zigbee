@@ -857,12 +857,6 @@
     if (summary.action_status === 'blocked') {
       return { tone: 'muted', text: esc(sensorBlockedText(summary, action)) };
     }
-    if (summary.action_status === 'suppressed') {
-      return {
-        tone: 'muted',
-        text: 'Left alone — the heating was changed by hand since this opened.',
-      };
-    }
     if (summary.action_status === 'pending') {
       return {
         tone: 'muted',
@@ -884,11 +878,10 @@
 
   function sensorBlockedText(summary, action) {
     const target = action === 'schedule'
-      ? 'Returning to the schedule'
-      : `${sensorModeWord(action)}`;
+      ? 'its schedule'
+      : sensorModeWord(action);
     return {
-      colder_mode: `${target} would warm this room, so the rule is standing down.`,
-      manual_override: 'Left alone — this room is being held by hand.',
+      colder_mode: `This room is already colder than ${target}, so it stays as it is.`,
       no_equipment: 'Monitoring only — there is no heater in this room.',
       disconnected: 'The hub cannot be reached, so the heating was not changed.',
     }[summary.block_reason] || 'The heating was left as it is.';
@@ -922,7 +915,7 @@
     } else if (unavailable.length) {
       tone = 'unavailable';
       icon = sensorIcon(unavailable[0]);
-      headline = `${sensorCountLabel(unavailable)} unreachable`;
+      headline = `${sensorCountLabel(unavailable)} offline`;
       detail = compactSensorNames(unavailable);
     } else if (summary.state === 'unknown') {
       tone = 'unavailable';
@@ -946,19 +939,25 @@
 
   function sensorRow(sensor, admin) {
     const open = sensor.available && sensor.state === 'open';
-    const label = sensor.available ? sensorStateLabel(sensor.state) : 'Unreachable';
+    const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
     const low = sensor.battery != null && sensor.battery <= 20;
     const battery = sensor.battery == null
       ? ''
       : `<span class="sensor-batt ${low ? 'is-low' : ''}"
            title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%${
              low ? ' low' : ''}</span>`;
+    /* Offline means the Pi is no longer hearing from the sensor, which is a
+       different worry from a window being open — so it says when it was last
+       heard from rather than leaving you to guess how stale the state is. */
+    const detail = sensor.available
+      ? sensorKindLabel(sensor)
+      : `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`;
     return `
-      <li class="sensor-row ${open ? 'is-open' : ''}">
+      <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'}">
         ${sensorIcon(sensor)}
         <span class="sensor-copy">
           <strong>${esc(sensor.name)}</strong>
-          <small>${esc(sensorKindLabel(sensor))}</small>
+          <small>${esc(detail)}</small>
         </span>
         <span class="sensor-facts">
           <span class="sensor-state sensor-${esc(sensor.available ? sensor.state : 'unavailable')}">${esc(label)}</span>
@@ -984,15 +983,17 @@
     const policy = sensorPolicyFor(zone.zone_id);
     if (!policy) return '';
     const admin = state.me && state.me.role === 'admin';
-    const parts = [`Warn after ${Nobo.fmtDuration(policy.warning_delay_seconds)}`];
+    const when = seconds => Number(seconds) === 0
+      ? 'immediately' : `after ${Nobo.fmtDuration(seconds)}`;
+    const parts = [`Warns ${when(policy.warning_delay_seconds)}`];
     if (!policy.has_equipment) {
       parts.push('monitoring only');
     } else if (policy.action_when_open === 'nothing') {
       parts.push('heating unchanged');
     } else {
       parts.push(
-        `${sensorActionLabel(policy.action_when_open).toLowerCase()} after ` +
-        Nobo.fmtDuration(policy.action_delay_seconds)
+        `${sensorActionLabel(policy.action_when_open).toLowerCase()} ` +
+        when(policy.action_delay_seconds)
       );
       if (policy.override_all_modes) parts.push('overrides colder modes');
     }
@@ -1268,16 +1269,16 @@
       <label class="field" id="spDelayField">
         <span>and change the heating after</span>
         <select id="spDelay">${sensorDelayOptions(policy.action_delay_seconds)}</select>
-        <small class="field-hint">Both are counted from the moment it opens, so
-        they can be set in either order and do not add up.</small>
+        <small class="field-hint">Both delays are counted from the moment it
+        opens, so they do not add up. While it is open the room runs whichever
+        is colder — this, or what the house is doing.</small>
       </label>
 
       <label class="switch" id="spOverrideField">
         <span class="switch-text"><strong>Override colder modes</strong>
-          <span>Normally this rule can only turn the heating down, never up — so
-          it leaves a room alone when the house is already on Away. Turn this on
-          to let it warm the room anyway. Choosing a mode for the house, or for
-          this room by hand, takes it back.</span>
+          <span>Off, the room runs whichever is colder: this rule, or whatever
+          the house is doing. On, this rule wins until the contact closes —
+          whatever the house is set to in the meantime.</span>
         </span>
         <input id="spOverride" type="checkbox" ${policy.override_all_modes ? 'checked' : ''}>
       </label>
@@ -3070,15 +3071,20 @@
 
   function sensorDelayOptions(value) {
     const choices = [
-      [10, '10 seconds (demo test)'],
+      [0, 'Immediately'],
+      [10, '10 seconds (demo)'],
       [60, '1 minute'],
+      [120, '2 minutes'],
       [300, '5 minutes'],
       [600, '10 minutes'],
       [1800, '30 minutes'],
       [3600, '1 hour'],
     ];
+    // A value saved by an older build, or through the API, still has to be
+    // selectable — otherwise opening the sheet would silently change it.
     if (!choices.some(([seconds]) => seconds === Number(value))) {
-      choices.push([Number(value), `${Number(value)} seconds`]);
+      choices.push([Number(value), Nobo.fmtDuration(value)]);
+      choices.sort((a, b) => a[0] - b[0]);
     }
     return choices.map(([seconds, label]) =>
       `<option value="${seconds}" ${Number(value) === seconds ? 'selected' : ''}>${esc(label)}</option>`
