@@ -51,9 +51,11 @@ Which leaves an awkward truth, and it is better written down than discovered
 later: **on this hardware the system cannot detect a cold room, a dead heater,
 a heater running flat out, or anything at all about an individual thermostat.**
 
-What is left is four things, all of which are real but none of which is urgent:
-the hub going away and coming back, somebody changing a zone from another app,
-and an away period starting or ending. Hence the defaults.
+What the Nobø hub itself leaves is four things: the hub going away and coming
+back, somebody changing a zone from another app, and an away period starting or
+ending. Optional independent contact sensors add one condition that the hub
+cannot provide: a door or window remaining open, plus its recovery. Hence the
+defaults.
 
 A periodic "still here" email was built and then removed at the owner's request,
 along with a room-left-off warning and a per-zone schedule diary. The judgement
@@ -138,6 +140,16 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "An away period starts or ends",
         "default": False,
         "help": "Confirms a planned trip actually took effect.",
+    },
+    "contact_left_open": {
+        "label": "A door or window is left open",
+        "default": False,
+        "help": "Sent after the per-zone contact-sensor warning delay.",
+    },
+    "contact_closed": {
+        "label": "The door or window is closed again",
+        "default": False,
+        "help": "Sent when every contact in a warned zone explicitly reports closed.",
     },
 }
 
@@ -485,6 +497,12 @@ class Notifier:
         with self._lock:
             cond = self._conditions.get(key)
             return bool(cond and cond.active)
+
+    def restore_condition(self, key: str, raised: bool) -> None:
+        """Restore persisted condition state without sending a notification."""
+        with self._lock:
+            cond = self._conditions.setdefault(key, _Condition())
+            cond.active = raised
 
     # -- delivery ---------------------------------------------------------
 

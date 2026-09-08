@@ -52,6 +52,7 @@
     schedule: null,
     scheduleMeta: null,
     weekProfiles: [],
+    sensorSettings: null,
     /* The command log is only fetched when its view is opened - it is
        diagnostics, and there is no reason to poll for it on the home screen. */
     log: null,
@@ -758,6 +759,50 @@
     return state.devices.filter(d => String(d.zone_id) === String(zoneId));
   }
 
+  function sensorStateLabel(value) {
+    return {
+      open: 'Open',
+      closed: 'Closed',
+      unknown: 'Unknown',
+      unavailable: 'Unavailable',
+      empty: 'No sensors',
+    }[value] || 'Unknown';
+  }
+
+  function sensorStatus(zone, detailed = false) {
+    const summary = zone.sensor_summary;
+    if (!summary) return '';
+    const items = zone.sensors || [];
+    const warning = summary.warning_raised
+      ? `<div class="sensor-warning" role="alert"><strong>Left open</strong>
+           <span>A door or window in ${esc(zone.name)} has been open longer than allowed.</span>
+         </div>`
+      : '';
+    const badge = summary.sensor_count
+      ? `<span class="sensor-state sensor-${esc(summary.state)}">${esc(sensorStateLabel(summary.state))}</span>`
+      : '';
+    if (!detailed) return `${warning}${badge}`;
+    return `
+      <section class="card sensor-card">
+        <div class="card-head"><h2>Doors and windows (${summary.sensor_count})</h2>${badge}</div>
+        ${warning}
+        ${items.length ? `<ul class="sensor-list">${items.map(sensor => `
+          <li>
+            <div><strong>${esc(sensor.name)}</strong>
+              <small>${sensor.available ? esc(sensorStateLabel(sensor.state)) : 'Unavailable'}
+                ${sensor.battery == null ? '' : ` · battery ${esc(sensor.battery)}%`}</small>
+            </div>
+            <span class="sensor-state sensor-${esc(sensor.available ? sensor.state : 'unavailable')}">
+              ${esc(sensor.available ? sensorStateLabel(sensor.state) : 'Unavailable')}
+            </span>
+          </li>`).join('')}</ul>`
+          : '<p class="zd-sub">No contact sensors are assigned to this zone.</p>'}
+        ${summary.eco_owned
+          ? '<div class="note">Sensor automation owns the current Eco override. It will release it only after every assigned contact reports closed.</div>'
+          : ''}
+      </section>`;
+  }
+
   function zoneRow(zone) {
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
@@ -806,11 +851,12 @@
           : 'Away uses a fixed system temperature');
 
     return `
-      <li class="zone" data-zone="${esc(zone.zone_id)}">
+      <li class="zone ${zone.sensor_summary && zone.sensor_summary.warning_raised ? 'zone-sensor-warning' : ''}" data-zone="${esc(zone.zone_id)}">
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
         <div class="zone-meta">${modeBadge}${manualBadge}${zoneOverrideBadge(zone)}${renderSetpointDriftBadge(zone)}</div>
+        ${sensorStatus(zone)}
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -1133,6 +1179,8 @@
         </div>
         ${renderFollowGlobal(zone)}
       </section>
+
+      ${sensorStatus(zone, true)}
 
       <section class="card">
         <h2>Heaters in this zone (${devices.length})</h2>
@@ -2469,6 +2517,198 @@
    * Settings - ordered by what actually gets changed
    * ---------------------------------------------------------------- */
 
+  function sensorDelayOptions(value) {
+    const choices = [
+      [10, '10 seconds (demo test)'],
+      [60, '1 minute'],
+      [300, '5 minutes'],
+      [600, '10 minutes'],
+      [1800, '30 minutes'],
+      [3600, '1 hour'],
+    ];
+    if (!choices.some(([seconds]) => seconds === Number(value))) {
+      choices.push([Number(value), `${Number(value)} seconds`]);
+    }
+    return choices.map(([seconds, label]) =>
+      `<option value="${seconds}" ${Number(value) === seconds ? 'selected' : ''}>${esc(label)}</option>`
+    ).join('');
+  }
+
+  function allConfiguredSensors() {
+    return state.sensorDevices || [];
+  }
+
+  function renderSensorSettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.sensorSettings) return '';
+    const settings = state.sensorSettings;
+    const sensors = allConfiguredSensors();
+    const zones = Object.entries(settings.zones || {});
+    return `
+      <section class="card sensor-settings">
+        <h2>Door and window sensors</h2>
+        <p class="zd-sub">Optional contact monitoring. This installation uses the
+        <strong>${settings.demo_mode ? 'simulated demo' : esc(settings.provider)}</strong>
+        provider; no Zigbee hardware or broker is started.</p>
+        <div class="switch">
+          <div class="switch-text"><strong>Use contact sensors</strong>
+            <span>Show sensor state, left-open warnings and optional Eco automation.</span>
+          </div>
+          <button class="btn" type="button" data-act="toggle-sensors"
+            aria-pressed="${settings.enabled ? 'true' : 'false'}">${settings.enabled ? 'On' : 'Off'}</button>
+        </div>
+        ${settings.enabled ? `
+          <h3 class="notify-head">Add a simulated sensor</h3>
+          <div class="sensor-add">
+            <label class="field"><span>Name</span>
+              <input id="sensorNewName" type="text" maxlength="80" placeholder="Kitchen window"></label>
+            <label class="field"><span>Zone</span>
+              <select id="sensorNewZone">
+                ${zones.map(([id, policy]) => `<option value="${esc(id)}">${esc(policy.name)}</option>`).join('')}
+              </select>
+            </label>
+            <button class="btn btn-primary" type="button" data-act="pair-sensor">Create sensor</button>
+          </div>
+
+          <h3 class="notify-head">Sensors</h3>
+          ${sensors.length ? `<div class="sensor-admin-list">${sensors.map(sensor => `
+            <div class="sensor-admin-row" data-sensor-row="${esc(sensor.sensor_id)}">
+              <input class="sensor-name-input" type="text" maxlength="80" value="${esc(sensor.name)}"
+                aria-label="Sensor name">
+              <select class="sensor-zone-input" aria-label="Assigned zone">
+                <option value="">Unassigned</option>
+                ${zones.map(([id, policy]) => `<option value="${esc(id)}"
+                  ${String(sensor.zone_id || '') === id ? 'selected' : ''}>${esc(policy.name)}</option>`).join('')}
+              </select>
+              <select class="sensor-state-input" aria-label="Contact state">
+                ${['closed', 'open', 'unknown'].map(value => `<option value="${value}"
+                  ${sensor.state === value ? 'selected' : ''}>${esc(sensorStateLabel(value))}</option>`).join('')}
+              </select>
+              <label class="sensor-available"><input class="sensor-available-input" type="checkbox"
+                ${sensor.available ? 'checked' : ''}> Available</label>
+              <label class="field sensor-battery"><span>Battery %</span>
+                <input class="sensor-battery-input" type="number" min="0" max="100"
+                  value="${sensor.battery == null ? '' : esc(sensor.battery)}"></label>
+              <div class="sensor-row-actions">
+                <button class="btn" type="button" data-save-sensor="${esc(sensor.sensor_id)}">Save</button>
+                <button class="btn btn-danger" type="button" data-remove-sensor="${esc(sensor.sensor_id)}">Remove</button>
+              </div>
+            </div>`).join('')}</div>`
+            : '<p class="zd-sub">No simulated sensors yet.</p>'}
+
+          <h3 class="notify-head">Per-zone behavior</h3>
+          <div class="sensor-policy-list">${zones.map(([id, policy]) => `
+            <div class="sensor-policy" data-sensor-policy="${esc(id)}">
+              <strong>${esc(policy.name)}</strong>
+              <label class="field"><span>Warn after</span>
+                <select data-warning-delay>${sensorDelayOptions(policy.warning_delay_seconds)}</select></label>
+              <label class="sensor-eco-toggle"><input type="checkbox" data-eco-enabled
+                ${policy.eco_enabled ? 'checked' : ''} ${policy.has_equipment ? '' : 'disabled'}>
+                Set zone to Eco while open</label>
+              <label class="field"><span>Eco after</span>
+                <select data-eco-delay ${policy.has_equipment ? '' : 'disabled'}>
+                  ${sensorDelayOptions(policy.eco_delay_seconds)}
+                </select></label>
+              ${policy.has_equipment ? '' : '<small class="field-hint">Monitoring only — no Nobø heater is assigned.</small>'}
+            </div>`).join('')}</div>
+          <div class="sheet-actions">
+            <button class="btn btn-primary" type="button" data-act="save-sensor-policies">Save sensor settings</button>
+          </div>` : '<div class="note">Nothing sensor-related is shown elsewhere while this is off.</div>'}
+      </section>`;
+  }
+
+  async function saveSensorSettings(enabled = state.sensorSettings.enabled) {
+    const policies = {};
+    document.querySelectorAll('[data-sensor-policy]').forEach(row => {
+      const id = row.dataset.sensorPolicy;
+      policies[id] = {
+        warning_delay_seconds: Number(row.querySelector('[data-warning-delay]').value),
+        eco_enabled: !!row.querySelector('[data-eco-enabled]').checked,
+        eco_delay_seconds: Number(row.querySelector('[data-eco-delay]').value),
+      };
+    });
+    if (!Object.keys(policies).length) {
+      Object.entries(state.sensorSettings.zones || {}).forEach(([id, policy]) => {
+        policies[id] = {
+          warning_delay_seconds: policy.warning_delay_seconds,
+          eco_enabled: policy.eco_enabled,
+          eco_delay_seconds: policy.eco_delay_seconds,
+        };
+      });
+    }
+    state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones: policies });
+    state.sensorDevices = enabled ? await Nobo.api.sensors() : [];
+    await refresh(true);
+    renderSettings();
+  }
+
+  function wireSensorSettings(root) {
+    const toggle = root.querySelector('[data-act="toggle-sensors"]');
+    if (!toggle) return;
+    toggle.onclick = async () => {
+      try {
+        await saveSensorSettings(!state.sensorSettings.enabled);
+        Nobo.toast(state.sensorSettings.enabled ? 'Contact sensors enabled' : 'Contact sensors disabled');
+      } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    const pair = root.querySelector('[data-act="pair-sensor"]');
+    if (pair) pair.onclick = async () => {
+      const name = root.querySelector('#sensorNewName').value.trim();
+      const zone_id = root.querySelector('#sensorNewZone').value;
+      if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+      try {
+        await Nobo.api.pairSensor({ name, zone_id });
+        state.sensorDevices = await Nobo.api.sensors();
+        await refresh(true);
+        renderSettings();
+        Nobo.toast(`${name} added`);
+      } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    const savePolicies = root.querySelector('[data-act="save-sensor-policies"]');
+    if (savePolicies) savePolicies.onclick = async () => {
+      try {
+        await saveSensorSettings(true);
+        Nobo.toast('Sensor settings saved');
+      } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    root.querySelectorAll('[data-save-sensor]').forEach(button => {
+      button.onclick = async () => {
+        const row = button.closest('[data-sensor-row]');
+        const id = button.dataset.saveSensor;
+        const batteryRaw = row.querySelector('.sensor-battery-input').value;
+        try {
+          await Nobo.api.updateSensor(id, {
+            name: row.querySelector('.sensor-name-input').value,
+            zone_id: row.querySelector('.sensor-zone-input').value || null,
+            clear_zone: !row.querySelector('.sensor-zone-input').value,
+          });
+          await Nobo.api.simulateSensor(id, {
+            state: row.querySelector('.sensor-state-input').value,
+            available: row.querySelector('.sensor-available-input').checked,
+            battery: batteryRaw === '' ? undefined : Number(batteryRaw),
+            clear_battery: batteryRaw === '',
+          });
+          state.sensorDevices = await Nobo.api.sensors();
+          await refresh(true);
+          renderSettings();
+          Nobo.toast('Sensor updated');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+    root.querySelectorAll('[data-remove-sensor]').forEach(button => {
+      button.onclick = () => confirmSheet(
+        'Remove this sensor?', 'Its history and assignment are removed.', 'Remove sensor',
+        async () => {
+          try {
+            await Nobo.api.removeSensor(button.dataset.removeSensor);
+            state.sensorDevices = await Nobo.api.sensors();
+            await refresh(true);
+            renderSettings();
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+        }, true
+      );
+    });
+  }
+
   async function showSettings() {
     state.view = 'settings';
     switchView();
@@ -2477,6 +2717,10 @@
       // Cached so later re-renders (after saving, say) keep the right identity
       // and do not flash an ordinary user's disabled controls back to enabled.
       state.me = await Nobo.api.me();
+      if (state.me && state.me.role === 'admin') {
+        state.sensorSettings = await Nobo.api.sensorSettings();
+        state.sensorDevices = state.sensorSettings.enabled ? await Nobo.api.sensors() : [];
+      }
       renderSettings();
     } catch (_) { /* the static render is already correct enough */ }
   }
@@ -2533,6 +2777,8 @@
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       </section>
+
+      ${renderSensorSettingsCard(isAdmin)}
 
       <section class="card">
         <h2>Where the data comes from</h2>
@@ -2686,6 +2932,7 @@
     const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
     loadNotifications(isAdmin);
+    wireSensorSettings(root);
   }
 
   function renderScheduleSettings() {

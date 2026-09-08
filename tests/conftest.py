@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import auth
 import config_persistence
+import sensor_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -119,4 +120,16 @@ def redirect_persistence(tmp_path, monkeypatch):
     # DATA_DIR alone leaves them pointing at the real data directory. Each one
     # a test can write has to be redirected by name.
     monkeypatch.setattr(config_persistence, "SITE_FILE", tmp_path / "site.json")
+    monkeypatch.setattr(sensor_persistence, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sensor_persistence, "SENSOR_SETTINGS_FILE", tmp_path / "sensor_settings.json")
+    monkeypatch.setattr(
+        sensor_persistence,
+        "SIMULATED_SENSORS_FILE",
+        tmp_path / "simulated_contact_sensors.json",
+    )
+    monkeypatch.setattr(
+        sensor_persistence,
+        "SENSOR_AUTOMATION_STATE_FILE",
+        tmp_path / "sensor_automation_state.json",
+    )
     yield

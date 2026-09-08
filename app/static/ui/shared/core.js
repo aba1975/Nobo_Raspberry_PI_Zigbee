@@ -82,6 +82,19 @@ const Nobo = (() => {
     testNotification: (body) => req('/api/notifications/test', {
                                  method: 'POST', body: JSON.stringify(body || {}) }),
 
+    sensorSettings:    ()     => req('/api/sensors/settings'),
+    setSensorSettings: (body) => req('/api/sensors/settings', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    sensors:       ()         => req('/api/sensors').then(r => r.sensors || r),
+    pairSensor:    (body)     => req('/api/sensors', {
+                                  method: 'POST', body: JSON.stringify(body) }),
+    updateSensor:  (id, body) => req(`/api/sensors/${encodeURIComponent(id)}`, {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    removeSensor:  (id)       => req(`/api/sensors/${encodeURIComponent(id)}`, {
+                                  method: 'DELETE' }),
+    simulateSensor: (id, body) => req(`/api/sensors/${encodeURIComponent(id)}/simulate`, {
+                                   method: 'POST', body: JSON.stringify(body) }),
+
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {
