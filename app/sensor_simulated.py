@@ -11,6 +11,7 @@ from typing import Callable, Optional
 from sensor_persistence import load_simulated_sensors, save_simulated_sensors
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, SensorEvent, SensorEventKind,
+    SensorKind,
 )
 
 
@@ -53,7 +54,12 @@ class SimulatedContactSensorProvider:
         self._ensure_started()
         return sorted(self._sensors.values(), key=lambda item: item.sensor_id)
 
-    async def create(self, name: str, zone_id: Optional[str] = None) -> ContactSnapshot:
+    async def create(
+        self,
+        name: str,
+        zone_id: Optional[str] = None,
+        kind: SensorKind | str = SensorKind.WINDOW,
+    ) -> ContactSnapshot:
         self._ensure_started()
         name = self._valid_name(name)
         stamp = self._aware_now()
@@ -64,6 +70,7 @@ class SimulatedContactSensorProvider:
             sensor_id=sensor_id,
             provider_id=f"simulated:{sensor_id}",
             name=name,
+            kind=self._kind(kind),
             zone_id=self._zone(zone_id),
             state=ContactState.CLOSED,
             available=True,
@@ -81,14 +88,20 @@ class SimulatedContactSensorProvider:
         await self._emit(SensorEventKind.CREATED, snapshot)
         return snapshot
 
-    async def pair(self, name: str, zone_id: Optional[str] = None) -> ContactSnapshot:
-        return await self.create(name, zone_id)
+    async def pair(
+        self,
+        name: str,
+        zone_id: Optional[str] = None,
+        kind: SensorKind | str = SensorKind.WINDOW,
+    ) -> ContactSnapshot:
+        return await self.create(name, zone_id, kind)
 
     async def update(
         self,
         sensor_id: str,
         *,
         name: Optional[str] = None,
+        kind: Optional[SensorKind | str] = None,
         zone_id: Optional[str] = None,
         clear_zone: bool = False,
     ) -> ContactSnapshot:
@@ -98,6 +111,7 @@ class SimulatedContactSensorProvider:
         updated = self._replace(
             current,
             name=self._valid_name(name) if name is not None else current.name,
+            kind=self._kind(kind) if kind is not None else current.kind,
             zone_id=None if clear_zone else (
                 self._zone(zone_id) if zone_id is not None else current.zone_id
             ),
@@ -214,6 +228,13 @@ class SimulatedContactSensorProvider:
         return zone_id
 
     @staticmethod
+    def _kind(kind: SensorKind | str) -> SensorKind:
+        try:
+            return SensorKind(kind)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("kind must be door or window") from exc
+
+    @staticmethod
     def _replace(item: ContactSnapshot, **changes) -> ContactSnapshot:
         values = item.__dict__.copy()
         values.update(changes)
@@ -223,6 +244,7 @@ class SimulatedContactSensorProvider:
     def _to_row(item: ContactSnapshot) -> dict:
         row = item.__dict__.copy()
         row["state"] = item.state.value
+        row["kind"] = item.kind.value
         row["changed_at"] = item.changed_at.isoformat()
         row["last_seen_at"] = item.last_seen_at.isoformat()
         return row
@@ -231,6 +253,7 @@ class SimulatedContactSensorProvider:
     def _from_row(row: dict) -> ContactSnapshot:
         values = dict(row)
         values["state"] = ContactState(values["state"])
+        values["kind"] = SensorKind(values["kind"])
         values["changed_at"] = datetime.fromisoformat(values["changed_at"])
         values["last_seen_at"] = datetime.fromisoformat(values["last_seen_at"])
         if values["changed_at"].tzinfo is None or values["last_seen_at"].tzinfo is None:

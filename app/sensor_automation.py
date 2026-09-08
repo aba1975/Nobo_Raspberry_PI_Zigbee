@@ -1,18 +1,29 @@
-"""Provider-independent contact aggregation and conservative Eco automation."""
+"""Provider-independent contact aggregation and conservative heating automation."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Awaitable, Callable, Mapping, Optional, Protocol, Sequence
+from typing import Callable, Mapping, Optional, Protocol, Sequence
 
-from sensor_persistence import AutomationZoneState, ZoneSensorPolicy
+from sensor_persistence import (
+    ActionWhenOpen,
+    AutomationZoneState,
+    ZoneSensorPolicy,
+)
 from sensor_provider import ContactSnapshot, ContactState
 
 
+OVERRIDE_ACTIONS = frozenset({
+    ActionWhenOpen.AWAY,
+    ActionWhenOpen.ECO,
+    ActionWhenOpen.COMFORT,
+})
+
+
 class HeatingCommandAdapter(Protocol):
-    async def apply_eco(self, zone_id: str) -> None: ...
+    async def apply_override(self, zone_id: str, action: ActionWhenOpen) -> None: ...
 
     async def release_override(self, zone_id: str) -> None: ...
 
@@ -44,13 +55,21 @@ class ZoneAggregate:
     warning_raised: bool
     open_started_at: Optional[float]
     warning_deadline: Optional[float]
-    eco_deadline: Optional[float]
-    eco_owned: bool
+    action_deadline: Optional[float]
+    owned_action: Optional[ActionWhenOpen]
     suppressed: bool
+
+    @property
+    def eco_deadline(self) -> Optional[float]:
+        return self.action_deadline
+
+    @property
+    def eco_owned(self) -> bool:
+        return self.owned_action is ActionWhenOpen.ECO
 
 
 class ActionKind(str, Enum):
-    APPLY_ECO = "apply_eco"
+    APPLY_OVERRIDE = "apply_override"
     RELEASE_OVERRIDE = "release_override"
 
 
@@ -58,6 +77,7 @@ class ActionKind(str, Enum):
 class RequestedAction:
     zone_id: str
     kind: ActionKind
+    action: Optional[ActionWhenOpen]
     succeeded: bool
     error: Optional[str] = None
 
@@ -93,7 +113,12 @@ class SensorAutomation:
         clock: Callable[[], float] = time.time,
     ):
         self.states = {
-            str(zone_id): AutomationZoneState(**state.__dict__)
+            str(zone_id): AutomationZoneState(
+                open_started_at=state.open_started_at,
+                warning_raised=state.warning_raised,
+                owned_action=state.owned_action,
+                suppressed=state.suppressed,
+            )
             for zone_id, state in (states or {}).items()
         }
         self._save_fn = save
@@ -106,40 +131,61 @@ class SensorAutomation:
         policies: Mapping[str, ZoneSensorPolicy],
         heating: Mapping[str, HeatingZone],
     ) -> AutomationResult:
-        """Aggregate current snapshots, advance timers, and execute safe actions."""
+        """Aggregate snapshots, advance deadlines, and execute only owned actions."""
         now = self._clock()
         grouped: dict[str, list[ContactSnapshot]] = {
             str(zone_id): [] for zone_id in policies
         }
         for sensor in sensors:
-            if sensor.zone_id is not None and sensor.zone_id in grouped:
-                grouped[sensor.zone_id].append(sensor)
+            if sensor.zone_id is not None and str(sensor.zone_id) in grouped:
+                grouped[str(sensor.zone_id)].append(sensor)
 
         actions: list[RequestedAction] = []
         events: list[ConditionEvent] = []
         aggregates: dict[str, ZoneAggregate] = {}
         changed = False
 
-        for zone_id, policy in policies.items():
-            zone_id = str(zone_id)
+        for raw_zone_id, policy in policies.items():
+            zone_id = str(raw_zone_id)
             state = self.states.setdefault(zone_id, AutomationZoneState())
-            release_attempted = False
             items = grouped[zone_id]
-            aggregate_state = self.aggregate(items)
+            observed = heating.get(zone_id)
             any_open = any(
                 item.available and item.state is ContactState.OPEN for item in items
             )
             explicitly_closed = bool(items) and all(
                 item.available and item.state is ContactState.CLOSED for item in items
             )
-            # Removing the final sensor is also a definitive end to that zone's cycle.
-            cycle_ended = explicitly_closed or (not items and state.open_started_at is not None)
+            cycle_ended = explicitly_closed or (
+                not items and state.open_started_at is not None
+            )
 
             if any_open and state.open_started_at is None:
                 state.open_started_at = now
                 state.warning_raised = False
                 state.suppressed = False
                 changed = True
+
+            if state.owned_action is not None and observed is not None and observed.connected:
+                if not self._still_owned(observed, state.owned_action):
+                    state.owned_action = None
+                    state.suppressed = state.open_started_at is not None
+                    changed = True
+
+            release_attempted = False
+            if (
+                state.owned_action is not None
+                and state.owned_action is not policy.action_when_open
+                and not cycle_ended
+            ):
+                if self._still_owned(observed, state.owned_action):
+                    action = await self._command_release(zone_id)
+                    actions.append(action)
+                    release_attempted = True
+                    if action.succeeded:
+                        state.owned_action = None
+                        state.suppressed = True
+                        changed = True
 
             if state.open_started_at is not None and not cycle_ended:
                 warning_due = state.open_started_at + policy.warning_delay_seconds
@@ -148,49 +194,39 @@ class SensorAutomation:
                     events.append(ConditionEvent(zone_id, ConditionEventKind.WARNING))
                     changed = True
 
-                eco_due = state.open_started_at + policy.eco_delay_seconds
-                observed = heating.get(zone_id)
+                action_due = state.open_started_at + policy.action_delay_seconds
+                desired = policy.action_when_open
                 if (
-                    state.eco_owned
-                    and observed is not None
-                    and observed.connected
-                    and not self._still_owned(observed)
-                ):
-                    state.eco_owned = False
-                    state.suppressed = True
-                    changed = True
-                if state.eco_owned and not policy.eco_enabled:
-                    action = await self._command(zone_id, ActionKind.RELEASE_OVERRIDE)
-                    actions.append(action)
-                    release_attempted = True
-                    if action.succeeded:
-                        state.eco_owned = False
-                        state.suppressed = True
-                        changed = True
-                if (
-                    policy.eco_enabled
-                    and not state.eco_owned
+                    desired in OVERRIDE_ACTIONS
+                    and state.owned_action is None
                     and not state.suppressed
-                    and now >= eco_due
+                    and now >= action_due
                     and self._safe_to_apply(observed)
                 ):
-                    action = await self._command(zone_id, ActionKind.APPLY_ECO)
+                    action = await self._command_apply(zone_id, desired)
                     actions.append(action)
                     if action.succeeded:
-                        state.eco_owned = True
+                        state.owned_action = desired
                         changed = True
 
             if cycle_ended:
-                if state.eco_owned and not release_attempted:
-                    action = await self._command(zone_id, ActionKind.RELEASE_OVERRIDE)
-                    actions.append(action)
-                    if action.succeeded:
-                        state.eco_owned = False
-                        changed = True
-                    else:
-                        # Keep the cycle and ownership so the next evaluation retries.
+                if state.owned_action is not None and not release_attempted:
+                    if observed is None or not observed.connected:
                         cycle_ended = False
-                if state.eco_owned:
+                    elif self._still_owned(observed, state.owned_action):
+                        action = await self._command_release(zone_id)
+                        actions.append(action)
+                        if action.succeeded:
+                            state.owned_action = None
+                            changed = True
+                        else:
+                            cycle_ended = False
+                    else:
+                        # A person replaced our override. Drop the ledger without
+                        # sending NORMAL, which could clear their replacement.
+                        state.owned_action = None
+                        changed = True
+                if state.owned_action is not None:
                     cycle_ended = False
                 if cycle_ended:
                     if state.warning_raised:
@@ -207,19 +243,20 @@ class SensorAutomation:
 
             warning_deadline = (
                 state.open_started_at + policy.warning_delay_seconds
-                if state.open_started_at is not None and not state.warning_raised else None
+                if state.open_started_at is not None and not state.warning_raised
+                else None
             )
-            eco_deadline = (
-                state.open_started_at + policy.eco_delay_seconds
+            action_deadline = (
+                state.open_started_at + policy.action_delay_seconds
                 if state.open_started_at is not None
-                and policy.eco_enabled
-                and not state.eco_owned
+                and policy.action_when_open in OVERRIDE_ACTIONS
+                and state.owned_action is None
                 and not state.suppressed
                 else None
             )
             aggregates[zone_id] = ZoneAggregate(
                 zone_id=zone_id,
-                state=aggregate_state,
+                state=self.aggregate(items),
                 sensor_count=len(items),
                 open_count=sum(
                     item.available and item.state is ContactState.OPEN for item in items
@@ -228,35 +265,34 @@ class SensorAutomation:
                 warning_raised=state.warning_raised,
                 open_started_at=state.open_started_at,
                 warning_deadline=warning_deadline,
-                eco_deadline=eco_deadline,
-                eco_owned=state.eco_owned,
+                action_deadline=action_deadline,
+                owned_action=state.owned_action,
                 suppressed=state.suppressed,
             )
 
         stale = set(self.states) - {str(zone_id) for zone_id in policies}
         for zone_id in stale:
             state = self.states[zone_id]
-            if state.eco_owned:
-                observed = heating.get(zone_id)
-                if observed is not None and observed.connected and not self._still_owned(observed):
-                    state.eco_owned = False
-                    changed = True
-                else:
-                    action = await self._command(zone_id, ActionKind.RELEASE_OVERRIDE)
+            observed = heating.get(zone_id)
+            if state.owned_action is not None:
+                if observed is None or not observed.connected:
+                    continue
+                if self._still_owned(observed, state.owned_action):
+                    action = await self._command_release(zone_id)
                     actions.append(action)
-                    if action.succeeded:
-                        state.eco_owned = False
-                        changed = True
-            if not state.eco_owned:
-                del self.states[zone_id]
+                    if not action.succeeded:
+                        continue
+                state.owned_action = None
                 changed = True
+            del self.states[zone_id]
+            changed = True
 
         if changed:
             self._save()
         deadlines = [
             deadline
             for aggregate in aggregates.values()
-            for deadline in (aggregate.warning_deadline, aggregate.eco_deadline)
+            for deadline in (aggregate.warning_deadline, aggregate.action_deadline)
             if deadline is not None and deadline > now
         ]
         return AutomationResult(
@@ -271,46 +307,46 @@ class SensorAutomation:
         state = self.states.get(str(zone_id))
         if state is None:
             return
-        state.eco_owned = False
+        state.owned_action = None
         if state.open_started_at is not None:
             state.suppressed = True
         self._save()
 
     def reconcile_owned(self, heating: Mapping[str, HeatingZone]) -> None:
-        """On restart, retain ownership only while the observed override is Eco."""
+        """Retain persisted ownership only when the connected hub still agrees."""
         changed = False
         for zone_id, state in self.states.items():
             observed = heating.get(zone_id)
             if (
-                state.eco_owned
+                state.owned_action is not None
                 and observed is not None
                 and observed.connected
-                and not self._still_owned(observed)
+                and not self._still_owned(observed, state.owned_action)
             ):
-                state.eco_owned = False
+                state.owned_action = None
                 state.suppressed = state.open_started_at is not None
                 changed = True
         if changed:
             self._save()
 
     async def disable(self, heating: Mapping[str, HeatingZone]) -> bool:
-        """Release every safely owned override; false means the feature must stay on."""
+        """Release every safely owned override; false means sensors must stay on."""
         success = True
         changed = False
         for zone_id, state in self.states.items():
-            if not state.eco_owned:
+            if state.owned_action is None:
                 continue
             observed = heating.get(zone_id)
             if observed is None or not observed.connected:
                 success = False
                 continue
-            if not self._still_owned(observed):
-                state.eco_owned = False
+            if not self._still_owned(observed, state.owned_action):
+                state.owned_action = None
                 changed = True
                 continue
-            action = await self._command(zone_id, ActionKind.RELEASE_OVERRIDE)
+            action = await self._command_release(zone_id)
             if action.succeeded:
-                state.eco_owned = False
+                state.owned_action = None
                 changed = True
             else:
                 success = False
@@ -336,30 +372,49 @@ class SensorAutomation:
             zone
             and zone.has_equipment
             and zone.connected
-            and zone.effective_mode.lower() == "comfort"
             and zone.active_override in (None, "", "-1")
         )
 
     @staticmethod
-    def _still_owned(zone: Optional[HeatingZone]) -> bool:
+    def _still_owned(
+        zone: Optional[HeatingZone], action: ActionWhenOpen
+    ) -> bool:
         return bool(
             zone
             and zone.connected
-            and zone.effective_mode.lower() == "eco"
+            and zone.effective_mode.lower() == action.value
             and zone.active_override not in (None, "", "-1")
         )
 
-    async def _command(self, zone_id: str, kind: ActionKind) -> RequestedAction:
+    async def _command_apply(
+        self, zone_id: str, action: ActionWhenOpen
+    ) -> RequestedAction:
         if self._commands is None:
-            return RequestedAction(zone_id, kind, False, "no command adapter configured")
+            return RequestedAction(
+                zone_id, ActionKind.APPLY_OVERRIDE, action, False,
+                "no command adapter configured",
+            )
         try:
-            if kind is ActionKind.APPLY_ECO:
-                await self._commands.apply_eco(zone_id)
-            else:
-                await self._commands.release_override(zone_id)
-            return RequestedAction(zone_id, kind, True)
+            await self._commands.apply_override(zone_id, action)
+            return RequestedAction(zone_id, ActionKind.APPLY_OVERRIDE, action, True)
         except Exception as exc:
-            return RequestedAction(zone_id, kind, False, str(exc))
+            return RequestedAction(
+                zone_id, ActionKind.APPLY_OVERRIDE, action, False, str(exc)
+            )
+
+    async def _command_release(self, zone_id: str) -> RequestedAction:
+        if self._commands is None:
+            return RequestedAction(
+                zone_id, ActionKind.RELEASE_OVERRIDE, None, False,
+                "no command adapter configured",
+            )
+        try:
+            await self._commands.release_override(zone_id)
+            return RequestedAction(zone_id, ActionKind.RELEASE_OVERRIDE, None, True)
+        except Exception as exc:
+            return RequestedAction(
+                zone_id, ActionKind.RELEASE_OVERRIDE, None, False, str(exc)
+            )
 
     def _save(self) -> None:
         if self._save_fn is not None:

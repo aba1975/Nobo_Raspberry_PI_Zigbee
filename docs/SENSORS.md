@@ -8,7 +8,7 @@ The application consumes normalized contact snapshots rather than MQTT topics
 or vendor payloads. A provider supplies:
 
 - an opaque stable provider ID and application sensor ID;
-- a display name and assigned Nobø zone ID;
+- a display name, door/window type, and assigned Nobø zone ID;
 - contact state (`open`, `closed`, or `unknown`);
 - availability, battery percentage, change time, and last-seen time;
 - async lifecycle and CRUD/pairing operations;
@@ -32,13 +32,34 @@ release makes no claim about dongle discovery, Zigbee mesh reliability,
 Zigbee2MQTT topic variants, retained MQTT messages, or physical sensor battery
 reporting.
 
+## Pairing and management
+
+Settings contains only the feature switch, provider status, paired count, and
+an **Add sensor** entry point. Pairing collects the physical type (door or
+window), a useful name, and the zone assignment. Sensors are then managed in
+their zone, beside the state they report, rather than growing one unbounded
+list in Settings. The simulated provider completes pairing immediately; a
+future Zigbee2MQTT provider will use the same flow while permit-join is active.
+
+Existing schema-v1 simulated records predate the type field and migrate to
+`window`, which preserves them without guessing from a user-editable name.
+
 ## Heating ownership
 
-The optional Eco action never restores Comfort. It only takes an otherwise
-unowned room that is demanding Comfort, marks the resulting zone Eco override
-as automation-owned, and releases that exact ownership with a Nobø `NORMAL`
-zone override after every assigned contact explicitly closes. Normal then lets
-the current global mode or weekly schedule decide what happens.
+Each zone has an independent warning delay and an optional delayed action:
+Away, Eco, Comfort, follow its schedule, or do nothing. Away, Eco, and Comfort
+are applied only when the zone is connected, has heating equipment, and has no
+pre-existing zone override. The resulting override is recorded with its exact
+mode as automation-owned. After every assigned contact explicitly closes, the
+automation releases only that owned override with Nobø `NORMAL`; it never
+blindly sends Comfort. Normal lets the current global mode or weekly schedule
+decide what happens.
+
+“Follow schedule” is deliberately conservative. If the zone is already free of
+a zone override, it is already following its schedule and no command is needed.
+If somebody has manually overridden it, the sensor rule does not erase that
+choice. A manual change made during any open cycle suppresses further sensor
+actions until every contact has closed.
 
 Any manual or external takeover ends ownership for the current open cycle. An
 unknown or unavailable contact is not closed and therefore cannot release an
@@ -47,6 +68,6 @@ existing left-open warning or automation-owned override.
 ## Monitoring-only rooms
 
 Sensors attach to the application's existing zone IDs. A zone may contain no
-Nobø components: it still receives sensor state and warnings, while the Eco
-action is unavailable because there is no heater to control. This avoids a
+Nobø components: it still receives sensor state and warnings, while heating
+actions are unavailable because there is no heater to control. This avoids a
 second room model that would drift from the heating UI.

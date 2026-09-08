@@ -86,7 +86,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 | **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
-| **Contact sensors** | Optional and hidden until an administrator enables it. Demo mode provides persisted simulated door/window sensors, left-open warnings and a conservatively owned Eco action. See [Contact sensors](#contact-sensors-simulated-provider). |
+| **Contact sensors** | Optional and hidden until an administrator enables it. Demo mode provides persisted simulated door/window sensors, prominent left-open warnings and conservative delayed heating actions. See [Contact sensors](#contact-sensors-simulated-provider). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -162,14 +162,18 @@ honour, with the reason as the tooltip. Nothing you can click will fail with a
 
 Contact sensors are off by default and completely hidden until an administrator
 enables them in Cabin under **Settings**. In demo mode an administrator can
-create simulated door/window sensors, name and assign them to zones, and change
-their open/closed, availability and battery state. No broker or dongle runs.
+pair simulated door/window sensors, name and assign them to zones, and change
+their open/closed, availability and battery state. Settings stays compact as
+the installation grows: sensor status and management live inside each zone.
+No broker or dongle runs.
 
 Each zone can choose a left-open warning delay and, independently, an optional
-Eco delay. A warning remains until every assigned sensor explicitly reports
-closed; unknown and unavailable are shown as their own states and never guessed
-to mean closed. The Eco action releases only the override it owns and returns
-the zone to its current schedule/global mode rather than forcing Comfort.
+delayed action: Away, Eco, Comfort, follow the schedule, or do nothing. A
+warning remains until every assigned sensor explicitly reports closed; unknown
+and unavailable are shown as their own states and never guessed to mean closed.
+Heating automation never overwrites an existing manual zone override, and on
+closure it releases only the exact override it owns rather than forcing
+Comfort.
 
 A zone does not need a heater to be monitored. Add an empty zone and assign a
 sensor to it; warnings work normally and heating actions stay unavailable.

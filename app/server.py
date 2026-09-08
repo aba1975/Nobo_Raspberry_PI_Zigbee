@@ -41,8 +41,8 @@ from sensor_automation import (
     HeatingZone,
     SensorAutomation,
 )
-from sensor_persistence import SensorSettings, ZoneSensorPolicy
-from sensor_provider import ContactSnapshot, ContactState, create_provider
+from sensor_persistence import ActionWhenOpen, SensorSettings, ZoneSensorPolicy
+from sensor_provider import ContactSnapshot, ContactState, SensorKind, create_provider
 from sensor_simulated import SensorNotFound
 
 # Configure logging
@@ -394,8 +394,8 @@ global_mode_source: str = _server_state.get("global_mode_source", "manual")  # "
 
 
 class SensorHeatingCommands:
-    async def apply_eco(self, zone_id: str) -> None:
-        await _sensor_override_command(zone_id, "eco")
+    async def apply_override(self, zone_id: str, action: ActionWhenOpen) -> None:
+        await _sensor_override_command(zone_id, action.value)
 
     async def release_override(self, zone_id: str) -> None:
         await _sensor_override_command(zone_id, "normal")
@@ -1012,8 +1012,11 @@ class SiteUpdate(BaseModel):
 
 class SensorZonePolicyUpdate(BaseModel):
     warning_delay_seconds: int = Field(default=300, ge=0, le=86400)
-    eco_enabled: bool = False
-    eco_delay_seconds: int = Field(default=300, ge=0, le=86400)
+    action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
+    action_delay_seconds: int = Field(default=300, ge=0, le=86400)
+    # Accepted temporarily so older clients can update without losing policy.
+    eco_enabled: Optional[bool] = None
+    eco_delay_seconds: Optional[int] = Field(default=None, ge=0, le=86400)
 
 
 class SensorSettingsUpdate(BaseModel):
@@ -1024,10 +1027,12 @@ class SensorSettingsUpdate(BaseModel):
 class SensorCreate(BaseModel):
     name: str
     zone_id: Optional[str] = None
+    kind: SensorKind = SensorKind.WINDOW
 
 
 class SensorUpdate(BaseModel):
     name: Optional[str] = None
+    kind: Optional[SensorKind] = None
     zone_id: Optional[str] = None
     clear_zone: bool = False
 
@@ -1761,6 +1766,7 @@ def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
     return {
         "sensor_id": snapshot.sensor_id,
         "name": snapshot.name,
+        "kind": snapshot.kind.value,
         "zone_id": snapshot.zone_id,
         "state": snapshot.state.value,
         "available": snapshot.available,
@@ -1789,7 +1795,7 @@ def _sensor_heating_state() -> Dict[str, HeatingZone]:
                         DEMO_MODE
                         and sensor_automation.states.get(
                             str(zone["zone_id"]), sensor_persistence.AutomationZoneState()
-                        ).eco_owned
+                        ).owned_action is not None
                     )
                 )
                 else zone.get("active_override_id")
@@ -1823,11 +1829,16 @@ async def _sensor_override_command(zone_id: str, mode: str) -> None:
     else:
         if current_hub is None or zone_id not in current_hub.zones:
             raise RuntimeError("Zone not found")
-        hub_mode = (
-            pynobo.nobo.API.OVERRIDE_MODE_ECO
-            if mode == "eco"
-            else pynobo.nobo.API.OVERRIDE_MODE_NORMAL
-        )
+        hub_modes = {
+            "away": pynobo.nobo.API.OVERRIDE_MODE_AWAY,
+            "eco": pynobo.nobo.API.OVERRIDE_MODE_ECO,
+            "comfort": pynobo.nobo.API.OVERRIDE_MODE_COMFORT,
+            "normal": pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
+        }
+        try:
+            hub_mode = hub_modes[mode]
+        except KeyError as exc:
+            raise RuntimeError(f"Unsupported sensor heating action: {mode}") from exc
         await hub_command(current_hub.async_create_override(
             hub_mode,
             OVERRIDE_UNTIL_CANCELLED,
@@ -1836,9 +1847,9 @@ async def _sensor_override_command(zone_id: str, mode: str) -> None:
         ))
     add_log_entry(
         "sent",
-        f"Contact sensor automation set zone {zone_id} to {mode}",
+        f"Contact sensor automation requested {mode} for zone {zone_id}",
         command=f"create_override {mode} CONSTANT ZONE {zone_id}",
-        source="schedule",
+        source="sensor",
     )
 
 
@@ -2112,6 +2123,18 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 "unavailable_count": aggregate.unavailable_count if aggregate else 0,
                 "warning_raised": bool(aggregate and aggregate.warning_raised),
                 "open_started_at": aggregate.open_started_at if aggregate else None,
+                "action_owned": (
+                    aggregate.owned_action.value
+                    if aggregate and aggregate.owned_action is not None
+                    else None
+                ),
+                "owned_action": (
+                    aggregate.owned_action.value
+                    if aggregate and aggregate.owned_action is not None
+                    else None
+                ),
+                "action_available": bool(zone.get("components")),
+                # Compatibility aliases for a rolling UI update.
                 "eco_owned": bool(aggregate and aggregate.eco_owned),
                 "eco_available": bool(zone.get("components")),
             }
@@ -2452,12 +2475,20 @@ def _sensor_settings_response() -> Dict[str, Any]:
             "warning_delay_seconds": sensor_settings.zones.get(
                 str(zone["zone_id"]), ZoneSensorPolicy()
             ).warning_delay_seconds,
+            "action_when_open": sensor_settings.zones.get(
+                str(zone["zone_id"]), ZoneSensorPolicy()
+            ).action_when_open.value,
+            "action_delay_seconds": sensor_settings.zones.get(
+                str(zone["zone_id"]), ZoneSensorPolicy()
+            ).action_delay_seconds,
+            # Keep an already-open pre-v2 Cabin tab from saving a migrated
+            # Eco policy back as disabled during a rolling update.
             "eco_enabled": sensor_settings.zones.get(
                 str(zone["zone_id"]), ZoneSensorPolicy()
-            ).eco_enabled,
+            ).action_when_open == ActionWhenOpen.ECO,
             "eco_delay_seconds": sensor_settings.zones.get(
                 str(zone["zone_id"]), ZoneSensorPolicy()
-            ).eco_delay_seconds,
+            ).action_delay_seconds,
         }
         for zone in _build_zones_data()
     }
@@ -2494,11 +2525,32 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
     policies = {}
     for zone_id in known_zone_ids:
         value = body.zones.get(zone_id)
+        action = value.action_when_open if value is not None else None
+        action_delay = value.action_delay_seconds if value is not None else None
+        supplied_fields = getattr(value, "model_fields_set", None) if value else None
+        if supplied_fields is None:
+            supplied_fields = getattr(value, "__fields_set__", set()) if value else set()
+        if (
+            value is not None
+            and value.eco_enabled is not None
+            and "action_when_open" not in supplied_fields
+        ):
+            action = (
+                ActionWhenOpen.ECO
+                if value.eco_enabled
+                else ActionWhenOpen.NOTHING
+            )
+        if (
+            value is not None
+            and value.eco_delay_seconds is not None
+            and "action_delay_seconds" not in supplied_fields
+        ):
+            action_delay = value.eco_delay_seconds
         policies[zone_id] = (
             ZoneSensorPolicy(
                 warning_delay_seconds=value.warning_delay_seconds,
-                eco_enabled=value.eco_enabled,
-                eco_delay_seconds=value.eco_delay_seconds,
+                action_when_open=action,
+                action_delay_seconds=action_delay,
             )
             if value is not None
             else sensor_settings.zones.get(zone_id, ZoneSensorPolicy())
@@ -2507,7 +2559,7 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
         if not await sensor_automation.disable(_sensor_heating_state()):
             raise HTTPException(
                 status_code=503,
-                detail="Could not release every sensor-owned Eco override; sensors remain enabled.",
+                detail="Could not release every sensor-owned heating override; sensors remain enabled.",
             )
     previous = sensor_settings
     updated = SensorSettings(enabled=body.enabled, provider="simulated", zones=policies)
@@ -2545,7 +2597,7 @@ async def pair_sensor(request: Request, body: SensorCreate):
     _require_sensor_enabled()
     _require_sensor_zone(body.zone_id)
     try:
-        sensor = await sensor_provider.pair(body.name, body.zone_id)
+        sensor = await sensor_provider.pair(body.name, body.zone_id, body.kind)
         await _finish_sensor_mutation()
         return _sensor_snapshot_dict(sensor)
     except ValueError as exc:
@@ -2561,6 +2613,7 @@ async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
         sensor = await sensor_provider.update(
             sensor_id,
             name=body.name,
+            kind=body.kind,
             zone_id=body.zone_id,
             clear_zone=body.clear_zone,
         )
@@ -3343,10 +3396,22 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
 async def delete_zone(zone_id: str):
     """Delete a zone"""
     require_capability("delete_zone")
+    persisted_sensors = (
+        sensor_persistence.load_simulated_sensors()
+        if DEMO_MODE and not sensor_settings.enabled
+        else []
+    )
     assigned_sensors = [
-        sensor for sensor in sensor_snapshots if str(sensor.zone_id) == str(zone_id)
+        sensor
+        for sensor in sensor_snapshots
+        if str(sensor.zone_id) == str(zone_id)
     ]
-    if assigned_sensors:
+    assigned_persisted_sensors = [
+        sensor
+        for sensor in persisted_sensors
+        if str(sensor.get("zone_id")) == str(zone_id)
+    ]
+    if assigned_sensors or assigned_persisted_sensors:
         raise HTTPException(
             status_code=409,
             detail="This zone still has contact sensors assigned. Move or remove them first.",

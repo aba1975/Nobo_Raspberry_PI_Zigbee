@@ -63,8 +63,10 @@ def enable(client, *, zone_id="1", warning=300, eco=False, eco_delay=300):
     return response.json()
 
 
-def add_sensor(client, name="Window", zone_id="1"):
-    response = client.post("/api/sensors", json={"name": name, "zone_id": zone_id})
+def add_sensor(client, name="Window", zone_id="1", kind="window"):
+    response = client.post(
+        "/api/sensors", json={"name": name, "zone_id": zone_id, "kind": kind}
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -100,15 +102,18 @@ def test_only_admins_can_configure_or_simulate(client, monkeypatch):
 
 def test_pair_rename_assign_remove_and_persisted_state(client):
     enable(client)
-    created = add_sensor(client)
+    created = add_sensor(client, kind="door")
     sensor_id = created["sensor_id"]
+    assert created["kind"] == "door"
     assert zone(client)["sensor_summary"]["state"] == "closed"
 
     renamed = client.put(
-        f"/api/sensors/{sensor_id}", json={"name": "Patio Door", "zone_id": "2"}
+        f"/api/sensors/{sensor_id}",
+        json={"name": "Patio Door", "zone_id": "2", "kind": "window"},
     )
     assert renamed.status_code == 200
     assert renamed.json()["name"] == "Patio Door"
+    assert renamed.json()["kind"] == "window"
     assert next(item for item in client.get("/api/sensors").json()["sensors"]
                 if item["sensor_id"] == sensor_id)["zone_id"] == "2"
 
@@ -241,6 +246,41 @@ def test_empty_policy_update_preserves_defaults_for_every_zone(client):
     }
 
 
+def test_settings_response_keeps_legacy_eco_aliases(client):
+    response = client.put("/api/sensors/settings", json={
+        "enabled": True,
+        "zones": {
+            "1": {
+                "warning_delay_seconds": 60,
+                "action_when_open": "eco",
+                "action_delay_seconds": 600,
+            }
+        },
+    })
+    assert response.status_code == 200
+    policy = response.json()["zones"]["1"]
+    assert policy["eco_enabled"] is True
+    assert policy["eco_delay_seconds"] == 600
+
+
+def test_settings_get_put_round_trip_preserves_v2_action(client):
+    response = client.put("/api/sensors/settings", json={
+        "enabled": True,
+        "zones": {
+            "1": {
+                "warning_delay_seconds": 60,
+                "action_when_open": "away",
+                "action_delay_seconds": 600,
+            }
+        },
+    })
+    assert response.status_code == 200
+    response = client.put("/api/sensors/settings", json=response.json())
+    assert response.status_code == 200
+    assert response.json()["zones"]["1"]["action_when_open"] == "away"
+    assert response.json()["zones"]["1"]["action_delay_seconds"] == 600
+
+
 def test_disable_then_enable_keeps_deadline_wakeup_alive(client):
     enable(client, warning=1)
     assert client.put(
@@ -264,3 +304,45 @@ def test_demo_restart_reconciles_persisted_sensor_owned_eco(client):
     server.DEMO_ZONE_OVERRIDES.clear()
     server.sensor_automation.reconcile_owned(server._sensor_heating_state())
     assert server.sensor_automation.states["1"].eco_owned is True
+
+
+@pytest.mark.parametrize("action", ["away", "eco", "comfort"])
+def test_api_applies_and_releases_each_configured_action(client, action):
+    response = client.put("/api/sensors/settings", json={
+        "enabled": True,
+        "zones": {
+            "1": {
+                "warning_delay_seconds": 300,
+                "action_when_open": action,
+                "action_delay_seconds": 0,
+            }
+        },
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["zones"]["1"]["action_when_open"] == action
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    current = zone(client)
+    assert current["current_mode"] == action
+    assert current["sensor_summary"]["action_owned"] == action
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "closed"})
+    assert zone(client)["current_mode"] == "normal"
+
+
+def test_api_schedule_action_does_not_clear_manual_override(client):
+    assert client.post("/api/zones/1/override/away").status_code == 200
+    response = client.put("/api/sensors/settings", json={
+        "enabled": True,
+        "zones": {
+            "1": {
+                "warning_delay_seconds": 300,
+                "action_when_open": "schedule",
+                "action_delay_seconds": 0,
+            }
+        },
+    })
+    assert response.status_code == 200
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    assert zone(client)["current_mode"] == "away"
+    assert zone(client)["sensor_summary"]["action_owned"] is None
