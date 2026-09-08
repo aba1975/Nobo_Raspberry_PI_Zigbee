@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
@@ -32,12 +32,14 @@ class ZoneSensorPolicy:
     warning_delay_seconds: int = 300
     action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
     action_delay_seconds: int = 300
+    override_all_modes: bool = False
 
     def __init__(
         self,
         warning_delay_seconds: int = 300,
         action_when_open: ActionWhenOpen | str = ActionWhenOpen.NOTHING,
         action_delay_seconds: int = 300,
+        override_all_modes: bool = False,
         *,
         eco_enabled: Optional[bool] = None,
         eco_delay_seconds: Optional[int] = None,
@@ -51,6 +53,7 @@ class ZoneSensorPolicy:
         object.__setattr__(self, "warning_delay_seconds", warning_delay_seconds)
         object.__setattr__(self, "action_when_open", ActionWhenOpen(action_when_open))
         object.__setattr__(self, "action_delay_seconds", action_delay_seconds)
+        object.__setattr__(self, "override_all_modes", override_all_modes)
 
     @property
     def eco_enabled(self) -> bool:
@@ -75,6 +78,7 @@ class AutomationZoneState:
     warning_raised: bool = False
     owned_action: Optional[ActionWhenOpen] = None
     suppressed: bool = False
+    owned_with_override: bool = False
 
     def __init__(
         self,
@@ -82,6 +86,7 @@ class AutomationZoneState:
         warning_raised: bool = False,
         owned_action: Optional[ActionWhenOpen | str] = None,
         suppressed: bool = False,
+        owned_with_override: bool = False,
         *,
         eco_owned: Optional[bool] = None,
     ):
@@ -92,6 +97,7 @@ class AutomationZoneState:
         self.owned_action = (
             ActionWhenOpen(owned_action) if owned_action is not None else None
         )
+        self.owned_with_override = owned_with_override
         self.suppressed = suppressed
 
     @property
@@ -163,7 +169,7 @@ def _load(path: Path, default: Any, validator):
 
 
 def _parse_settings(payload: Any) -> SensorSettings:
-    doc = _document(payload, (1, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, SCHEMA_VERSION))
     enabled = _require_bool(doc.get("enabled"), "enabled")
     provider = doc.get("provider")
     if provider != "simulated":
@@ -182,9 +188,20 @@ def _parse_settings(payload: Any) -> SensorSettings:
                 else ActionWhenOpen.NOTHING
             )
             action_delay = _delay(item["eco_delay_seconds"], "eco delay")
-        else:
+        elif doc["schema_version"] == 2:
             if set(item) != {
                 "warning_delay_seconds", "action_when_open", "action_delay_seconds"
+            }:
+                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+            try:
+                action = ActionWhenOpen(item["action_when_open"])
+            except (TypeError, ValueError) as exc:
+                raise InvalidSensorData("invalid action_when_open") from exc
+            action_delay = _delay(item["action_delay_seconds"], "action delay")
+        else:
+            if set(item) != {
+                "warning_delay_seconds", "action_when_open",
+                "action_delay_seconds", "override_all_modes",
             }:
                 raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
             try:
@@ -196,6 +213,11 @@ def _parse_settings(payload: Any) -> SensorSettings:
             warning_delay_seconds=_delay(item["warning_delay_seconds"], "warning delay"),
             action_when_open=action,
             action_delay_seconds=action_delay,
+            override_all_modes=(
+                _require_bool(item["override_all_modes"], "override_all_modes")
+                if doc["schema_version"] == SCHEMA_VERSION
+                else False
+            ),
         )
     return SensorSettings(enabled=enabled, provider=provider, zones=zones)
 
@@ -220,7 +242,7 @@ _SENSOR_FIELDS = {
 
 
 def _parse_sensors(payload: Any) -> list[dict]:
-    doc = _document(payload, (1, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, SCHEMA_VERSION))
     rows = doc.get("sensors")
     if type(rows) is not list:
         raise InvalidSensorData("sensors must be an array")
@@ -274,7 +296,7 @@ def save_simulated_sensors(sensors: list[Mapping[str, Any]], path: Optional[Path
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
-    doc = _document(payload, (1, SCHEMA_VERSION))
+    doc = _document(payload, (1, 2, SCHEMA_VERSION))
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
         if not isinstance(zone_id, str) or not zone_id:
@@ -289,9 +311,10 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
                 else None
             )
         else:
-            if set(row) != {
-                "open_started_at", "warning_raised", "owned_action", "suppressed"
-            }:
+            expected = {"open_started_at", "warning_raised", "owned_action", "suppressed"}
+            if doc["schema_version"] == SCHEMA_VERSION:
+                expected.add("owned_with_override")
+            if set(row) != expected:
                 raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
             try:
                 owned_action = (
@@ -310,6 +333,14 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
             owned_action=owned_action,
+            owned_with_override=(
+                _require_bool(row["owned_with_override"], "owned_with_override")
+                if doc["schema_version"] == SCHEMA_VERSION
+                # Earlier schemas had no colder-mode guard, so any live
+                # ownership must be released unless the user explicitly opts
+                # into the new Sensor override behavior.
+                else owned_action is not None
+            ),
             suppressed=_require_bool(row["suppressed"], "suppressed"),
         )
     return result

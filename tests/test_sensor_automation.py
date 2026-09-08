@@ -181,19 +181,83 @@ def test_disconnect_does_not_relinquish_persisted_ownership():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "chosen", [ActionWhenOpen.AWAY, ActionWhenOpen.ECO, ActionWhenOpen.COMFORT]
+    ("chosen", "current", "override_all_modes"),
+    [
+        (ActionWhenOpen.AWAY, "comfort", False),
+        (ActionWhenOpen.ECO, "comfort", False),
+        (ActionWhenOpen.COMFORT, "eco", True),
+    ],
 )
-async def test_each_override_action_is_owned_and_mode_aware(chosen):
+async def test_each_override_action_is_owned_and_mode_aware(
+    chosen, current, override_all_modes
+):
     commands = Commands()
     machine = SensorAutomation(clock=Clock(), commands=commands)
-    policy = {"1": ZoneSensorPolicy(300, chosen, 0)}
-    await machine.evaluate([sensor("a", "open")], policy, heating(mode="normal"))
+    policy = {"1": ZoneSensorPolicy(300, chosen, 0, override_all_modes)}
+    await machine.evaluate([sensor("a", "open")], policy, heating(mode=current))
     assert commands.calls == [(chosen.value, "1")]
     assert machine.states["1"].owned_action is chosen
 
     machine.reconcile_owned(heating(chosen.value, "owned"))
     assert machine.states["1"].owned_action is chosen
     machine.reconcile_owned(heating("eco" if chosen is not ActionWhenOpen.ECO else "away", "other"))
+    assert machine.states["1"].owned_action is None
+    assert machine.states["1"].suppressed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current", "desired"),
+    [
+        ("away", ActionWhenOpen.ECO),
+        ("away", ActionWhenOpen.COMFORT),
+        ("eco", ActionWhenOpen.COMFORT),
+        ("off", ActionWhenOpen.AWAY),
+    ],
+)
+async def test_sensor_action_does_not_raise_a_colder_mode(current, desired):
+    commands = Commands()
+    machine = SensorAutomation(clock=Clock(), commands=commands)
+    policy = {"1": ZoneSensorPolicy(300, desired, 0)}
+    await machine.evaluate([sensor("a", "open")], policy, heating(mode=current))
+    assert commands.calls == []
+    assert machine.states["1"].owned_action is None
+
+
+@pytest.mark.asyncio
+async def test_sensor_override_can_raise_mode_until_manual_takeover():
+    commands = Commands()
+    machine = SensorAutomation(clock=Clock(), commands=commands)
+    policy = {
+        "1": ZoneSensorPolicy(300, ActionWhenOpen.COMFORT, 0, True)
+    }
+    await machine.evaluate([sensor("a", "open")], policy, heating(mode="away"))
+    assert commands.calls == [("comfort", "1")]
+    assert machine.states["1"].owned_action is ActionWhenOpen.COMFORT
+
+    machine.manual_takeover("1")
+    await machine.evaluate([sensor("a", "open")], policy, heating(mode="away"))
+    assert commands.calls == [("comfort", "1")]
+    assert machine.states["1"].suppressed
+
+
+@pytest.mark.asyncio
+async def test_disabling_sensor_override_releases_warmer_owned_action():
+    commands = Commands()
+    machine = SensorAutomation(clock=Clock(), commands=commands)
+    override_policy = {
+        "1": ZoneSensorPolicy(300, ActionWhenOpen.COMFORT, 0, True)
+    }
+    await machine.evaluate(
+        [sensor("a", "open")], override_policy, heating(mode="away")
+    )
+    result = await machine.evaluate(
+        [sensor("a", "open")],
+        {"1": ZoneSensorPolicy(300, ActionWhenOpen.COMFORT, 0, False)},
+        heating(mode="comfort", override="owned"),
+    )
+    assert result.actions[-1].kind is ActionKind.RELEASE_OVERRIDE
+    assert commands.calls == [("comfort", "1"), ("normal", "1")]
     assert machine.states["1"].owned_action is None
     assert machine.states["1"].suppressed
 

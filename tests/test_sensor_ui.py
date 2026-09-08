@@ -91,12 +91,17 @@ def test_zone_behavior_uses_warning_action_and_separate_delay():
         "data-warning-delay",
         "data-open-action",
         "data-action-delay",
+        "data-override-all-modes",
         "data-save-sensor-policy",
     ):
         assert hook in CABIN
     for action in ("nothing", "away", "eco", "comfort", "schedule"):
         assert action in CABIN
     assert "10 seconds (demo test)" in CABIN
+    assert "Sensor override" in CABIN
+    assert "['away', 'eco', 'comfort'].includes(action)" in CABIN
+    assert "never raise it above the active global mode or schedule" in CABIN
+    assert "A new global or zone mode still wins." in CABIN
     assert "Set zone to Eco while open" not in CABIN
 
 

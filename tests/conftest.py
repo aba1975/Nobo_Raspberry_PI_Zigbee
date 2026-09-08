@@ -71,9 +71,11 @@ def clean_zone_override_state(tmp_path, monkeypatch):
     )
     server.DEMO_ZONE_OVERRIDES.clear()
     server._away_exception_zones_applied.clear()
+    server.demo_global_mode = "normal"
     yield
     server.DEMO_ZONE_OVERRIDES.clear()
     server._away_exception_zones_applied.clear()
+    server.demo_global_mode = "normal"
 
 
 @pytest.fixture(autouse=True)

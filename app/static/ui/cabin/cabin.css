@@ -374,6 +374,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem;
 }
 .sensor-behavior-grid .field { margin-bottom: 0; }
+.sensor-mode-override { margin-top: .75rem; }
 
 .zone-open {
   grid-area: name;

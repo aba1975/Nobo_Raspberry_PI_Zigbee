@@ -176,15 +176,28 @@ class TestDemoSchedulesPersistence:
 class TestServerStatePersistence:
     def test_save_and_reload(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config_persistence, "SERVER_STATE_FILE", tmp_path / "server_state.json")
-        config_persistence.save_server_state({"global_mode_source": "schedule"})
+        config_persistence.save_server_state({
+            "global_mode_source": "schedule",
+            "demo_global_mode": "away",
+        })
 
         loaded = config_persistence.load_server_state()
         assert loaded["global_mode_source"] == "schedule"
+        assert loaded["demo_global_mode"] == "away"
 
     def test_load_returns_defaults_when_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config_persistence, "SERVER_STATE_FILE", tmp_path / "nonexistent.json")
         loaded = config_persistence.load_server_state()
         assert loaded["global_mode_source"] == "manual"
+        assert loaded["demo_global_mode"] is None
+
+    def test_partial_save_preserves_demo_global_mode(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config_persistence, "SERVER_STATE_FILE", tmp_path / "server_state.json")
+        config_persistence.save_server_state({"demo_global_mode": "away"})
+        config_persistence.save_server_state({"global_mode_source": "schedule"})
+        loaded = config_persistence.load_server_state()
+        assert loaded["demo_global_mode"] == "away"
+        assert loaded["global_mode_source"] == "schedule"
 
     def test_load_returns_defaults_on_corrupt_file(self, tmp_path, monkeypatch):
         bad_file = tmp_path / "server_state.json"

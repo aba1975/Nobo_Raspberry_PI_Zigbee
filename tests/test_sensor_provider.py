@@ -24,7 +24,7 @@ def test_settings_and_automation_round_trip(tmp_path):
     state_path = tmp_path / "state.json"
     settings = SensorSettings(
         enabled=True,
-        zones={"7": ZoneSensorPolicy(10, ActionWhenOpen.AWAY, 20)},
+        zones={"7": ZoneSensorPolicy(10, ActionWhenOpen.AWAY, 20, True)},
     )
     save_sensor_settings(settings, settings_path)
     save_automation_state(
@@ -155,4 +155,25 @@ def test_schema_one_settings_sensor_and_ownership_migrate(tmp_path):
             }
         },
     }))
-    assert load_automation_state(state_path)["1"].owned_action is ActionWhenOpen.ECO
+    migrated_state = load_automation_state(state_path)["1"]
+    assert migrated_state.owned_action is ActionWhenOpen.ECO
+    assert migrated_state.owned_with_override is True
+
+
+def test_schema_two_policy_migrates_with_sensor_override_disabled(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({
+        "schema_version": 2,
+        "enabled": True,
+        "provider": "simulated",
+        "zones": {
+            "1": {
+                "warning_delay_seconds": 12,
+                "action_when_open": "comfort",
+                "action_delay_seconds": 34,
+            }
+        },
+    }))
+    assert load_sensor_settings(path).zones["1"] == ZoneSensorPolicy(
+        12, ActionWhenOpen.COMFORT, 34, False
+    )

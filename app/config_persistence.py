@@ -46,7 +46,12 @@ INTENDED_SETPOINTS_FILE = DATA_DIR / "intended_setpoints.json"
 SITE_FILE = DATA_DIR / "site.json"
 
 # Default server state values
-_DEFAULT_SERVER_STATE: dict = {"global_mode_source": "manual"}
+_DEFAULT_SERVER_STATE: dict = {
+    "global_mode_source": "manual",
+    # None distinguishes a pre-field installation so server startup can infer
+    # the active simulated global mode from its persisted zones.
+    "demo_global_mode": None,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +201,9 @@ def load_zone_icons() -> dict:
 def save_server_state(state: dict) -> None:
     """Persist *state* dict to ``data/server_state.json`` atomically."""
     try:
-        _atomic_write(SERVER_STATE_FILE, state)
+        current = load_server_state()
+        current.update(state)
+        _atomic_write(SERVER_STATE_FILE, current)
     except Exception as exc:
         logger.error("Failed to save server state: %s", exc)
 
