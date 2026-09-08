@@ -533,20 +533,32 @@ def _migrate_grouped_demo_rooms() -> bool:
         for zone_id in ("4", "5", "7", "9", "10", "11", "12")
     }
     if set(by_id) == {str(i) for i in range(1, 13)} and all(
-        set(by_id[zone_id].get("components", [])) == components
+        (
+            set(by_id[zone_id].get("components", [])) == components
+            or (
+                zone_id == "12"
+                and set(by_id[zone_id].get("components", []))
+                == {"160004028115"}
+            )
+        )
         for zone_id, components in split_components.items()
     ):
         return _repair_split_demo_side_data(split_from)
 
     expected = {
         "4": {"160004028112", "160004028113"},
-        "5": {"160004028114", "160004028115", "234000012006"},
         "7": {"160004028117", "160004028118", "160004028119"},
     }
     if set(by_id) != {str(i) for i in range(1, 9)}:
         return False
     if any(set(by_id[zone_id].get("components", [])) != components
            for zone_id, components in expected.items()):
+        return False
+    living_components = set(by_id["5"].get("components", []))
+    if living_components not in (
+        {"160004028114", "160004028115"},
+        {"160004028114", "160004028115", "234000012006"},
+    ):
         return False
 
     replacements: Dict[str, dict] = {}
@@ -555,13 +567,27 @@ def _migrate_grouped_demo_rooms() -> bool:
     }.items():
         source = copy.deepcopy(by_id[source_id])
         target = defaults[target_id]
+        source_names = dict(zip(
+            source.get("components", []),
+            source.get("component_names", []),
+        ))
+        default_names = dict(zip(target["components"], target["component_names"]))
+        target_components = [
+            component for component in target["components"]
+            if component in source.get("components", [])
+        ]
         source.update({
             "zone_id": target["zone_id"],
             "name": target["name"],
             "icon": target["icon"],
             "rooms": copy.deepcopy(target["rooms"]),
-            "components": copy.deepcopy(target["components"]),
-            "component_names": copy.deepcopy(target["component_names"]),
+            # Some early canonical demo fixtures predate the optional Living
+            # Room panel. Split only components that actually exist.
+            "components": target_components,
+            "component_names": [
+                source_names.get(component, default_names[component])
+                for component in target_components
+            ],
             # One grouped override cannot safely be claimed by several new
             # zones. The mode remains visible, but ownership starts clean.
             "override_id": None,
