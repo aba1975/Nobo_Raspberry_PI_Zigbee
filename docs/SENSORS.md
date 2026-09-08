@@ -45,34 +45,72 @@ Existing schema-v1 simulated records predate the type field and migrate to
 `window`, which preserves them without guessing from a user-editable name.
 Schema-v1 and schema-v2 zone policies migrate with **Sensor override** off.
 
-## Heating ownership
+## What a rule may do to the heating
 
-Each zone has an independent warning delay and an optional delayed action:
-Away, Eco, Comfort, follow its schedule, or do nothing. Away, Eco, and Comfort
-are applied only when the zone is connected, has heating equipment, and has no
-pre-existing zone override. The resulting override is recorded with its exact
-mode as automation-owned. After every assigned contact explicitly closes, the
-automation releases only that owned override with Nobø `NORMAL`; it never
-blindly sends Comfort. Normal lets the current global mode or weekly schedule
-decide what happens.
+Each zone chooses a warning delay and, separately, one thing to do while a
+contact of its own is open:
 
-By default a sensor rule can only lower the heating demand: Away is below Eco,
-and Eco is below Comfort. An Eco rule therefore leaves an existing Away demand
-alone, and a Comfort rule cannot raise an Away or Eco demand. The per-zone
-**Sensor override** switch explicitly opts out of that guard and allows the
-selected open action to outrank the active global mode or schedule. A later
-global or zone command still counts as manual takeover and remains in control
-for the rest of that open cycle.
+| Action | What it does |
+| --- | --- |
+| Do nothing | Warn only. The heating is untouched. |
+| Set to Away | Hold the fixed 7 °C anti-frost temperature. |
+| Set to Eco | Hold the zone's eco temperature. |
+| Set to Comfort | Hold the zone's comfort temperature. |
+| Return to schedule | Let go of any hold on the room so its schedule decides. |
 
-“Follow schedule” is deliberately conservative. If the zone is already free of
-a zone override, it is already following its schedule and no command is needed.
-If somebody has manually overridden it, the sensor rule does not erase that
-choice. A manual change made during any open cycle suppresses further sensor
-actions until every contact has closed.
+The first four either hold an override or hold nothing. **Return to schedule**
+is the odd one out: it cancels a zone override rather than creating one, so
+there is nothing to give back when the contact closes. It is one-shot and
+self-limiting — once the hold is gone there is nothing left to release.
 
-Any manual or external takeover ends ownership for the current open cycle. An
-unknown or unavailable contact is not closed and therefore cannot release an
-existing left-open warning or automation-owned override.
+### Warmth has an order
+
+`off` is colder than `away`, which is colder than `eco`, which is colder than
+`comfort`. A contact rule is a safety net, not a thermostat, so by default it
+may only move a room *down* that order:
+
+- an Eco rule leaves a room that is already Away alone;
+- a Comfort rule cannot pull an Away or Eco room up;
+- **Return to schedule** will not release a manual Away hold onto a Comfort
+  week profile, because letting go would warm the room just as surely as
+  setting it.
+
+The per-zone **Override colder modes** switch is the only way past this. With
+it on, the chosen action applies whatever the room is doing, until a global
+mode or the zone itself is set by hand. Switching it back off hands back any
+hold that only existed because it was on.
+
+Judging "would this warm the room?" needs two facts about a zone, and the
+server sends both: what it is running now, and what it would run with its own
+override cancelled — the global override if one is active and the zone follows
+it, otherwise the week profile.
+
+### Ownership
+
+An override this automation applies is written down with its exact mode. When
+every assigned contact reports closed, exactly that override is cancelled with
+a Nobø `NORMAL`; the current global mode or week profile then decides what the
+room does. Comfort is never sent to "restore" a room, because there is no
+record that Comfort is where it came from.
+
+Anything that stops matching what we applied — a person in the official app, a
+global mode, an away exception — ends ownership immediately and without a
+command, and suppresses further sensor actions until every contact has closed.
+An unknown or unavailable contact is not closed, so it can neither clear a
+left-open warning nor release a hold.
+
+When a rule stands down it says why, and the interface repeats it: the room is
+already colder, it is held by hand, it has no heater, or the hub is
+unreachable. A rule that is deliberately staying out of the way and a rule that
+is broken look identical otherwise.
+
+### Simulated hub state
+
+Demo mode has to answer "what would this room fall back to?", which means it
+has to model both kinds of override the hub keeps. The active global mode and
+the set of zones under their own override live in `data/server_state.json`, so
+a restart knows what the simulated hub is holding — exactly as a real hub
+remembers its overrides across a power cut.
 
 ## Monitoring-only rooms
 

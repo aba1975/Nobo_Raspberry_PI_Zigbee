@@ -27,42 +27,34 @@ class ActionWhenOpen(str, Enum):
     SCHEDULE = "schedule"
 
 
-@dataclass(frozen=True, init=False)
+# The actions that make the automation hold a zone override until every contact
+# closes again, and therefore the only values ``owned_action`` may take.
+# ``SCHEDULE`` cancels a hold rather than taking one, so it owns nothing.
+HOLD_ACTIONS = frozenset({
+    ActionWhenOpen.AWAY,
+    ActionWhenOpen.ECO,
+    ActionWhenOpen.COMFORT,
+})
+
+
+@dataclass(frozen=True)
 class ZoneSensorPolicy:
+    """What one zone should do about a contact of its own that stays open.
+
+    ``override_all_modes`` is the escape hatch from the warmth ordering in
+    ``sensor_automation``: with it off the action may only make the room
+    colder, with it on the action wins until something else takes the zone.
+    """
+
     warning_delay_seconds: int = 300
     action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
     action_delay_seconds: int = 300
     override_all_modes: bool = False
 
-    def __init__(
-        self,
-        warning_delay_seconds: int = 300,
-        action_when_open: ActionWhenOpen | str = ActionWhenOpen.NOTHING,
-        action_delay_seconds: int = 300,
-        override_all_modes: bool = False,
-        *,
-        eco_enabled: Optional[bool] = None,
-        eco_delay_seconds: Optional[int] = None,
-    ):
-        if eco_enabled is not None:
-            action_when_open = (
-                ActionWhenOpen.ECO if eco_enabled else ActionWhenOpen.NOTHING
-            )
-        if eco_delay_seconds is not None:
-            action_delay_seconds = eco_delay_seconds
-        object.__setattr__(self, "warning_delay_seconds", warning_delay_seconds)
-        object.__setattr__(self, "action_when_open", ActionWhenOpen(action_when_open))
-        object.__setattr__(self, "action_delay_seconds", action_delay_seconds)
-        object.__setattr__(self, "override_all_modes", override_all_modes)
-
-    @property
-    def eco_enabled(self) -> bool:
-        """Compatibility for integrations reading the original Eco-only policy."""
-        return self.action_when_open is ActionWhenOpen.ECO
-
-    @property
-    def eco_delay_seconds(self) -> int:
-        return self.action_delay_seconds
+    def __post_init__(self):
+        object.__setattr__(
+            self, "action_when_open", ActionWhenOpen(self.action_when_open)
+        )
 
 
 @dataclass(frozen=True)
@@ -72,42 +64,26 @@ class SensorSettings:
     zones: Dict[str, ZoneSensorPolicy] = field(default_factory=dict)
 
 
-@dataclass(init=False)
+@dataclass
 class AutomationZoneState:
+    """What this automation is in the middle of, for one zone.
+
+    ``owned_with_override`` records that the hold was only permitted because
+    the zone had ``override_all_modes`` set. It has to be remembered rather
+    than re-derived: while our own override is in place it masks the mode the
+    room would otherwise be showing, so there is nothing left to compare
+    against once the hold exists.
+    """
+
     open_started_at: Optional[float] = None
     warning_raised: bool = False
     owned_action: Optional[ActionWhenOpen] = None
     suppressed: bool = False
     owned_with_override: bool = False
 
-    def __init__(
-        self,
-        open_started_at: Optional[float] = None,
-        warning_raised: bool = False,
-        owned_action: Optional[ActionWhenOpen | str] = None,
-        suppressed: bool = False,
-        owned_with_override: bool = False,
-        *,
-        eco_owned: Optional[bool] = None,
-    ):
-        if eco_owned is not None:
-            owned_action = ActionWhenOpen.ECO if eco_owned else None
-        self.open_started_at = open_started_at
-        self.warning_raised = warning_raised
-        self.owned_action = (
-            ActionWhenOpen(owned_action) if owned_action is not None else None
-        )
-        self.owned_with_override = owned_with_override
-        self.suppressed = suppressed
-
-    @property
-    def eco_owned(self) -> bool:
-        """Compatibility alias for the original Eco-only ownership flag."""
-        return self.owned_action is ActionWhenOpen.ECO
-
-    @eco_owned.setter
-    def eco_owned(self, value: bool) -> None:
-        self.owned_action = ActionWhenOpen.ECO if value else None
+    def __post_init__(self):
+        if self.owned_action is not None:
+            self.owned_action = ActionWhenOpen(self.owned_action)
 
 
 class InvalidSensorData(ValueError):
@@ -130,6 +106,49 @@ def _delay(value: Any, where: str) -> int:
     if type(value) is not int or not 0 <= value <= 86400:
         raise InvalidSensorData(f"{where} must be an integer from 0 to 86400")
     return value
+
+
+def _action(value: Any) -> ActionWhenOpen:
+    try:
+        return ActionWhenOpen(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidSensorData(f"invalid action {value!r}") from exc
+
+
+def _exact_fields(value: Any, expected: frozenset, where: str) -> dict:
+    """A row has to carry exactly the keys its schema version defines.
+
+    Strict on purpose. A stray key is either a hand-edit or a version this
+    build does not understand, and both are better refused loudly here than
+    silently dropped on the next write.
+    """
+    row = _require_dict(value, where)
+    if set(row) != set(expected):
+        raise InvalidSensorData(f"{where} has unexpected fields")
+    return row
+
+
+# What each stored schema version calls a zone policy. v1 only offered Eco as a
+# plain on/off; v2 introduced the choice of action; v3 added the escape hatch
+# from the warmth ordering.
+_POLICY_FIELDS = {
+    1: frozenset({"warning_delay_seconds", "eco_enabled", "eco_delay_seconds"}),
+    2: frozenset({"warning_delay_seconds", "action_when_open", "action_delay_seconds"}),
+    3: frozenset({
+        "warning_delay_seconds", "action_when_open",
+        "action_delay_seconds", "override_all_modes",
+    }),
+}
+
+# The same, for what the automation had in flight when it was last saved.
+_AUTOMATION_FIELDS = {
+    1: frozenset({"open_started_at", "warning_raised", "eco_owned", "suppressed"}),
+    2: frozenset({"open_started_at", "warning_raised", "owned_action", "suppressed"}),
+    3: frozenset({
+        "open_started_at", "warning_raised", "owned_action",
+        "suppressed", "owned_with_override",
+    }),
+}
 
 
 def _document(payload: Any, versions: tuple[int, ...] = (SCHEMA_VERSION,)) -> dict:
@@ -174,48 +193,32 @@ def _parse_settings(payload: Any) -> SensorSettings:
     provider = doc.get("provider")
     if provider != "simulated":
         raise InvalidSensorData("provider must be 'simulated'")
+    version = doc["schema_version"]
     zones: Dict[str, ZoneSensorPolicy] = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
         if not isinstance(zone_id, str) or not zone_id:
             raise InvalidSensorData("zone ids must be non-empty strings")
-        item = _require_dict(raw, f"zones.{zone_id}")
-        if doc["schema_version"] == 1:
-            if set(item) != {"warning_delay_seconds", "eco_enabled", "eco_delay_seconds"}:
-                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+        item = _exact_fields(raw, _POLICY_FIELDS[version], f"zones.{zone_id}")
+        if version == 1:
+            # v1 only ever offered Eco, as a plain on/off.
             action = (
                 ActionWhenOpen.ECO
                 if _require_bool(item["eco_enabled"], "eco_enabled")
                 else ActionWhenOpen.NOTHING
             )
             action_delay = _delay(item["eco_delay_seconds"], "eco delay")
-        elif doc["schema_version"] == 2:
-            if set(item) != {
-                "warning_delay_seconds", "action_when_open", "action_delay_seconds"
-            }:
-                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
-            try:
-                action = ActionWhenOpen(item["action_when_open"])
-            except (TypeError, ValueError) as exc:
-                raise InvalidSensorData("invalid action_when_open") from exc
-            action_delay = _delay(item["action_delay_seconds"], "action delay")
         else:
-            if set(item) != {
-                "warning_delay_seconds", "action_when_open",
-                "action_delay_seconds", "override_all_modes",
-            }:
-                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
-            try:
-                action = ActionWhenOpen(item["action_when_open"])
-            except (TypeError, ValueError) as exc:
-                raise InvalidSensorData("invalid action_when_open") from exc
+            action = _action(item["action_when_open"])
             action_delay = _delay(item["action_delay_seconds"], "action delay")
         zones[zone_id] = ZoneSensorPolicy(
             warning_delay_seconds=_delay(item["warning_delay_seconds"], "warning delay"),
             action_when_open=action,
             action_delay_seconds=action_delay,
+            # Rows written before the warmth ordering existed say nothing about
+            # wanting past it, so they migrate with the escape hatch shut.
             override_all_modes=(
                 _require_bool(item["override_all_modes"], "override_all_modes")
-                if doc["schema_version"] == SCHEMA_VERSION
+                if version == SCHEMA_VERSION
                 else False
             ),
         )
@@ -297,35 +300,28 @@ def save_simulated_sensors(sensors: list[Mapping[str, Any]], path: Optional[Path
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
     doc = _document(payload, (1, 2, SCHEMA_VERSION))
+    version = doc["schema_version"]
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
         if not isinstance(zone_id, str) or not zone_id:
             raise InvalidSensorData("zone ids must be non-empty strings")
-        row = _require_dict(raw, f"zones.{zone_id}")
-        if doc["schema_version"] == 1:
-            if set(row) != {"open_started_at", "warning_raised", "eco_owned", "suppressed"}:
-                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+        row = _exact_fields(raw, _AUTOMATION_FIELDS[version], f"zones.{zone_id}")
+        if version == 1:
             owned_action = (
                 ActionWhenOpen.ECO
                 if _require_bool(row["eco_owned"], "eco_owned")
                 else None
             )
         else:
-            expected = {"open_started_at", "warning_raised", "owned_action", "suppressed"}
-            if doc["schema_version"] == SCHEMA_VERSION:
-                expected.add("owned_with_override")
-            if set(row) != expected:
-                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
-            try:
-                owned_action = (
-                    ActionWhenOpen(row["owned_action"])
-                    if row["owned_action"] is not None
-                    else None
+            owned_action = (
+                _action(row["owned_action"])
+                if row["owned_action"] is not None
+                else None
+            )
+            if owned_action is not None and owned_action not in HOLD_ACTIONS:
+                raise InvalidSensorData(
+                    "owned_action must be away, eco, comfort, or null"
                 )
-            except (TypeError, ValueError) as exc:
-                raise InvalidSensorData("invalid owned_action") from exc
-            if owned_action in (ActionWhenOpen.NOTHING, ActionWhenOpen.SCHEDULE):
-                raise InvalidSensorData("owned_action must be away, eco, comfort, or null")
         stamp = row["open_started_at"]
         if stamp is not None and (type(stamp) not in (int, float) or stamp < 0):
             raise InvalidSensorData("open_started_at must be a non-negative number or null")
@@ -333,15 +329,16 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
             owned_action=owned_action,
+            suppressed=_require_bool(row["suppressed"], "suppressed"),
             owned_with_override=(
                 _require_bool(row["owned_with_override"], "owned_with_override")
-                if doc["schema_version"] == SCHEMA_VERSION
-                # Earlier schemas had no colder-mode guard, so any live
-                # ownership must be released unless the user explicitly opts
-                # into the new Sensor override behavior.
+                if version == SCHEMA_VERSION
+                # Older builds applied holds with no warmth ordering at all, so
+                # a hold carried over from one of them cannot be shown to be
+                # permitted now. Marking it as override-created means the next
+                # evaluation hands it back unless the zone opts in.
                 else owned_action is not None
             ),
-            suppressed=_require_bool(row["suppressed"], "suppressed"),
         )
     return result
 

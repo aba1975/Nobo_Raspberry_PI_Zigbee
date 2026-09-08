@@ -663,6 +663,19 @@ const Nobo = (() => {
     return !dev.supports_comfort && !dev.supports_eco;
   }
 
+  /* A delay, written the way somebody would say it out loud. Used for the
+     contact-sensor rules, where "5 minutes" is a great deal easier to check at
+     a glance than "300 s". */
+  function fmtDuration(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    if (total === 0) return 'straight away';
+    if (total < 60) return `${total} second${total === 1 ? '' : 's'}`;
+    const minutes = Math.round(total / 60);
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+
   return {
     api, DEVICE_MODELS, deviceModel, deviceName, deviceImg, icon, ICON_PATHS,
     MODES, effectiveMode, targetTemp, heatState, HEAT_STATE,
@@ -670,6 +683,6 @@ const Nobo = (() => {
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
     toIsoInstant, fromIsoInstant, fmtWhen, fmtUntil, isManualDevice,
-    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth,
+    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth, fmtDuration,
   };
 })();
