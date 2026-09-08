@@ -1,4 +1,10 @@
-"""Static/browser checks for the maintained Cabin sensor interface."""
+"""Static checks on the Cabin contact-sensor interface.
+
+These are contract tests, not screenshots: they pin down the things that have
+actually gone wrong here before — a control that silently stops matching the
+API, an escaping hole on a user-supplied name, sensor wording leaking into
+Classic — and leave visual judgement to a person with the app open.
+"""
 
 import shutil
 import subprocess
@@ -14,98 +20,151 @@ CLASSIC = (ROOT / "app.js").read_text(encoding="utf-8")
 CSS = (ROOT / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
 
 
-def test_sensor_api_is_centralized_in_the_shared_client():
-    for path in (
-        "/api/sensors/settings",
-        "/api/sensors",
-        "/simulate",
-    ):
+def test_every_sensor_call_goes_through_the_shared_api_client():
+    for path in ("/api/sensors/settings", "/api/sensors", "/simulate"):
         assert path in CORE
+    # Nothing may reach past the client and build its own sensor request.
+    assert "fetch('/api/sensors" not in CABIN
 
 
-def test_disabled_settings_are_not_rendered_for_an_unknown_or_ordinary_user():
+def test_nothing_sensor_shaped_is_rendered_for_an_ordinary_user():
     assert "if (!isAdmin || !state.me || !state.sensorSettings) return ''" in CABIN
     assert "Nothing sensor-related is shown elsewhere while this is off." in CABIN
+    # The management buttons are behind the same admin check as the heaters.
+    assert "const admin = state.me && state.me.role === 'admin';" in CABIN
 
 
-def test_warning_is_persistent_prominent_and_accessible():
-    assert 'class="sensor-warning" role="alert"' in CABIN
-    assert "warning_raised" in CABIN
-    assert ".zone-sensor-warning" in CSS
-    assert ".sensor-warning" in CSS
-    assert "sensorZoneHeadline" in CABIN
-    assert "sensor-zone-strip" in CSS
-    assert "sensor_count" in CABIN
-
-
-def test_unknown_unavailable_and_battery_are_distinct_from_closed():
-    for value in ("open", "closed", "unknown", "unavailable"):
-        assert value in CABIN
-        assert f".sensor-{value}" in CSS
-    assert "battery" in CABIN.lower()
-
-
-def test_pairing_is_a_focused_typed_sensor_sheet():
-    for hook in (
-        "pair-sensor",
-        "pairSensorSheet",
-        "pairSensorKind",
-        "pairSensorName",
-        "pairSensorZone",
-    ):
+def test_pairing_asks_for_the_type_the_name_and_the_room():
+    for hook in ("pair-sensor", "pairSensorSheet", "pairSensorKind",
+                 "pairSensorName", "pairSensorZone"):
         assert hook in CABIN
-    assert "Create sensor" not in CABIN
     assert "Add simulated sensor" in CABIN
     assert "Start pairing" in CABIN
-    assert "Window" in CABIN and "Door" in CABIN
 
 
-def test_sensor_management_lives_on_the_zone_with_compact_actions():
-    for hook in (
-        "edit-sensor",
-        "move-sensor",
-        "replace-sensor",
-        "remove-sensor",
-    ):
+def test_sensors_are_managed_in_their_room_with_the_heater_icon_language():
+    for hook in ("edit-sensor", "move-sensor", "replace-sensor", "remove-sensor"):
         assert hook in CABIN
     for icon in ("rename", "move", "replace", "remove", "door", "window"):
         assert icon in CORE
-    assert "'sensors need'" in CABIN
+    # Settings stays a switch and a count; the long list lives on the rooms.
+    assert "sensor-settings-summary" in CSS
+    assert "Open a zone to see status" in CABIN
+
+
+def test_a_sensor_that_lost_its_room_can_still_be_reached():
     assert "!knownZones.has(String(sensor.zone_id))" in CABIN
     assert "wireZoneSensors(root)" in CABIN
 
 
-def test_zone_card_sensor_names_are_bounded():
+def test_the_zone_card_names_the_thing_that_is_open_and_counts_it():
+    assert "sensorZoneHeadline" in CABIN
+    assert "sensorKindLabel(open[0])} ${state}" in CABIN
+    assert "zsensor-tally" in CABIN and ".zsensor-tally" in CSS
+    for tone in ("closed", "open", "warning", "unavailable"):
+        assert f".zsensor-{tone}" in CSS
+    # Doors are doors and windows are windows, unless the room has both.
+    assert "sensorGroupNoun" in CABIN
+
+
+def test_zone_card_text_stays_short_however_many_sensors_are_open():
     assert "compactSensorNames" in CABIN
-    assert "+${remaining} more" in CABIN
+    assert "and ${remaining} more" in CABIN
 
 
-def test_live_zone_snapshots_take_precedence_over_cached_sensor_records():
-    zone_lookup = CABIN.index("return state.zones.flatMap")
-    cached_lookup = CABIN.index("|| (state.sensorDevices || []).find", zone_lookup)
-    assert zone_lookup < cached_lookup
+def test_unknown_unavailable_and_battery_are_their_own_states():
+    for value in ("open", "closed", "unknown", "unavailable"):
+        assert f".sensor-{value}" in CSS
+    assert "sensor-batt" in CABIN and ".sensor-batt.is-low" in CSS
 
 
-def test_zone_behavior_uses_warning_action_and_separate_delay():
-    for hook in (
-        "data-warning-delay",
-        "data-open-action",
-        "data-action-delay",
-        "data-override-all-modes",
-        "data-save-sensor-policy",
-    ):
-        assert hook in CABIN
-    for action in ("nothing", "away", "eco", "comfort", "schedule"):
-        assert action in CABIN
+def test_the_rule_is_summarised_on_the_room_and_edited_in_a_sheet():
+    assert "sensorRuleSummary" in CABIN
+    assert "data-edit-sensor-policy" in CABIN
+    assert "editSensorPolicySheet" in CABIN
+    for control in ("#spWarn", "#spAction", "#spDelay", "#spOverride"):
+        assert control in CABIN
+    # No form is left sitting open in the card any more.
+    assert "data-save-sensor-policy" not in CABIN
+
+
+def test_the_action_choice_offers_exactly_the_five_outcomes():
+    assert "const SENSOR_ACTIONS = ['nothing', 'away', 'eco', 'comfort', 'schedule']" in CABIN
+    for label in ("Do nothing", "Set to Away", "Set to Eco",
+                  "Set to Comfort", "Return to schedule"):
+        assert label in CABIN
     assert "10 seconds (demo test)" in CABIN
-    assert "Sensor override" in CABIN
-    assert "['away', 'eco', 'comfort'].includes(action)" in CABIN
-    assert "never raise it above the active global mode or schedule" in CABIN
-    assert "A new global or zone mode still wins." in CABIN
-    assert "Set zone to Eco while open" not in CABIN
 
 
-def test_sensor_values_are_escaped_before_entering_markup():
+def test_the_warmth_ordering_is_explained_where_it_is_chosen():
+    assert "Override colder modes" in CABIN
+    assert "can only turn the heating down, never up" in CABIN
+    # One name for the switch wherever it is referred to.
+    assert "sensor override" not in CABIN
+    # And the sheet only offers it where it can do anything.
+    assert "if (chosen === 'nothing') override.checked = false;" in CABIN
+
+
+def test_both_delays_say_what_they_are_counted_from():
+    assert "once it has been open for" in CABIN
+    assert "Both are counted from the moment it opens" in CABIN
+
+
+def test_everything_reachable_by_thumb_meets_the_apps_44px_floor():
+    # .btn and .icon-btn already do; the rule editor's entry point is a
+    # .btn-small and had been left out of that rule.
+    assert ".btn-small { min-height: 44px; }" in CSS
+
+
+def test_sensor_colours_come_from_the_theme_rather_than_being_hard_coded():
+    # Hard-coded reds went dark-on-dark under prefers-color-scheme: dark.
+    for literal in ("#c84b31", "#b33b24", "#d99a00", "#8a6500"):
+        assert literal not in CSS
+    assert "var(--danger)" in CSS and "var(--danger-wash)" in CSS
+
+
+def test_a_flat_battery_is_labelled_not_merely_recoloured():
+    assert "low ? ' low' : ''" in CABIN
+    assert ".sensor-batt.is-low" in CSS
+
+
+def test_a_rule_that_stands_down_says_so_rather_than_looking_broken():
+    assert "sensorBlockedText" in CABIN
+    assert "would warm this room, so the rule is standing down" in CABIN
+    assert "colder_mode" in CABIN and "manual_override" in CABIN
+    assert "action_status" in CABIN and "block_reason" in CABIN
+
+
+def test_reading_what_a_room_will_do_does_not_need_admin_settings():
+    # The action travels on the zone payload, so an ordinary user sees "about
+    # to set this room to Eco" without being able to open the settings that
+    # would tell them so.
+    assert "summary.action_when_open || 'nothing'" in CABIN
+    assert "sensorPolicyFor(zone.zone_id)" not in CABIN.split(
+        "function sensorRuleLine")[1].split("function sensorModeWord")[0]
+
+
+def test_the_payload_matches_what_the_server_accepts():
+    for field in ("warning_delay_seconds", "action_when_open",
+                  "action_delay_seconds", "override_all_modes"):
+        assert field in CABIN
+    # The dead v1 aliases are gone from both ends.
+    for stale in ("eco_enabled", "eco_delay_seconds", "eco_owned",
+                  "eco_available", "action_owned"):
+        assert stale not in CABIN
+
+
+def test_a_persistent_warning_does_not_re_announce_itself_on_every_update():
+    # The card re-renders on each zone update, so role="alert" would repeat the
+    # same open window at a screen reader indefinitely, and a live region
+    # around the whole card would read the sensor list out with it.
+    assert 'role="alert"' not in CABIN.replace(
+        'role="alert" would be worse still and', ''
+    )
+    assert '<div aria-live="polite">${warning}</div>' in CABIN
+
+
+def test_sensor_names_are_escaped_before_they_reach_the_markup():
     assert "${esc(sensor.name)}" in CABIN
     assert "${esc(zone.name)}" in CABIN
 
@@ -113,6 +172,12 @@ def test_sensor_values_are_escaped_before_entering_markup():
 def test_classic_remains_a_sensor_free_legacy_surface():
     assert "/api/sensors" not in CLASSIC
     assert "sensor-warning" not in CLASSIC
+
+
+def test_no_style_is_left_pointing_at_a_class_the_markup_dropped():
+    for gone in ("sensor-zone-strip", "sensor-behavior", "sensor-mode-override"):
+        assert gone not in CSS
+        assert gone not in CABIN
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
@@ -125,3 +190,22 @@ def test_browser_javascript_parses(relative):
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_delay_reads_the_way_somebody_would_say_it():
+    script = f"""
+      const window = {{}}; const document = {{}};
+      {CORE}
+      const out = [0, 45, 60, 300, 3600].map(Nobo.fmtDuration);
+      console.log(JSON.stringify(out));
+    """
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    assert "straight away" in result.stdout
+    assert "45 seconds" in result.stdout
+    assert "1 minute" in result.stdout
+    assert "5 minutes" in result.stdout
+    assert "1 hour" in result.stdout

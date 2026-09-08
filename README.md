@@ -167,16 +167,21 @@ their open/closed, availability and battery state. Settings stays compact as
 the installation grows: sensor status and management live inside each zone.
 No broker or dongle runs.
 
-Each zone can choose a left-open warning delay and, independently, an optional
-delayed action: Away, Eco, Comfort, follow the schedule, or do nothing. A
-warning remains until every assigned sensor explicitly reports closed; unknown
-and unavailable are shown as their own states and never guessed to mean closed.
-By default a sensor can lower heat but cannot raise an Away room to Eco or
-Comfort. A per-zone **Sensor override** option can deliberately override colder
-global/scheduled modes while the contact is open; any later global or zone
-command still wins. Heating automation never overwrites an existing manual zone
-override, and on closure it releases only the exact override it owns rather
-than forcing Comfort, so the active global mode or zone schedule resumes.
+Each room chooses a left-open warning delay and, separately, one thing to do
+while a contact of its own is open: set it to Away, Eco or Comfort, return it
+to its schedule, or do nothing. A warning stays until every assigned sensor
+explicitly reports closed; unknown and unavailable are shown as their own
+states and never guessed to mean closed.
+
+**A sensor may cool a room down, but not warm it up.** Off is colder than Away,
+Away colder than Eco, Eco colder than Comfort, and a rule that would move a
+room *up* that order stands down and says so on the room. The per-room
+**Override colder modes** switch is the only way past it, and any later global
+mode or hand-set zone takes the room back for the rest of that open cycle.
+
+On closure the automation cancels exactly the override it created and nothing
+else, so the room returns to whatever the current global mode or week profile
+says — it never sends Comfort to "put things back".
 
 A zone does not need a heater to be monitored. Add an empty zone and assign a
 sensor to it; warnings work normally and heating actions stay unavailable.

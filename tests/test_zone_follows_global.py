@@ -286,13 +286,13 @@ async def test_global_change_preserves_sensor_ownership_for_independent_zone(mon
     try:
         server.sensor_settings = SensorSettings(
             enabled=True,
-            zones={"1": ZoneSensorPolicy(eco_enabled=True)},
+            zones={"1": ZoneSensorPolicy(action_when_open="eco")},
         )
         server.sensor_automation = SensorAutomation(
             states={
                 "1": AutomationZoneState(
                     open_started_at=1,
-                    eco_owned=True,
+                    owned_action="eco",
                 )
             }
         )
@@ -304,7 +304,7 @@ async def test_global_change_preserves_sensor_ownership_for_independent_zone(mon
         released = await server._release_zone_overrides_for_global("home")
 
         assert "1" not in released
-        assert server.sensor_automation.states["1"].eco_owned is True
+        assert server.sensor_automation.states["1"].owned_action is not None
         assert "1" in server.DEMO_ZONE_OVERRIDES
     finally:
         server.sensor_settings = original_settings
