@@ -124,9 +124,10 @@ def test_the_noisy_alerts_were_removed_too():
         assert gone not in notifications.EVENT_TYPES
 
 
-def test_only_the_four_honest_alerts_remain():
+def test_only_honest_alerts_remain():
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
+        "contact_left_open", "contact_closed",
     }
 
 
@@ -259,6 +260,21 @@ def test_recovery_is_reported_once(notifier, sent):
     flush(sent)
     assert len(sent) == 1
     assert "back" in sent[0][0]
+
+
+def test_restored_condition_can_recover_without_repeating_warning(notifier, sent):
+    notifier.restore_condition("contact-left-open:1", True)
+    notifier.set_condition(
+        "contact_left_open",
+        "contact-left-open:1",
+        False,
+        recovery_event_type="contact_closed",
+        recovery_subject="closed again",
+        recovery_body="b",
+    )
+    flush(sent)
+    assert len(sent) == 1
+    assert "closed again" in sent[0][0]
 
 
 def test_conditions_alarm_independently(notifier, sent):

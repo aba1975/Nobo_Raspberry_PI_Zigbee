@@ -11,7 +11,7 @@ so.
 ## Try it first, without a hub
 
 You do not need a Nobø hub to see what this is. With no configuration at all the
-application starts in **demo mode**, against a simulated house of 8 zones and 11
+application starts in **demo mode**, against a simulated house of 12 zones and 11
 heaters:
 
 ```bash
@@ -46,7 +46,7 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 
 - [What This Project Does](#what-this-project-does) · [Features](#features)
 - **Installing:** [Prerequisites](#prerequisites) · [1 Prepare the Pi](#step-1-prepare-the-raspberry-pi) · [2 SSH](#step-2-enable-and-use-ssh) · [3 Docker](#step-3-install-docker-and-docker-compose) · [4 Clone](#step-4-clone-the-repository) · [5 Configure](#step-5-configure-environment-variables) · [6 Start](#step-6-start-the-system) · [7 Start on reboot](#step-7-make-it-start-on-reboot) · [8 Verify](#step-8-verify-it-is-working)
-- **Living with it:** [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
+- **Living with it:** [Contact sensors](#contact-sensors-simulated-provider) · [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
 - **Running it:** [HTTPS](#https-on-your-own-network) · [Updating](#updating-the-software) · [Backups](#backing-up-configuration-and-data) · [Ports](#ports) · [Timezone](#timezone) · [Security notes](#security-notes)
 - **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure) · [Reference documents](#reference-documents)
 
@@ -86,6 +86,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 | **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
+| **Contact sensors** | Optional and hidden until an administrator enables it. Demo mode provides persisted simulated door/window sensors, left-open warnings and a conservatively owned Eco action. See [Contact sensors](#contact-sensors-simulated-provider). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -107,7 +108,7 @@ interface says so rather than pretending the change worked.
 | --- | --- |
 | **Name your system** | Call it what you call the place — "The Lodge", "Main Street 12" — and the whole app follows, sign-in page included. See [Naming Your System](#naming-your-system). |
 | **Hub settings in the browser** | Switch between demo mode and your real hub, and set the hub serial and IP, without editing files or using SSH. See [Changing Hub Settings From the Web Interface](#changing-hub-settings-from-the-web-interface). |
-| **Demo mode** | A full simulated house with eight zones, so you can try everything before a hub is connected. |
+| **Demo mode** | A full simulated house with twelve zones, so you can try everything before a hub is connected. |
 | **Automatic start** | Starts on boot and restarts by itself if it stops. |
 | **Backup and restore** | A script that captures your settings and data. |
 
@@ -127,6 +128,7 @@ interface says so rather than pretending the change worked.
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
+| **Contact sensors** | ✅ simulated provider | ❌ provider not implemented yet |
 
 **Everything on that list has now been run against a real hub**, on a house of
 7 zones and 11 heaters. The exceptions are the two marked above.
@@ -155,6 +157,26 @@ You do not have to remember this table. The application asks the server what it
 can do (`GET /api/capabilities`) and greys out anything the current mode cannot
 honour, with the reason as the tooltip. Nothing you can click will fail with a
 "not implemented" error.
+
+### Contact sensors (simulated provider)
+
+Contact sensors are off by default and completely hidden until an administrator
+enables them in Cabin under **Settings**. In demo mode an administrator can
+create simulated door/window sensors, name and assign them to zones, and change
+their open/closed, availability and battery state. No broker or dongle runs.
+
+Each zone can choose a left-open warning delay and, independently, an optional
+Eco delay. A warning remains until every assigned sensor explicitly reports
+closed; unknown and unavailable are shown as their own states and never guessed
+to mean closed. The Eco action releases only the override it owns and returns
+the zone to its current schedule/global mode rather than forcing Comfort.
+
+A zone does not need a heater to be monitored. Add an empty zone and assign a
+sensor to it; warnings work normally and heating actions stay unavailable.
+
+The real-provider contract and its limits are documented in
+[`docs/SENSORS.md`](docs/SENSORS.md). Zigbee2MQTT/MQTT integration is a future
+provider and has not been tested against hardware.
 
 #### These used to be marked "does not work with a real hub"
 

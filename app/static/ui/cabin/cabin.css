@@ -290,6 +290,45 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   box-shadow: var(--shadow);
 }
 
+.zone-sensor-warning {
+  border-color: #c84b31;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #c84b31 25%, transparent);
+}
+.sensor-warning {
+  display: grid;
+  gap: .15rem;
+  padding: .7rem .8rem;
+  margin: .55rem 0;
+  border-radius: var(--radius-sm);
+  border-left: 5px solid #c84b31;
+  background: color-mix(in srgb, #c84b31 12%, var(--card));
+  color: var(--ink);
+}
+.sensor-warning strong { color: #b33b24; font-size: 1.05rem; }
+.sensor-state {
+  display: inline-flex;
+  width: max-content;
+  padding: .2rem .55rem;
+  border-radius: 999px;
+  font-size: .78rem;
+  font-weight: 700;
+  background: var(--paper);
+}
+.sensor-open { color: #b33b24; background: color-mix(in srgb, #c84b31 14%, var(--card)); }
+.sensor-closed { color: var(--pine); background: color-mix(in srgb, var(--pine) 13%, var(--card)); }
+.sensor-unknown, .sensor-unavailable { color: #8a6500; background: color-mix(in srgb, #d99a00 15%, var(--card)); }
+.sensor-list { list-style: none; padding: 0; margin: .6rem 0; display: grid; gap: .45rem; }
+.sensor-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: .65rem .7rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.sensor-list small { display: block; margin-top: .15rem; color: var(--ink-soft); }
+
 .zone-open {
   grid-area: name;
   display: flex; align-items: center; justify-content: space-between; gap: .5rem;
@@ -699,6 +738,36 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .schedule-unreadable { margin: .45rem 0 0; color: var(--ink-soft); }
 
 /* ------------------------------------------------------------ settings */
+.sensor-add {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
+  gap: .7rem;
+  align-items: end;
+}
+.sensor-admin-list, .sensor-policy-list { display: grid; gap: .75rem; }
+.sensor-admin-row, .sensor-policy {
+  display: grid;
+  gap: .65rem;
+  padding: .8rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.sensor-admin-row {
+  grid-template-columns: minmax(9rem, 1.2fr) minmax(9rem, 1fr) auto auto minmax(6rem, .5fr) auto;
+  align-items: end;
+}
+.sensor-policy {
+  grid-template-columns: minmax(11rem, 1fr) minmax(9rem, .8fr) minmax(12rem, 1fr) minmax(9rem, .8fr);
+  align-items: center;
+}
+.sensor-row-actions { display: flex; gap: .4rem; }
+.sensor-available, .sensor-eco-toggle { display: flex; gap: .4rem; align-items: center; }
+.sensor-battery { margin: 0; }
+
+@media (max-width: 760px) {
+  .sensor-add, .sensor-admin-row, .sensor-policy { grid-template-columns: 1fr; }
+  .sensor-row-actions { justify-content: flex-end; }
+}
 
 .field { display: block; margin-bottom: .95rem; }
 /* `hidden` loses to any component rule that sets display, and .field sets it. */
