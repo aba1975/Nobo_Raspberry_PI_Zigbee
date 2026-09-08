@@ -275,10 +275,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   /* The name gets a row of its own so it is never squeezed by the temperature
      next to it, then the set temperature and its stepper share the row below. */
   grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto 1fr;
   grid-template-areas:
     "name name"
     "meta meta"
+    "sensor sensor"
     "set  step"
     "devs devs";
   align-items: center;
@@ -294,10 +295,37 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border-color: #c84b31;
   box-shadow: 0 0 0 2px color-mix(in srgb, #c84b31 25%, transparent);
 }
+.sensor-zone-strip {
+  grid-area: sensor;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin-top: .55rem;
+  padding: .58rem .68rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.sensor-zone-strip strong, .sensor-zone-strip small { display: block; }
+.sensor-zone-strip strong { font-size: .9rem; }
+.sensor-zone-strip small { margin-top: .08rem; color: var(--ink-soft); font-size: .76rem; }
+.sensor-zone-open { border-color: color-mix(in srgb, var(--amber) 45%, var(--rule)); background: var(--amber-wash); }
+.sensor-zone-warning { border-color: #c84b31; background: color-mix(in srgb, #c84b31 12%, var(--card)); }
+.sensor-zone-warning strong { color: #b33b24; }
+.sensor-zone-unavailable { border-color: color-mix(in srgb, #d99a00 45%, var(--rule)); }
+.sensor-visual {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 42px; height: 42px;
+  border-radius: 12px;
+  color: var(--pine);
+  background: var(--pine-wash);
+}
+.sensor-visual .icon { width: 25px; height: 25px; }
 .sensor-warning {
-  display: grid;
-  gap: .15rem;
-  padding: .7rem .8rem;
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .75rem .85rem;
   margin: .55rem 0;
   border-radius: var(--radius-sm);
   border-left: 5px solid #c84b31;
@@ -305,6 +333,9 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   color: var(--ink);
 }
 .sensor-warning strong { color: #b33b24; font-size: 1.05rem; }
+.sensor-warning small { display: block; margin-top: .12rem; color: var(--ink-soft); }
+.sensor-warning-icon { display: inline-flex; color: #b33b24; }
+.sensor-warning-icon .icon { width: 28px; height: 28px; }
 .sensor-state {
   display: inline-flex;
   width: max-content;
@@ -319,15 +350,30 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sensor-unknown, .sensor-unavailable { color: #8a6500; background: color-mix(in srgb, #d99a00 15%, var(--card)); }
 .sensor-list { list-style: none; padding: 0; margin: .6rem 0; display: grid; gap: .45rem; }
 .sensor-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: .8rem;
   padding: .65rem .7rem;
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
 }
+.sensor-list li.is-open { border-color: color-mix(in srgb, #c84b31 42%, var(--rule)); }
+.sensor-copy { min-width: 0; }
 .sensor-list small { display: block; margin-top: .15rem; color: var(--ink-soft); }
+.sensor-count {
+  font-size: .78rem; font-weight: 650; color: var(--ink-soft);
+  padding: .2rem .55rem; border-radius: 99px; background: var(--paper);
+}
+.sensor-actions { grid-template-columns: repeat(4, auto); }
+.sensor-behavior {
+  margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+}
+.sensor-behavior h3 { margin: 0 0 .75rem; font-size: .92rem; }
+.sensor-behavior-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem;
+}
+.sensor-behavior-grid .field { margin-bottom: 0; }
 
 .zone-open {
   grid-area: name;
@@ -738,35 +784,19 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .schedule-unreadable { margin: .45rem 0 0; color: var(--ink-soft); }
 
 /* ------------------------------------------------------------ settings */
-.sensor-add {
-  display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
-  gap: .7rem;
-  align-items: end;
+.sensor-settings-summary {
+  display: grid; gap: .18rem; margin-top: .75rem; padding: .75rem .85rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper);
 }
-.sensor-admin-list, .sensor-policy-list { display: grid; gap: .75rem; }
-.sensor-admin-row, .sensor-policy {
-  display: grid;
-  gap: .65rem;
-  padding: .8rem;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-sm);
-}
-.sensor-admin-row {
-  grid-template-columns: minmax(9rem, 1.2fr) minmax(9rem, 1fr) auto auto minmax(6rem, .5fr) auto;
-  align-items: end;
-}
-.sensor-policy {
-  grid-template-columns: minmax(11rem, 1fr) minmax(9rem, .8fr) minmax(12rem, 1fr) minmax(9rem, .8fr);
-  align-items: center;
-}
-.sensor-row-actions { display: flex; gap: .4rem; }
-.sensor-available, .sensor-eco-toggle { display: flex; gap: .4rem; align-items: center; }
-.sensor-battery { margin: 0; }
+.sensor-settings-summary span { color: var(--ink-soft); font-size: .82rem; line-height: 1.4; }
+.sensor-unassigned-list { list-style: none; margin: .55rem 0 0; padding: 0; display: grid; gap: .35rem; }
+.sensor-unassigned-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.sensor-unassigned-list li > span:first-child { display: flex; align-items: center; gap: .45rem; min-width: 0; }
 
 @media (max-width: 760px) {
-  .sensor-add, .sensor-admin-row, .sensor-policy { grid-template-columns: 1fr; }
-  .sensor-row-actions { justify-content: flex-end; }
+  .sensor-list li { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .sensor-actions { grid-column: 2 / -1; justify-self: end; }
+  .sensor-behavior-grid { grid-template-columns: 1fr; }
 }
 
 .field { display: block; margin-bottom: .95rem; }

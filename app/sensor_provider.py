@@ -18,6 +18,13 @@ class ContactState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class SensorKind(str, Enum):
+    """Physical opening represented by a contact sensor."""
+
+    DOOR = "door"
+    WINDOW = "window"
+
+
 @dataclass(frozen=True)
 class ContactSnapshot:
     sensor_id: str
@@ -29,6 +36,7 @@ class ContactSnapshot:
     battery: Optional[int]
     changed_at: datetime
     last_seen_at: datetime
+    kind: SensorKind = SensorKind.WINDOW
 
 
 class SensorEventKind(str, Enum):
@@ -55,15 +63,26 @@ class ContactSensorProvider(Protocol):
 
     async def list(self) -> Sequence[ContactSnapshot]: ...
 
-    async def create(self, name: str, zone_id: Optional[str] = None) -> ContactSnapshot: ...
+    async def create(
+        self,
+        name: str,
+        zone_id: Optional[str] = None,
+        kind: SensorKind = SensorKind.WINDOW,
+    ) -> ContactSnapshot: ...
 
-    async def pair(self, name: str, zone_id: Optional[str] = None) -> ContactSnapshot: ...
+    async def pair(
+        self,
+        name: str,
+        zone_id: Optional[str] = None,
+        kind: SensorKind = SensorKind.WINDOW,
+    ) -> ContactSnapshot: ...
 
     async def update(
         self,
         sensor_id: str,
         *,
         name: Optional[str] = None,
+        kind: Optional[SensorKind] = None,
         zone_id: Optional[str] = None,
         clear_zone: bool = False,
     ) -> ContactSnapshot: ...

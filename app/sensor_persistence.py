@@ -6,23 +6,60 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
 SENSOR_AUTOMATION_STATE_FILE = DATA_DIR / "sensor_automation_state.json"
 
 
-@dataclass(frozen=True)
+class ActionWhenOpen(str, Enum):
+    NOTHING = "nothing"
+    AWAY = "away"
+    ECO = "eco"
+    COMFORT = "comfort"
+    SCHEDULE = "schedule"
+
+
+@dataclass(frozen=True, init=False)
 class ZoneSensorPolicy:
     warning_delay_seconds: int = 300
-    eco_enabled: bool = False
-    eco_delay_seconds: int = 300
+    action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
+    action_delay_seconds: int = 300
+
+    def __init__(
+        self,
+        warning_delay_seconds: int = 300,
+        action_when_open: ActionWhenOpen | str = ActionWhenOpen.NOTHING,
+        action_delay_seconds: int = 300,
+        *,
+        eco_enabled: Optional[bool] = None,
+        eco_delay_seconds: Optional[int] = None,
+    ):
+        if eco_enabled is not None:
+            action_when_open = (
+                ActionWhenOpen.ECO if eco_enabled else ActionWhenOpen.NOTHING
+            )
+        if eco_delay_seconds is not None:
+            action_delay_seconds = eco_delay_seconds
+        object.__setattr__(self, "warning_delay_seconds", warning_delay_seconds)
+        object.__setattr__(self, "action_when_open", ActionWhenOpen(action_when_open))
+        object.__setattr__(self, "action_delay_seconds", action_delay_seconds)
+
+    @property
+    def eco_enabled(self) -> bool:
+        """Compatibility for integrations reading the original Eco-only policy."""
+        return self.action_when_open is ActionWhenOpen.ECO
+
+    @property
+    def eco_delay_seconds(self) -> int:
+        return self.action_delay_seconds
 
 
 @dataclass(frozen=True)
@@ -32,12 +69,39 @@ class SensorSettings:
     zones: Dict[str, ZoneSensorPolicy] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(init=False)
 class AutomationZoneState:
     open_started_at: Optional[float] = None
     warning_raised: bool = False
-    eco_owned: bool = False
+    owned_action: Optional[ActionWhenOpen] = None
     suppressed: bool = False
+
+    def __init__(
+        self,
+        open_started_at: Optional[float] = None,
+        warning_raised: bool = False,
+        owned_action: Optional[ActionWhenOpen | str] = None,
+        suppressed: bool = False,
+        *,
+        eco_owned: Optional[bool] = None,
+    ):
+        if eco_owned is not None:
+            owned_action = ActionWhenOpen.ECO if eco_owned else None
+        self.open_started_at = open_started_at
+        self.warning_raised = warning_raised
+        self.owned_action = (
+            ActionWhenOpen(owned_action) if owned_action is not None else None
+        )
+        self.suppressed = suppressed
+
+    @property
+    def eco_owned(self) -> bool:
+        """Compatibility alias for the original Eco-only ownership flag."""
+        return self.owned_action is ActionWhenOpen.ECO
+
+    @eco_owned.setter
+    def eco_owned(self, value: bool) -> None:
+        self.owned_action = ActionWhenOpen.ECO if value else None
 
 
 class InvalidSensorData(ValueError):
@@ -62,9 +126,9 @@ def _delay(value: Any, where: str) -> int:
     return value
 
 
-def _document(payload: Any) -> dict:
+def _document(payload: Any, versions: tuple[int, ...] = (SCHEMA_VERSION,)) -> dict:
     doc = _require_dict(payload, "document")
-    if doc.get("schema_version") != SCHEMA_VERSION:
+    if doc.get("schema_version") not in versions:
         raise InvalidSensorData("unsupported or missing schema_version")
     return doc
 
@@ -99,7 +163,7 @@ def _load(path: Path, default: Any, validator):
 
 
 def _parse_settings(payload: Any) -> SensorSettings:
-    doc = _document(payload)
+    doc = _document(payload, (1, SCHEMA_VERSION))
     enabled = _require_bool(doc.get("enabled"), "enabled")
     provider = doc.get("provider")
     if provider != "simulated":
@@ -109,12 +173,29 @@ def _parse_settings(payload: Any) -> SensorSettings:
         if not isinstance(zone_id, str) or not zone_id:
             raise InvalidSensorData("zone ids must be non-empty strings")
         item = _require_dict(raw, f"zones.{zone_id}")
-        if set(item) != {"warning_delay_seconds", "eco_enabled", "eco_delay_seconds"}:
-            raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+        if doc["schema_version"] == 1:
+            if set(item) != {"warning_delay_seconds", "eco_enabled", "eco_delay_seconds"}:
+                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+            action = (
+                ActionWhenOpen.ECO
+                if _require_bool(item["eco_enabled"], "eco_enabled")
+                else ActionWhenOpen.NOTHING
+            )
+            action_delay = _delay(item["eco_delay_seconds"], "eco delay")
+        else:
+            if set(item) != {
+                "warning_delay_seconds", "action_when_open", "action_delay_seconds"
+            }:
+                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+            try:
+                action = ActionWhenOpen(item["action_when_open"])
+            except (TypeError, ValueError) as exc:
+                raise InvalidSensorData("invalid action_when_open") from exc
+            action_delay = _delay(item["action_delay_seconds"], "action delay")
         zones[zone_id] = ZoneSensorPolicy(
             warning_delay_seconds=_delay(item["warning_delay_seconds"], "warning delay"),
-            eco_enabled=_require_bool(item["eco_enabled"], "eco_enabled"),
-            eco_delay_seconds=_delay(item["eco_delay_seconds"], "eco delay"),
+            action_when_open=action,
+            action_delay_seconds=action_delay,
         )
     return SensorSettings(enabled=enabled, provider=provider, zones=zones)
 
@@ -134,18 +215,22 @@ def save_sensor_settings(settings: SensorSettings, path: Optional[Path] = None) 
 
 _SENSOR_FIELDS = {
     "sensor_id", "provider_id", "name", "zone_id", "state", "available",
-    "battery", "changed_at", "last_seen_at",
+    "battery", "changed_at", "last_seen_at", "kind",
 }
 
 
 def _parse_sensors(payload: Any) -> list[dict]:
-    doc = _document(payload)
+    doc = _document(payload, (1, SCHEMA_VERSION))
     rows = doc.get("sensors")
     if type(rows) is not list:
         raise InvalidSensorData("sensors must be an array")
     result, ids = [], set()
     for index, raw in enumerate(rows):
         row = _require_dict(raw, f"sensors[{index}]")
+        if doc["schema_version"] == 1 and "kind" not in row:
+            # Existing deployments predominantly modelled windows.  Defaulting
+            # those records to window preserves them without guessing by name.
+            row = {**row, "kind": "window"}
         if set(row) != _SENSOR_FIELDS:
             raise InvalidSensorData(f"sensors[{index}] has unexpected fields")
         for key in ("sensor_id", "provider_id", "name", "changed_at", "last_seen_at"):
@@ -165,6 +250,8 @@ def _parse_sensors(payload: Any) -> list[dict]:
             raise InvalidSensorData("zone_id must be a string or null")
         if row["state"] not in ("open", "closed", "unknown"):
             raise InvalidSensorData("invalid contact state")
+        if row["kind"] not in ("door", "window"):
+            raise InvalidSensorData("kind must be door or window")
         _require_bool(row["available"], "available")
         if row["battery"] is not None and (
             type(row["battery"]) is not int or not 0 <= row["battery"] <= 100
@@ -187,21 +274,42 @@ def save_simulated_sensors(sensors: list[Mapping[str, Any]], path: Optional[Path
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
-    doc = _document(payload)
+    doc = _document(payload, (1, SCHEMA_VERSION))
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
         if not isinstance(zone_id, str) or not zone_id:
             raise InvalidSensorData("zone ids must be non-empty strings")
         row = _require_dict(raw, f"zones.{zone_id}")
-        if set(row) != {"open_started_at", "warning_raised", "eco_owned", "suppressed"}:
-            raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+        if doc["schema_version"] == 1:
+            if set(row) != {"open_started_at", "warning_raised", "eco_owned", "suppressed"}:
+                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+            owned_action = (
+                ActionWhenOpen.ECO
+                if _require_bool(row["eco_owned"], "eco_owned")
+                else None
+            )
+        else:
+            if set(row) != {
+                "open_started_at", "warning_raised", "owned_action", "suppressed"
+            }:
+                raise InvalidSensorData(f"zones.{zone_id} has unexpected fields")
+            try:
+                owned_action = (
+                    ActionWhenOpen(row["owned_action"])
+                    if row["owned_action"] is not None
+                    else None
+                )
+            except (TypeError, ValueError) as exc:
+                raise InvalidSensorData("invalid owned_action") from exc
+            if owned_action in (ActionWhenOpen.NOTHING, ActionWhenOpen.SCHEDULE):
+                raise InvalidSensorData("owned_action must be away, eco, comfort, or null")
         stamp = row["open_started_at"]
         if stamp is not None and (type(stamp) not in (int, float) or stamp < 0):
             raise InvalidSensorData("open_started_at must be a non-negative number or null")
         result[zone_id] = AutomationZoneState(
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
-            eco_owned=_require_bool(row["eco_owned"], "eco_owned"),
+            owned_action=owned_action,
             suppressed=_require_bool(row["suppressed"], "suppressed"),
         )
     return result

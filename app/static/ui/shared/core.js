@@ -169,6 +169,10 @@ const Nobo = (() => {
     remove:  '<path d="M4.6 7h14.8"/><path d="M9.6 7V4.9h4.8V7"/>' +
              '<path d="M6.6 7l1 12.1a1.8 1.8 0 0 0 1.8 1.7h5.2a1.8 1.8 0 0 0 1.8-1.7L17.4 7"/>' +
              '<path d="M10.5 11v6.2M13.5 11v6.2"/>',
+    door:    '<path d="M5.2 21V3.5h12.4V21"/><path d="M7.8 21V6h7.2v15"/>' +
+             '<circle cx="13.1" cy="13.5" r=".7" fill="currentColor" stroke="none"/><path d="M3.5 21h16.8"/>',
+    window:  '<rect x="3.5" y="4" width="17" height="16" rx="1.2"/>' +
+             '<path d="M12 4v16M3.5 12h17"/><path d="m5.8 9.8 3.9-3.5M14.2 17.8l4-3.6"/>',
   };
 
   /** An inline SVG for `name`, sized in ems so it follows the button's text. */
