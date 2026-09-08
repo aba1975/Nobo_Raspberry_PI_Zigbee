@@ -811,6 +811,7 @@
       action_when_open: policy.action_when_open ||
         (policy.eco_enabled ? 'eco' : 'nothing'),
       action_delay_seconds: policy.action_delay_seconds ?? policy.eco_delay_seconds ?? 300,
+      override_all_modes: policy.override_all_modes === true,
     };
   }
 
@@ -852,6 +853,7 @@
     const policy = sensorPolicyFor(zone.zone_id);
     if (!policy || !state.me || state.me.role !== 'admin') return '';
     const action = policy.has_equipment ? policy.action_when_open : 'nothing';
+    const hasOverrideAction = ['away', 'eco', 'comfort'].includes(action);
     return `
       <div class="sensor-behavior" data-sensor-policy="${esc(zone.zone_id)}">
         <h3>When a sensor stays open</h3>
@@ -871,8 +873,15 @@
             <select data-action-delay>${sensorDelayOptions(policy.action_delay_seconds)}</select>
           </label>
         </div>
+        <label class="switch sensor-mode-override" data-sensor-override-field
+          ${hasOverrideAction ? '' : 'hidden'}>
+          <span class="switch-text"><strong>Sensor override</strong>
+            <span>Allow this action to override colder Away or Eco modes. A new global or zone mode still wins.</span>
+          </span>
+          <input type="checkbox" data-override-all-modes ${policy.override_all_modes ? 'checked' : ''}>
+        </label>
         ${policy.has_equipment
-          ? '<small class="field-hint">A manual zone override always wins. When everything closes, only an override created by this sensor rule is released.</small>'
+          ? '<small class="field-hint">By default a sensor may lower the heat, but never raise it above the active global mode or schedule. When everything closes, only an override created by this sensor rule is released.</small>'
           : '<small class="field-hint">Monitoring only — this zone has no Nobø heater, so it can warn but cannot change heating.</small>'}
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-save-sensor-policy>Save behavior</button>
@@ -1111,12 +1120,15 @@
         warning_delay_seconds: policy.warning_delay_seconds,
         action_when_open: policy.action_when_open || (policy.eco_enabled ? 'eco' : 'nothing'),
         action_delay_seconds: policy.action_delay_seconds ?? policy.eco_delay_seconds ?? 300,
+        override_all_modes: policy.override_all_modes === true,
       };
     });
     zones[zoneId] = {
       warning_delay_seconds: Number(row.querySelector('[data-warning-delay]').value),
       action_when_open: action,
       action_delay_seconds: Number(row.querySelector('[data-action-delay]').value),
+      override_all_modes: ['away', 'eco', 'comfort'].includes(action) &&
+        row.querySelector('[data-override-all-modes]').checked,
     };
     state.sensorSettings = await Nobo.api.setSensorSettings({ enabled: true, zones });
     Nobo.toast('Sensor behavior saved');
@@ -1143,6 +1155,11 @@
       select.onchange = () => {
         const row = select.closest('[data-sensor-policy]');
         row.querySelector('[data-action-delay-field]').hidden = select.value === 'nothing';
+        const hasOverrideAction = ['away', 'eco', 'comfort'].includes(select.value);
+        row.querySelector('[data-sensor-override-field]').hidden = !hasOverrideAction;
+        if (!hasOverrideAction) {
+          row.querySelector('[data-override-all-modes]').checked = false;
+        }
       };
     });
     root.querySelectorAll('[data-save-sensor-policy]').forEach(button => {
@@ -2947,6 +2964,7 @@
         warning_delay_seconds: policy.warning_delay_seconds,
         action_when_open: policy.action_when_open || (policy.eco_enabled ? 'eco' : 'nothing'),
         action_delay_seconds: policy.action_delay_seconds ?? policy.eco_delay_seconds ?? 300,
+        override_all_modes: policy.override_all_modes === true,
       };
     });
     state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones: policies });

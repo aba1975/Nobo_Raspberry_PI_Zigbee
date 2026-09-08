@@ -171,9 +171,12 @@ Each zone can choose a left-open warning delay and, independently, an optional
 delayed action: Away, Eco, Comfort, follow the schedule, or do nothing. A
 warning remains until every assigned sensor explicitly reports closed; unknown
 and unavailable are shown as their own states and never guessed to mean closed.
-Heating automation never overwrites an existing manual zone override, and on
-closure it releases only the exact override it owns rather than forcing
-Comfort.
+By default a sensor can lower heat but cannot raise an Away room to Eco or
+Comfort. A per-zone **Sensor override** option can deliberately override colder
+global/scheduled modes while the contact is open; any later global or zone
+command still wins. Heating automation never overwrites an existing manual zone
+override, and on closure it releases only the exact override it owns rather
+than forcing Comfort, so the active global mode or zone schedule resumes.
 
 A zone does not need a heater to be monitored. Add an empty zone and assign a
 sensor to it; warnings work normally and heating actions stay unavailable.

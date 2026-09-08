@@ -391,6 +391,28 @@ sensor_evaluation_lock = asyncio.Lock()
 # Loaded from disk on startup; persisted to disk on every change.
 _server_state = config_persistence.load_server_state()
 global_mode_source: str = _server_state.get("global_mode_source", "manual")  # "manual" | "schedule"
+_saved_demo_global_mode = _server_state.get("demo_global_mode")
+if _saved_demo_global_mode in {"normal", "away", "eco", "comfort"}:
+    demo_global_mode: str = _saved_demo_global_mode
+else:
+    # Before this field existed, demo mode flattened a global mode into every
+    # zone record. Recover a clear majority so a sensor release cannot turn a
+    # globally Away demo house back to its Comfort schedule after an upgrade.
+    _demo_modes = [
+        str(zone.get("mode", "normal")).lower()
+        for zone in DEMO_ZONES
+        if str(zone.get("override_allowed", "1")).strip().lower()
+        not in {"0", "false", "no", "off"}
+    ]
+    _majority_mode = (
+        max(set(_demo_modes), key=_demo_modes.count) if _demo_modes else "normal"
+    )
+    demo_global_mode = (
+        _majority_mode
+        if _majority_mode in {"away", "eco", "comfort"}
+        and _demo_modes.count(_majority_mode) > len(_demo_modes) / 2
+        else "normal"
+    )
 
 
 class SensorHeatingCommands:
@@ -1014,6 +1036,7 @@ class SensorZonePolicyUpdate(BaseModel):
     warning_delay_seconds: int = Field(default=300, ge=0, le=86400)
     action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
     action_delay_seconds: int = Field(default=300, ge=0, le=86400)
+    override_all_modes: bool = False
     # Accepted temporarily so older clients can update without losing policy.
     eco_enabled: Optional[bool] = None
     eco_delay_seconds: Optional[int] = Field(default=None, ge=0, le=86400)
@@ -1798,7 +1821,7 @@ def _sensor_heating_state() -> Dict[str, HeatingZone]:
                         ).owned_action is not None
                     )
                 )
-                else zone.get("active_override_id")
+                else None
             ),
         )
         for zone in zones
@@ -1820,10 +1843,15 @@ async def _sensor_override_command(zone_id: str, mode: str) -> None:
         )
         if zone is None:
             raise RuntimeError("Zone not found")
-        zone["mode"] = mode
         if mode == "normal":
             DEMO_ZONE_OVERRIDES.discard(str(zone_id))
+            zone["mode"] = (
+                demo_global_mode
+                if zone_follows_global_mode(zone) and demo_global_mode != "normal"
+                else "normal"
+            )
         else:
+            zone["mode"] = mode
             DEMO_ZONE_OVERRIDES.add(str(zone_id))
         config_persistence.save_demo_zones(DEMO_ZONES)
     else:
@@ -2481,6 +2509,9 @@ def _sensor_settings_response() -> Dict[str, Any]:
             "action_delay_seconds": sensor_settings.zones.get(
                 str(zone["zone_id"]), ZoneSensorPolicy()
             ).action_delay_seconds,
+            "override_all_modes": sensor_settings.zones.get(
+                str(zone["zone_id"]), ZoneSensorPolicy()
+            ).override_all_modes,
             # Keep an already-open pre-v2 Cabin tab from saving a migrated
             # Eco policy back as disabled during a rolling update.
             "eco_enabled": sensor_settings.zones.get(
@@ -2530,6 +2561,11 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
         supplied_fields = getattr(value, "model_fields_set", None) if value else None
         if supplied_fields is None:
             supplied_fields = getattr(value, "__fields_set__", set()) if value else set()
+        override_all_modes = (
+            value.override_all_modes
+            if value is not None and "override_all_modes" in supplied_fields
+            else sensor_settings.zones.get(zone_id, ZoneSensorPolicy()).override_all_modes
+        )
         if (
             value is not None
             and value.eco_enabled is not None
@@ -2551,6 +2587,7 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
                 warning_delay_seconds=value.warning_delay_seconds,
                 action_when_open=action,
                 action_delay_seconds=action_delay,
+                override_all_modes=override_all_modes,
             )
             if value is not None
             else sensor_settings.zones.get(zone_id, ZoneSensorPolicy())
@@ -3511,8 +3548,7 @@ async def set_zone_override(zone_id: str, mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
-    if sensor_settings.enabled:
-        sensor_automation.manual_takeover(zone_id)
+    sensor_automation.manual_takeover(zone_id)
 
     # Written down before the command goes out, because the hub can push the
     # change back to us faster than this function returns. Without this, every
@@ -3901,7 +3937,7 @@ async def accept_zone_setpoints(zone_id: str):
 @app.post("/api/global/override/{mode}")
 async def set_global_override(mode: str):
     """Set global override mode for all zones"""
-    global global_mode_source
+    global global_mode_source, demo_global_mode
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -3932,6 +3968,7 @@ async def set_global_override(mode: str):
     try:
         # Demo mode - update all simulated zones
         if DEMO_MODE:
+            demo_global_mode = "normal" if mode in ("home", "normal") else mode
             for demo_zone in DEMO_ZONES:
                 # A zone override outranks the global one on the hub, so a zone
                 # that has its own override is left alone here — same as the
@@ -3955,7 +3992,10 @@ async def set_global_override(mode: str):
             )
             global_mode_source = "manual"
             config_persistence.save_demo_zones(DEMO_ZONES)
-            config_persistence.save_server_state({"global_mode_source": global_mode_source})
+            config_persistence.save_server_state({
+                "global_mode_source": global_mode_source,
+                "demo_global_mode": demo_global_mode,
+            })
             released = await _release_zone_overrides_for_global(mode)
             exceptions = await _sync_away_exceptions(mode)
             return {"status": "success", "mode": mode, "source": "manual",
@@ -4204,8 +4244,6 @@ def _record_away_exceptions_applied() -> None:
 
 
 def _sensor_manual_takeover(zone_ids) -> None:
-    if not sensor_settings.enabled:
-        return
     for zone_id in zone_ids:
         sensor_automation.manual_takeover(str(zone_id))
 
@@ -4398,6 +4436,12 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
 
     released: List[str] = []
     if DEMO_MODE:
+        following_zone_ids = {
+            str(zone.get("zone_id"))
+            for zone in DEMO_ZONES
+            if zone_follows_global_mode(zone)
+        }
+        prior_zone_overrides = set(DEMO_ZONE_OVERRIDES)
         settled = 'normal' if mode in ('home', 'normal') else mode
         for demo_zone in DEMO_ZONES:
             zone_id = str(demo_zone.get('zone_id'))
@@ -4409,6 +4453,7 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
             demo_zone['mode'] = settled
             released.append(zone_id)
         _sensor_manual_takeover(released)
+        _sensor_manual_takeover(following_zone_ids - prior_zone_overrides)
         if released:
             config_persistence.save_demo_zones(DEMO_ZONES)
             add_log_entry(
@@ -4418,7 +4463,13 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
                 source=source,
             )
     elif current_hub:
-        for zone_id in sorted(_zones_with_own_override(current_hub)):
+        following_zone_ids = {
+            str(zone_id)
+            for zone_id, zone in current_hub.zones.items()
+            if zone_follows_global_mode(zone)
+        }
+        prior_zone_overrides = _zones_with_own_override(current_hub)
+        for zone_id in sorted(prior_zone_overrides):
             zone = current_hub.zones.get(zone_id)
             if zone is None or not zone_follows_global_mode(zone):
                 continue
@@ -4442,6 +4493,7 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
                 # One stubborn zone must not stop the rest of the house from
                 # following the mode that was just asked for.
                 logger.error("Could not release zone override on zone %s: %s", zone_id, exc)
+        _sensor_manual_takeover(following_zone_ids - prior_zone_overrides)
 
     if released:
         # These are no longer held by us, whatever put them there.
@@ -4487,7 +4539,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     Internal helper to apply a global mode without going through the HTTP endpoint.
     Used by the scheduler and schedule save/delete endpoints.
     """
-    global global_mode_source
+    global global_mode_source, demo_global_mode
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -4505,6 +4557,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     await _restore_before_global_mode(source=source)
 
     if DEMO_MODE:
+        demo_global_mode = "normal" if mode in ("home", "normal") else mode
         for demo_zone in DEMO_ZONES:
             # As on the hub, a zone-level override survives a global change.
             # The ones that are meant to follow it are released just below.
@@ -4519,7 +4572,10 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         )
         global_mode_source = source
         config_persistence.save_demo_zones(DEMO_ZONES)
-        config_persistence.save_server_state({"global_mode_source": global_mode_source})
+        config_persistence.save_server_state({
+            "global_mode_source": global_mode_source,
+            "demo_global_mode": demo_global_mode,
+        })
         await _release_zone_overrides_for_global(mode, source=source)
         await _sync_away_exceptions(mode, source=source)
         return

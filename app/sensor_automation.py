@@ -21,6 +21,16 @@ OVERRIDE_ACTIONS = frozenset({
     ActionWhenOpen.COMFORT,
 })
 
+# Lower values are colder. Without an explicit sensor override, an open-contact
+# rule may reduce heat but must never raise a room above its schedule or global
+# mode.
+HEATING_PRIORITY = {
+    "off": -1,
+    "away": 0,
+    "eco": 1,
+    "comfort": 2,
+}
+
 
 class HeatingCommandAdapter(Protocol):
     async def apply_override(self, zone_id: str, action: ActionWhenOpen) -> None: ...
@@ -118,6 +128,7 @@ class SensorAutomation:
                 warning_raised=state.warning_raised,
                 owned_action=state.owned_action,
                 suppressed=state.suppressed,
+                owned_with_override=state.owned_with_override,
             )
             for zone_id, state in (states or {}).items()
         }
@@ -169,13 +180,17 @@ class SensorAutomation:
             if state.owned_action is not None and observed is not None and observed.connected:
                 if not self._still_owned(observed, state.owned_action):
                     state.owned_action = None
+                    state.owned_with_override = False
                     state.suppressed = state.open_started_at is not None
                     changed = True
 
             release_attempted = False
             if (
                 state.owned_action is not None
-                and state.owned_action is not policy.action_when_open
+                and (
+                    state.owned_action is not policy.action_when_open
+                    or (state.owned_with_override and not policy.override_all_modes)
+                )
                 and not cycle_ended
             ):
                 if self._still_owned(observed, state.owned_action):
@@ -184,6 +199,7 @@ class SensorAutomation:
                     release_attempted = True
                     if action.succeeded:
                         state.owned_action = None
+                        state.owned_with_override = False
                         state.suppressed = True
                         changed = True
 
@@ -201,12 +217,15 @@ class SensorAutomation:
                     and state.owned_action is None
                     and not state.suppressed
                     and now >= action_due
-                    and self._safe_to_apply(observed)
+                    and self._safe_to_apply(
+                        observed, desired, policy.override_all_modes
+                    )
                 ):
                     action = await self._command_apply(zone_id, desired)
                     actions.append(action)
                     if action.succeeded:
                         state.owned_action = desired
+                        state.owned_with_override = policy.override_all_modes
                         changed = True
 
             if cycle_ended:
@@ -218,6 +237,7 @@ class SensorAutomation:
                         actions.append(action)
                         if action.succeeded:
                             state.owned_action = None
+                            state.owned_with_override = False
                             changed = True
                         else:
                             cycle_ended = False
@@ -225,6 +245,7 @@ class SensorAutomation:
                         # A person replaced our override. Drop the ledger without
                         # sending NORMAL, which could clear their replacement.
                         state.owned_action = None
+                        state.owned_with_override = False
                         changed = True
                 if state.owned_action is not None:
                     cycle_ended = False
@@ -283,6 +304,7 @@ class SensorAutomation:
                     if not action.succeeded:
                         continue
                 state.owned_action = None
+                state.owned_with_override = False
                 changed = True
             del self.states[zone_id]
             changed = True
@@ -308,6 +330,7 @@ class SensorAutomation:
         if state is None:
             return
         state.owned_action = None
+        state.owned_with_override = False
         if state.open_started_at is not None:
             state.suppressed = True
         self._save()
@@ -324,6 +347,7 @@ class SensorAutomation:
                 and not self._still_owned(observed, state.owned_action)
             ):
                 state.owned_action = None
+                state.owned_with_override = False
                 state.suppressed = state.open_started_at is not None
                 changed = True
         if changed:
@@ -342,11 +366,13 @@ class SensorAutomation:
                 continue
             if not self._still_owned(observed, state.owned_action):
                 state.owned_action = None
+                state.owned_with_override = False
                 changed = True
                 continue
             action = await self._command_release(zone_id)
             if action.succeeded:
                 state.owned_action = None
+                state.owned_with_override = False
                 changed = True
             else:
                 success = False
@@ -367,12 +393,26 @@ class SensorAutomation:
         return AggregateState.UNKNOWN
 
     @staticmethod
-    def _safe_to_apply(zone: Optional[HeatingZone]) -> bool:
-        return bool(
+    def _safe_to_apply(
+        zone: Optional[HeatingZone],
+        desired: ActionWhenOpen,
+        override_all_modes: bool,
+    ) -> bool:
+        if not (
             zone
             and zone.has_equipment
             and zone.connected
             and zone.active_override in (None, "", "-1")
+        ):
+            return False
+        if override_all_modes:
+            return True
+        current_priority = HEATING_PRIORITY.get(zone.effective_mode.lower())
+        desired_priority = HEATING_PRIORITY.get(desired.value)
+        return bool(
+            current_priority is not None
+            and desired_priority is not None
+            and desired_priority < current_priority
         )
 
     @staticmethod

@@ -43,6 +43,7 @@ future Zigbee2MQTT provider will use the same flow while permit-join is active.
 
 Existing schema-v1 simulated records predate the type field and migrate to
 `window`, which preserves them without guessing from a user-editable name.
+Schema-v1 and schema-v2 zone policies migrate with **Sensor override** off.
 
 ## Heating ownership
 
@@ -54,6 +55,14 @@ mode as automation-owned. After every assigned contact explicitly closes, the
 automation releases only that owned override with Nobø `NORMAL`; it never
 blindly sends Comfort. Normal lets the current global mode or weekly schedule
 decide what happens.
+
+By default a sensor rule can only lower the heating demand: Away is below Eco,
+and Eco is below Comfort. An Eco rule therefore leaves an existing Away demand
+alone, and a Comfort rule cannot raise an Away or Eco demand. The per-zone
+**Sensor override** switch explicitly opts out of that guard and allows the
+selected open action to outrank the active global mode or schedule. A later
+global or zone command still counts as manual takeover and remains in control
+for the rest of that open cycle.
 
 “Follow schedule” is deliberately conservative. If the zone is already free of
 a zone override, it is already following its schedule and no command is needed.
