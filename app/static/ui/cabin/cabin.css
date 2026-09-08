@@ -391,7 +391,15 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px solid var(--rule);
   border-radius: var(--radius-sm);
 }
-.sensor-row.is-open { border-color: color-mix(in srgb, var(--danger) 45%, var(--rule)); }
+.sensor-row.is-open {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--rule));
+  border-left-width: 4px;
+}
+/* A sensor the Pi has stopped hearing from is a fault, not a state of the
+   window, so it is greyed rather than coloured like an open contact. */
+.sensor-row.is-offline { border-style: dashed; }
+.sensor-row.is-offline .sensor-copy strong { color: var(--ink-soft); }
+.sensor-row.is-offline .sensor-visual { color: var(--ink-faint); background: var(--paper); }
 .sensor-copy { min-width: 0; }
 .sensor-copy strong { display: block; }
 .sensor-copy small { display: block; margin-top: .1rem; color: var(--ink-soft); font-size: .78rem; }

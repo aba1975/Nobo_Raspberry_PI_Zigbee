@@ -198,25 +198,6 @@ def test_eco_is_owned_then_released_to_normal_not_comfort(client):
     assert current["sensor_summary"]["owned_action"] is None
 
 
-def test_manual_change_suppresses_eco_for_the_current_open_cycle(client):
-    set_schedule(client, "comfort")
-    enable(client, action="eco", delay=0)
-    created = add_sensor(client)
-    sensor_id = created["sensor_id"]
-    client.post(f"/api/sensors/{sensor_id}/simulate", json={"state": "open"})
-    assert zone(client)["sensor_summary"]["owned_action"] == "eco"
-
-    assert client.post("/api/zones/1/override/comfort").status_code == 200
-    assert zone(client)["current_mode"] == "comfort"
-    assert zone(client)["sensor_summary"]["owned_action"] is None
-    assert server.sensor_automation.states["1"].suppressed is True
-
-    client.post(f"/api/sensors/{sensor_id}/simulate", json={"state": "closed"})
-    client.post("/api/zones/1/override/normal")
-    client.post(f"/api/sensors/{sensor_id}/simulate", json={"state": "open"})
-    assert zone(client)["current_mode"] == "eco"
-
-
 def test_monitoring_only_zone_warns_but_never_changes_heating(client):
     created_zone = client.post("/api/zones", json={"name": "Entertainment Room"})
     zone_id = created_zone.json()["zone_id"]
@@ -355,46 +336,6 @@ def test_a_demo_restart_keeps_ownership_because_the_override_survives_too(client
     assert server.sensor_automation.states["1"].owned_action is ActionWhenOpen.ECO
 
 
-def test_ownership_is_dropped_when_the_hub_no_longer_shows_our_override(client):
-    set_schedule(client, "comfort")
-    enable(client, action="eco", delay=0)
-    created = add_sensor(client)
-    client.post(
-        f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"}
-    )
-    # Somebody cancelled it outside this app. The room is left as it is and we
-    # stop claiming it, rather than re-applying Eco over their decision.
-    server.DEMO_ZONE_OVERRIDES.clear()
-    server.sensor_automation.reconcile_owned(server._sensor_heating_state())
-    assert server.sensor_automation.states["1"].owned_action is None
-    assert server.sensor_automation.states["1"].suppressed is True
-
-
-@pytest.mark.parametrize("action", ["away", "eco", "comfort"])
-def test_api_applies_and_releases_each_configured_action(client, action):
-    set_schedule(client, "comfort")
-    response = client.put("/api/sensors/settings", json={
-        "enabled": True,
-        "zones": {
-            "1": {
-                "warning_delay_seconds": 300,
-                "action_when_open": action,
-                "action_delay_seconds": 0,
-                "override_all_modes": True,
-            }
-        },
-    })
-    assert response.status_code == 200, response.text
-    assert response.json()["zones"]["1"]["action_when_open"] == action
-    created = add_sensor(client)
-    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
-    current = zone(client)
-    assert current["current_mode"] == action
-    assert current["sensor_summary"]["owned_action"] == action
-    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "closed"})
-    assert zone(client)["current_mode"] == "normal"
-
-
 def test_global_away_beats_eco_unless_sensor_override_is_enabled(client):
     assert client.post("/api/global/override/away").status_code == 200
     response = client.put("/api/sensors/settings", json={
@@ -426,96 +367,6 @@ def test_global_away_beats_eco_unless_sensor_override_is_enabled(client):
     current = zone(client)
     assert current["current_mode"] == "away"
     assert current["sensor_summary"]["owned_action"] is None
-
-
-def test_reactivated_global_mode_wins_over_sensor_override_for_open_cycle(client):
-    assert client.post("/api/global/override/away").status_code == 200
-    response = client.put("/api/sensors/settings", json={
-        "enabled": True,
-        "zones": {
-            "1": {
-                "warning_delay_seconds": 0,
-                "action_when_open": "comfort",
-                "action_delay_seconds": 0,
-                "override_all_modes": True,
-            }
-        },
-    })
-    assert response.status_code == 200
-    created = add_sensor(client)
-    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
-    assert zone(client)["current_mode"] == "comfort"
-    assert zone(client)["sensor_summary"]["owned_action"] == "comfort"
-
-    assert client.post("/api/global/override/away").status_code == 200
-    current = zone(client)
-    assert current["current_mode"] == "away"
-    assert current["sensor_summary"]["owned_action"] is None
-    assert server.sensor_automation.states["1"].suppressed is True
-
-    client.post(
-        f"/api/sensors/{created['sensor_id']}/simulate", json={"battery": 49}
-    )
-    assert zone(client)["current_mode"] == "away"
-    assert zone(client)["sensor_summary"]["owned_action"] is None
-
-
-def test_global_mode_suppresses_a_pending_sensor_override(client):
-    response = client.put("/api/sensors/settings", json={
-        "enabled": True,
-        "zones": {
-            "1": {
-                "warning_delay_seconds": 0,
-                "action_when_open": "comfort",
-                "action_delay_seconds": 60,
-                "override_all_modes": True,
-            }
-        },
-    })
-    assert response.status_code == 200
-    created = add_sensor(client)
-    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
-    assert zone(client)["sensor_summary"]["owned_action"] is None
-
-    assert client.post("/api/global/override/away").status_code == 200
-    assert server.sensor_automation.states["1"].suppressed is True
-
-    server.sensor_automation.states["1"].open_started_at -= 120
-    client.post(
-        f"/api/sensors/{created['sensor_id']}/simulate", json={"battery": 49}
-    )
-    assert zone(client)["current_mode"] == "away"
-    assert zone(client)["sensor_summary"]["owned_action"] is None
-
-
-def test_zone_command_while_sensors_are_disabled_suppresses_retained_cycle(client):
-    enabled = client.put("/api/sensors/settings", json={
-        "enabled": True,
-        "zones": {
-            "1": {
-                "warning_delay_seconds": 0,
-                "action_when_open": "comfort",
-                "action_delay_seconds": 60,
-                "override_all_modes": True,
-            }
-        },
-    }).json()
-    created = add_sensor(client)
-    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
-
-    disabled = {**enabled, "enabled": False}
-    assert client.put("/api/sensors/settings", json=disabled).status_code == 200
-    assert client.post("/api/zones/1/override/away").status_code == 200
-    assert server.sensor_automation.states["1"].suppressed is True
-
-    enabled["enabled"] = True
-    assert client.put("/api/sensors/settings", json=enabled).status_code == 200
-    server.sensor_automation.states["1"].open_started_at -= 120
-    client.post(
-        f"/api/sensors/{created['sensor_id']}/simulate", json={"battery": 49}
-    )
-    assert zone(client)["current_mode"] == "away"
-    assert zone(client)["sensor_summary"]["owned_action"] is None
 
 
 def test_follow_schedule_will_not_warm_a_room_by_letting_go(client):
@@ -574,3 +425,121 @@ def test_a_blocked_rule_says_why_it_is_standing_down(client):
     assert summary["action_status"] == "blocked"
     assert summary["block_reason"] == "colder_mode"
     assert summary["warning_raised"] is True
+
+
+# ---------------------------------------------------------------------------
+# Whichever is colder, end to end
+# ---------------------------------------------------------------------------
+
+def test_a_warmer_global_mode_does_not_take_a_room_off_its_rule(client):
+    """Comfort for the house, with a window open and an Eco rule: stays Eco."""
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    assert zone(client)["current_mode"] == "eco"
+
+    assert client.post("/api/global/override/comfort").status_code == 200
+    current = zone(client)
+    assert current["current_mode"] == "eco"
+    assert current["sensor_summary"]["owned_action"] == "eco"
+
+
+def test_a_colder_global_mode_wins_while_the_window_is_still_open(client):
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    assert zone(client)["current_mode"] == "eco"
+
+    assert client.post("/api/global/override/away").status_code == 200
+    current = zone(client)
+    assert current["current_mode"] == "away"
+    assert current["sensor_summary"]["owned_action"] is None
+    assert current["sensor_summary"]["block_reason"] == "colder_mode"
+
+
+def test_coming_home_again_puts_the_rule_back_in_charge(client):
+    """Nothing is stood down for good: the colder of the two always runs."""
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    assert client.post("/api/global/override/away").status_code == 200
+    assert zone(client)["current_mode"] == "away"
+
+    assert client.post("/api/global/override/home").status_code == 200
+    current = zone(client)
+    assert current["current_mode"] == "eco"
+    assert current["sensor_summary"]["owned_action"] == "eco"
+
+
+def test_setting_the_room_warmer_by_hand_is_taken_back_by_the_rule(client):
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+
+    assert client.post("/api/zones/1/override/comfort").status_code == 200
+    assert zone(client)["current_mode"] == "eco"
+
+
+def test_setting_the_room_colder_by_hand_stands(client):
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+
+    assert client.post("/api/zones/1/override/away").status_code == 200
+    current = zone(client)
+    assert current["current_mode"] == "away"
+    assert current["sensor_summary"]["owned_action"] is None
+
+
+def test_with_override_on_the_rule_holds_through_a_global_away(client):
+    set_schedule(client, "comfort")
+    enable(client, action="eco", delay=0, override=True)
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+
+    assert client.post("/api/global/override/away").status_code == 200
+    current = zone(client)
+    assert current["current_mode"] == "eco"
+    assert current["sensor_summary"]["owned_action"] == "eco"
+
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "closed"})
+    assert zone(client)["current_mode"] == "away"
+
+
+def test_an_immediate_delay_is_accepted_end_to_end(client):
+    set_schedule(client, "comfort")
+    response = client.put("/api/sensors/settings", json={
+        "enabled": True,
+        "zones": {"1": {
+            "warning_delay_seconds": 0,
+            "action_when_open": "eco",
+            "action_delay_seconds": 0,
+            "override_all_modes": False,
+        }},
+    })
+    assert response.status_code == 200
+    assert response.json()["zones"]["1"]["warning_delay_seconds"] == 0
+    created = add_sensor(client)
+    client.post(f"/api/sensors/{created['sensor_id']}/simulate", json={"state": "open"})
+    current = zone(client)
+    assert current["sensor_summary"]["warning_raised"] is True
+    assert current["current_mode"] == "eco"
+
+
+def test_a_sensor_the_provider_cannot_reach_is_reported_with_its_last_seen(client):
+    enable(client, warning=0)
+    created = add_sensor(client)
+    client.post(
+        f"/api/sensors/{created['sensor_id']}/simulate",
+        json={"available": False, "battery": 8},
+    )
+    reported = zone(client)["sensors"][0]
+    assert reported["available"] is False
+    assert reported["battery"] == 8
+    assert reported["last_seen_at"]
+    assert zone(client)["sensor_summary"]["unavailable_count"] == 1

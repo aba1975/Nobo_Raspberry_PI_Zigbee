@@ -28,11 +28,11 @@ def test_settings_and_automation_round_trip(tmp_path):
     )
     save_sensor_settings(settings, settings_path)
     save_automation_state(
-        {"7": AutomationZoneState(12.5, True, ActionWhenOpen.AWAY, False)}, state_path
+        {"7": AutomationZoneState(12.5, True, ActionWhenOpen.AWAY)}, state_path
     )
     assert load_sensor_settings(settings_path) == settings
     assert load_automation_state(state_path) == {
-        "7": AutomationZoneState(12.5, True, ActionWhenOpen.AWAY, False)
+        "7": AutomationZoneState(12.5, True, ActionWhenOpen.AWAY)
     }
 
 
@@ -157,7 +157,31 @@ def test_schema_one_settings_sensor_and_ownership_migrate(tmp_path):
     }))
     migrated_state = load_automation_state(state_path)["1"]
     assert migrated_state.owned_action is ActionWhenOpen.ECO
-    assert migrated_state.owned_with_override is True
+
+
+def test_a_suppression_flag_from_an_older_build_is_read_and_discarded(tmp_path):
+    """v1-v3 remembered who had "taken over"; the rule no longer works that way."""
+    path = tmp_path / "automation.json"
+    path.write_text(json.dumps({
+        "schema_version": 3,
+        "zones": {
+            "1": {
+                "open_started_at": 10,
+                "warning_raised": True,
+                "owned_action": "eco",
+                "suppressed": True,
+                "owned_with_override": True,
+            }
+        },
+    }))
+    migrated = load_automation_state(path)["1"]
+    assert migrated == AutomationZoneState(10.0, True, ActionWhenOpen.ECO)
+    # And it round-trips at the current version without those fields.
+    save_automation_state({"1": migrated}, path)
+    assert json.loads(path.read_text())["schema_version"] == 4
+    assert set(json.loads(path.read_text())["zones"]["1"]) == {
+        "open_started_at", "warning_raised", "owned_action",
+    }
 
 
 def test_schema_two_policy_migrates_with_sensor_override_disabled(tmp_path):

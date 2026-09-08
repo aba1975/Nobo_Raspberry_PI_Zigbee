@@ -93,12 +93,15 @@ def test_the_action_choice_offers_exactly_the_five_outcomes():
     for label in ("Do nothing", "Set to Away", "Set to Eco",
                   "Set to Comfort", "Return to schedule"):
         assert label in CABIN
-    assert "10 seconds (demo test)" in CABIN
+    # Immediately and a couple of short spans, plus the demo-only one.
+    for label in ("Immediately", "10 seconds (demo)", "1 minute",
+                  "2 minutes", "5 minutes", "10 minutes"):
+        assert label in CABIN
 
 
-def test_the_warmth_ordering_is_explained_where_it_is_chosen():
+def test_the_rule_is_explained_where_it_is_chosen():
     assert "Override colder modes" in CABIN
-    assert "can only turn the heating down, never up" in CABIN
+    assert "the room runs whichever is colder" in CABIN
     # One name for the switch wherever it is referred to.
     assert "sensor override" not in CABIN
     # And the sheet only offers it where it can do anything.
@@ -107,7 +110,7 @@ def test_the_warmth_ordering_is_explained_where_it_is_chosen():
 
 def test_both_delays_say_what_they_are_counted_from():
     assert "once it has been open for" in CABIN
-    assert "Both are counted from the moment it opens" in CABIN
+    assert "Both delays are counted from the moment it" in CABIN
 
 
 def test_everything_reachable_by_thumb_meets_the_apps_44px_floor():
@@ -130,9 +133,18 @@ def test_a_flat_battery_is_labelled_not_merely_recoloured():
 
 def test_a_rule_that_stands_down_says_so_rather_than_looking_broken():
     assert "sensorBlockedText" in CABIN
-    assert "would warm this room, so the rule is standing down" in CABIN
-    assert "colder_mode" in CABIN and "manual_override" in CABIN
+    assert "already colder than" in CABIN
+    assert "colder_mode" in CABIN and "no_equipment" in CABIN
     assert "action_status" in CABIN and "block_reason" in CABIN
+    # Suppression is gone from the model, so no wording may imply it.
+    assert "suppressed" not in CABIN
+
+
+def test_a_sensor_the_pi_has_lost_is_shown_as_offline_with_a_last_heard_time():
+    assert "'Offline'" in CABIN
+    assert "last heard from" in CABIN
+    assert "Nobo.fmtAgo(sensor.last_seen_at)" in CABIN
+    assert ".sensor-row.is-offline" in CSS
 
 
 def test_reading_what_a_room_will_do_does_not_need_admin_settings():
@@ -204,7 +216,7 @@ def test_a_delay_reads_the_way_somebody_would_say_it():
         ["node", "-e", script], capture_output=True, text=True, timeout=30
     )
     assert result.returncode == 0, result.stderr
-    assert "straight away" in result.stdout
+    assert "immediately" in result.stdout
     assert "45 seconds" in result.stdout
     assert "1 minute" in result.stdout
     assert "5 minutes" in result.stdout

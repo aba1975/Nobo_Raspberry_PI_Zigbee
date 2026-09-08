@@ -663,12 +663,27 @@ const Nobo = (() => {
     return !dev.supports_comfort && !dev.supports_eco;
   }
 
+  /* How long ago something last happened, for "last heard from 20 minutes
+     ago" on a sensor that has gone quiet. Deliberately vague past a day: the
+     point is "this has been off for ages", not the exact moment. */
+  function fmtAgo(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (Number.isNaN(ms)) return '';
+    if (ms < 90000) return 'just now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    return `${Math.round(hours / 24)} days ago`;
+  }
+
   /* A delay, written the way somebody would say it out loud. Used for the
      contact-sensor rules, where "5 minutes" is a great deal easier to check at
      a glance than "300 s". */
   function fmtDuration(seconds) {
     const total = Math.max(0, Math.round(Number(seconds) || 0));
-    if (total === 0) return 'straight away';
+    if (total === 0) return 'immediately';
     if (total < 60) return `${total} second${total === 1 ? '' : 's'}`;
     const minutes = Math.round(total / 60);
     if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
@@ -683,6 +698,6 @@ const Nobo = (() => {
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
     toIsoInstant, fromIsoInstant, fmtWhen, fmtUntil, isManualDevice,
-    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth, fmtDuration,
+    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth, fmtDuration, fmtAgo,
   };
 })();
