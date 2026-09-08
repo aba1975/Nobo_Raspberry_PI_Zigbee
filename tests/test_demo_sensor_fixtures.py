@@ -123,3 +123,44 @@ def test_split_fixture_repairs_side_data_after_interrupted_migration(monkeypatch
         server.DEMO_ZONES[:] = original_zones
         server.demo_schedules.clear()
         server.demo_schedules.update(original_schedules)
+
+
+def test_migration_preserves_older_fixture_without_living_room_panel(monkeypatch):
+    original_zones = copy.deepcopy(server.DEMO_ZONES)
+    original_schedules = copy.deepcopy(server.demo_schedules)
+    grouped = [
+        copy.deepcopy(zone)
+        for zone in server._DEFAULT_DEMO_ZONES
+        if int(zone["zone_id"]) <= 8
+    ]
+    by_id = {zone["zone_id"]: zone for zone in grouped}
+    by_id["4"]["components"] = ["160004028112", "160004028113"]
+    by_id["4"]["component_names"] = ["North Room Heater", "South Room Heater"]
+    by_id["5"]["components"] = ["160004028114", "160004028115"]
+    by_id["5"]["component_names"] = ["Kitchen Heater", "Living Room Heater"]
+    by_id["7"]["components"] = [
+        "160004028117", "160004028118", "160004028119"
+    ]
+    by_id["7"]["component_names"] = [
+        "Master Heater", "North Heater", "South Heater"
+    ]
+    monkeypatch.setattr(config_persistence, "save_demo_zones", lambda zones: None)
+    monkeypatch.setattr(config_persistence, "save_demo_schedules", lambda schedules: None)
+    monkeypatch.setattr(config_persistence, "load_away_exceptions", lambda: [])
+    monkeypatch.setattr(config_persistence, "load_away_exceptions_applied", lambda: [])
+
+    try:
+        server.DEMO_ZONES[:] = grouped
+        server.demo_schedules.clear()
+        assert server._migrate_grouped_demo_rooms() is True
+        living = next(zone for zone in server.DEMO_ZONES if zone["name"] == "Living Room")
+        assert living["components"] == ["160004028115"]
+        assert living["component_names"] == ["Living Room Heater"]
+        assert all(
+            "234000012006" not in zone["components"]
+            for zone in server.DEMO_ZONES
+        )
+    finally:
+        server.DEMO_ZONES[:] = original_zones
+        server.demo_schedules.clear()
+        server.demo_schedules.update(original_schedules)
