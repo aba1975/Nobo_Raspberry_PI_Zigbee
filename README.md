@@ -124,6 +124,7 @@ interface says so rather than pretending the change worked.
 | Scheduled away | ✅ | ✅ |
 | View weekly schedules | ✅ | ✅ |
 | Edit weekly schedules | ✅ | ✅ |
+| Add, rename, share and delete schedules | ✅ | ✅ |
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
@@ -313,6 +314,15 @@ Because they are shared, editing matters in two different places:
 The hub's own built-in schedules cannot be changed. It accepts the command and
 silently ignores it, so the app refuses up front rather than reporting a success
 that did not happen.
+
+**Demo mode keeps schedules the same way**, in `data/demo_week_profiles.json`:
+named profiles that zones point at, with the same sharing and copy-on-write
+rules. It used to keep one week per zone and answer every schedule request with
+a success it did not act on — adding a schedule in Settings appeared to work and
+changed nothing — which is exactly the sort of place demo mode being kinder than
+the hardware hides a real defect. An existing demo house migrates on first
+start: a room whose week had been edited gets a schedule of its own, named after
+the room, and the rest follow the built-in one.
 
 When you save a schedule, the whole week is sent at once and it must describe
 every minute of every day:

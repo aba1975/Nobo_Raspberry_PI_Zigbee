@@ -30,6 +30,7 @@ import pynobo
 import auth
 import away_schedule
 import config_persistence
+import demo_week
 import notifications
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
@@ -369,7 +370,10 @@ setpoint_guard = setpoint_guard_mod.SetpointGuard(
 command_log: deque = deque(maxlen=500)
 
 # In-memory store for demo-mode schedule changes (keyed by zone_id).
-# Populated from disk on startup; persisted to disk on every write.
+#
+# Loaded flat here because the grouped-room migration further down still works
+# in these terms. It is replaced by a view derived from the week profiles once
+# that migration has run and the house has settled into its final shape.
 demo_schedules: Dict[str, dict] = config_persistence.load_demo_schedules()
 
 # Zone icons are this app's own idea — the hub does not store them — so they are
@@ -638,6 +642,50 @@ def _migrate_grouped_demo_rooms() -> bool:
 
 
 _migrate_grouped_demo_rooms()
+
+
+# The simulated hub's week profiles, and which zone follows which.
+#
+# A hub does not store "this zone's week": it stores named week profiles, and
+# every zone points at one. Demo mode used to keep a flat per-zone map instead
+# and stub out every profile operation, so a schedule added in Settings
+# reported success and vanished. This is the source of truth now, and
+# ``demo_schedules`` becomes the flat view derived from it — kept under that
+# name because the schedule lookup, the away logic and several tests read it.
+#
+# Built after the migrations above, so it sees the house in its final shape,
+# and migrated from the per-zone map the first time: a room whose week had been
+# edited gets a profile of its own, which is what it would have had if profiles
+# had been modelled here from the start.
+_saved_week_profiles = config_persistence.load_demo_week_profiles()
+demo_week_profiles: demo_week.DemoWeekProfiles = (
+    demo_week.DemoWeekProfiles.from_dict(
+        _saved_week_profiles, default_schedule=DEFAULT_DEMO_SCHEDULE
+    )
+    if _saved_week_profiles is not None
+    else demo_week.DemoWeekProfiles.migrated(
+        demo_schedules,
+        default_schedule=DEFAULT_DEMO_SCHEDULE,
+        zone_name=lambda zone_id: next(
+            (z.get("name", f"Zone {zone_id}") for z in DEMO_ZONES
+             if str(z.get("zone_id")) == str(zone_id)),
+            f"Zone {zone_id}",
+        ),
+    )
+)
+demo_week_profiles.sync_zones([str(z.get("zone_id")) for z in DEMO_ZONES])
+
+# The flat per-zone view. Derived, never written to directly.
+demo_schedules = demo_week_profiles.as_per_zone_schedules()
+
+
+def save_demo_week_profiles() -> None:
+    """Persist the profiles and refresh everything derived from them."""
+    global demo_schedules
+    demo_week_profiles.sync_zones([str(z.get("zone_id")) for z in DEMO_ZONES])
+    demo_schedules = demo_week_profiles.as_per_zone_schedules()
+    config_persistence.save_demo_week_profiles(demo_week_profiles.to_dict())
+    config_persistence.save_demo_schedules(demo_schedules)
 
 
 # Repair any saved demo house that predates the discovery above. Done here
@@ -3316,6 +3364,8 @@ async def add_zone(zone: ZoneAdd):
                 f"A00 0 {name} {DEFAULT_WEEK_PROFILE_ID}",
             )
             config_persistence.save_demo_zones(DEMO_ZONES)
+            # A new room starts on the built-in schedule, as it does on the hub.
+            save_demo_week_profiles()
             return {"status": "success", "zone_id": new_id, "name": name}
 
         # Real hub mode
@@ -3510,6 +3560,9 @@ async def delete_zone(zone_id: str):
             )
             logger.info(f"Demo mode: Zone '{zone_name}' deleted")
             config_persistence.save_demo_zones(DEMO_ZONES)
+            # Stop counting it as following a schedule, so one it was the last
+            # user of becomes deletable again.
+            save_demo_week_profiles()
             return {"status": "success", "zone_id": zone_id}
 
         # Real hub mode
@@ -4804,30 +4857,8 @@ async def get_week_profiles():
         raise HTTPException(status_code=503, detail="Hub not connected")
     
     try:
-        # Demo mode — return the default schedule as a sample week profile
         if DEMO_MODE:
-            return {
-                "week_profiles": [
-                    {
-                        "profile_id": "1",
-                        "name": "Default",
-                        "profile": DEFAULT_DEMO_SCHEDULE,
-                        # Already in day-block form here, unlike the hub's flat
-                        # list of "HHMMS" stamps, so it needs no decoding.
-                        "schedule": DEFAULT_DEMO_SCHEDULE,
-                        "unreadable": None,
-                        "used_by": [
-                            {"zone_id": str(z.get("zone_id")),
-                             "name": z.get("name", "")}
-                            for z in DEMO_ZONES
-                        ],
-                        "can_delete": False,
-                        "why_not": "The built-in schedule cannot be deleted.",
-                        "can_edit": False,
-                        "why_not_edit": "The built-in schedule cannot be changed.",
-                    }
-                ]
-            }
+            return {"week_profiles": _demo_week_profile_list()}
 
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4916,7 +4947,13 @@ async def create_week_profile(body: WeekProfileCreate):
         raise HTTPException(status_code=400, detail=str(exc))
 
     if DEMO_MODE:
-        return {"status": "success", "profile_id": "2", "name": name}
+        profile_id = demo_week_profiles.create(name, _plain_schedule(body.schedule))
+        save_demo_week_profiles()
+        created = demo_week_profiles.profiles[profile_id]["name"]
+        add_log_entry("sent", f"[DEMO] Schedule '{created}' created",
+                      command=f"A02 {created}", source="api")
+        await broadcast_zone_update()
+        return {"status": "success", "profile_id": profile_id, "name": created}
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4998,7 +5035,21 @@ async def rename_week_profile(profile_id: str, body: WeekProfileRename):
             raise HTTPException(status_code=400, detail=str(exc))
 
     if DEMO_MODE:
-        return {"status": "success", "profile_id": profile_id, "name": name}
+        try:
+            demo_week_profiles.update(
+                profile_id,
+                name=name if body.name is not None else None,
+                schedule=_plain_schedule(body.schedule) if body.schedule else None,
+            )
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "profile_id": profile_id,
+            "name": demo_week_profiles.profiles[profile_id]["name"],
+        }
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -5057,10 +5108,13 @@ async def delete_week_profile(profile_id: str):
         raise HTTPException(status_code=503, detail="Hub not connected")
 
     if DEMO_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail="The built-in schedule cannot be deleted.",
-        )
+        try:
+            demo_week_profiles.delete(profile_id)
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
+        return {"status": "success", "profile_id": profile_id}
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -5102,6 +5156,14 @@ async def assign_week_profile(zone_id: str, body: ZoneWeekProfileAssign):
         raise HTTPException(status_code=503, detail="Hub not connected")
 
     if DEMO_MODE:
+        if not any(str(z.get("zone_id")) == str(zone_id) for z in DEMO_ZONES):
+            raise HTTPException(status_code=404, detail="Zone not found")
+        try:
+            demo_week_profiles.assign(zone_id, body.profile_id)
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
         return {"status": "success", "zone_id": zone_id, "profile_id": body.profile_id}
 
     if not current_hub:
@@ -5130,6 +5192,50 @@ async def assign_week_profile(zone_id: str, body: ZoneWeekProfileAssign):
 # The hub's factory default week profile. It is shared by every zone out of the
 # box and users expect it to keep meaning "the default", so it is never edited
 # in place.
+def _plain_schedule(schedule) -> Dict[str, Any]:
+    """Pydantic blocks (or plain dicts) as the dicts the demo store keeps."""
+    return {
+        day: [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in blocks]
+        for day, blocks in (schedule or {}).items()
+    }
+
+
+def _demo_week_profile_list() -> List[Dict[str, Any]]:
+    """Every simulated week profile, and which zones follow it."""
+    names = {str(z.get("zone_id")): z.get("name", "") for z in DEMO_ZONES}
+    listed = []
+    for profile_id, row in sorted(
+        demo_week_profiles.profiles.items(), key=lambda item: int(item[0])
+    ):
+        users = demo_week_profiles.users(profile_id)
+        built_in = profile_id == demo_week.DEFAULT_PROFILE_ID
+        listed.append({
+            "profile_id": profile_id,
+            "name": row["name"],
+            # Already in day-block form here, unlike the hub's flat list of
+            # "HHMMS" stamps, so it needs no decoding.
+            "profile": row["schedule"],
+            "schedule": row["schedule"],
+            "unreadable": None,
+            "used_by": [
+                {"zone_id": zone_id, "name": names.get(zone_id, "")}
+                for zone_id in users
+            ],
+            "can_delete": not built_in and not users,
+            "why_not": (
+                "The built-in schedule cannot be deleted." if built_in
+                else f"{len(users)} {'zone is' if len(users) == 1 else 'zones are'} "
+                     "still following this schedule." if users
+                else None
+            ),
+            "can_edit": not built_in,
+            "why_not_edit": (
+                "The built-in schedule cannot be changed." if built_in else None
+            ),
+        })
+    return listed
+
+
 DEFAULT_WEEK_PROFILE_ID = "1"
 
 # The hub ships with these and will not let them go. "0" is the factory default
@@ -5302,11 +5408,21 @@ async def get_zone_schedule(zone_id: str):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
             
-            saved = demo_schedules.get(zone_id, DEFAULT_DEMO_SCHEDULE)
+            profile_id = demo_week_profiles.profile_id_for(zone_id)
             return {
                 "zone_id": zone_id,
                 "zone_name": demo_zone['name'],
-                "schedule": saved,
+                "week_profile_id": profile_id,
+                "week_profile_name": demo_week_profiles.profiles[profile_id]["name"],
+                # Names, not ids: this is shown as "editing this will also
+                # change ...", and an id means nothing to the reader.
+                "shared_with_zones": [
+                    z.get("name", f"Zone {z.get('zone_id')}")
+                    for z in DEMO_ZONES
+                    if demo_week_profiles.profile_id_for(str(z.get("zone_id"))) == profile_id
+                    and str(z.get("zone_id")) != str(zone_id)
+                ],
+                "schedule": demo_week_profiles.schedule_for(zone_id),
             }
         
         # Real hub mode - get week profile from pynobo
@@ -5384,14 +5500,27 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
             
-            # Serialise ScheduleBlock objects to plain dicts for storage
-            demo_schedules[zone_id] = {
-                day: [b.model_dump() for b in blocks]
-                for day, blocks in schedule.schedule.items()
+            # Same rule as the hub: a schedule this zone shares with others is
+            # copied rather than changed underneath them, unless the caller
+            # asked for the schedule itself with apply_to="profile".
+            profile_id = demo_week_profiles.apply_to_zone(
+                zone_id,
+                _plain_schedule(schedule.schedule),
+                zone_name=demo_zone['name'],
+                apply_to=schedule.apply_to,
+            )
+            save_demo_week_profiles()
+            logger.info(
+                "Demo mode: zone %s week saved on profile %s", zone_id, profile_id
+            )
+            await broadcast_zone_update()
+            return {
+                "status": "success",
+                "zone_id": zone_id,
+                "week_profile_id": profile_id,
+                "week_profile_name": demo_week_profiles.profiles[profile_id]["name"],
+                "message": "Schedule updated (demo mode)",
             }
-            logger.info(f"Demo mode: Schedule updated for zone {zone_id}")
-            config_persistence.save_demo_schedules(demo_schedules)
-            return {"status": "success", "zone_id": zone_id, "message": "Schedule updated (demo mode)"}
         
         # Real hub mode - update week profile using pynobo
         if not current_hub:

@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DEMO_ZONES_FILE = DATA_DIR / "demo_zones.json"
 DEMO_SCHEDULES_FILE = DATA_DIR / "demo_schedules.json"
+DEMO_WEEK_PROFILES_FILE = DATA_DIR / "demo_week_profiles.json"
 SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
@@ -126,6 +127,46 @@ def save_demo_schedules(schedules: dict) -> None:
         _atomic_write(DEMO_SCHEDULES_FILE, schedules)
     except Exception as exc:
         logger.error("Failed to save demo schedules: %s", exc)
+
+
+def save_demo_week_profiles(data: dict) -> None:
+    """Persist the simulated hub's week profiles atomically.
+
+    This is the source of truth for demo schedules; ``demo_schedules.json`` is
+    the flat per-zone view derived from it.
+    """
+    try:
+        _atomic_write(DEMO_WEEK_PROFILES_FILE, data)
+    except Exception as exc:
+        logger.error("Failed to save demo week profiles: %s", exc)
+
+
+def load_demo_week_profiles() -> Optional[dict]:
+    """
+    Load the simulated hub's week profiles.
+
+    Returns ``None`` when the file does not exist, so the caller can tell a
+    fresh installation from an empty one and migrate the older per-zone store.
+    """
+    try:
+        with DEMO_WEEK_PROFILES_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "demo_week_profiles.json has unexpected format (expected dict, got %s)"
+                " — rebuilding from the per-zone schedules",
+                type(data).__name__,
+            )
+            return None
+        return data
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "demo_week_profiles.json is corrupt: %s — backing up and rebuilding", exc
+        )
+        _backup_corrupt(DEMO_WEEK_PROFILES_FILE)
+        return None
 
 
 def load_demo_schedules() -> dict:
