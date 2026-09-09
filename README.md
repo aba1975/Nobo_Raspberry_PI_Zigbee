@@ -186,6 +186,14 @@ On closure the automation cancels exactly the override it created and nothing
 else, so the room returns to whatever the current global mode or week profile
 says — it never sends Comfort to "put things back".
 
+**Leaving with something open gets its own warning**, at the top of the front
+page rather than on the room. If the house is on Away — by the button or by a
+scheduled away period — and any contact is open, the card about leaving says so
+and names the rooms. There is no delay on it: being away is what changes the
+stakes, not how long the window has been open. A sensor that has gone offline
+is listed too, because "I cannot tell you" matters just as much once you have
+driven off.
+
 A zone does not need a heater to be monitored. Add an empty zone and assign a
 sensor to it; warnings work normally and heating actions stay unavailable.
 

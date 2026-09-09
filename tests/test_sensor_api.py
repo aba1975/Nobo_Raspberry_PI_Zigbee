@@ -543,3 +543,21 @@ def test_a_sensor_the_provider_cannot_reach_is_reported_with_its_last_seen(clien
     assert reported["battery"] == 8
     assert reported["last_seen_at"]
     assert zone(client)["sensor_summary"]["unavailable_count"] == 1
+
+
+def test_status_reports_the_global_override_the_zones_cannot_show(client):
+    """A house on Away with one room kept on Eco reads as "mixed" from the
+    zones alone, so the interface asks the hub instead."""
+    assert client.get("/api/status").json()["global_override_mode"] is None
+
+    assert client.post("/api/global/override/away").status_code == 200
+    assert client.get("/api/status").json()["global_override_mode"] == "away"
+
+    # An away-exception room holding Eco must not hide the fact.
+    assert client.post("/api/zones/1/override/eco").status_code == 200
+    modes = {z["current_mode"] for z in client.get("/api/zones").json()["zones"]}
+    assert modes == {"away", "eco"}, modes
+    assert client.get("/api/status").json()["global_override_mode"] == "away"
+
+    assert client.post("/api/global/override/home").status_code == 200
+    assert client.get("/api/status").json()["global_override_mode"] is None
