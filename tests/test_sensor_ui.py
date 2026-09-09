@@ -362,3 +362,150 @@ def test_a_left_open_room_escalates_its_wording_and_still_flags_offline():
     assert "Door left open" in markup, markup
     assert "zsensor-warning" in markup
     assert "zsensor-offline" in markup
+
+
+# ---------------------------------------------------------------------------
+# Left the building with something open
+# ---------------------------------------------------------------------------
+
+def _render_trip_alert(zones, status, away_period=None):
+    """Run the real top-card alert in node and return its markup."""
+    wanted = [
+        "function sensorKindLabel", "function sensorGroupNoun",
+        "function sensorCountLabel", "function compactSensorNames",
+        "function awayNow", "function openWhileAway", "function tripAlertHtml",
+    ]
+    lifted = []
+    for marker in wanted:
+        start = CABIN.index(marker)
+        end = CABIN.index("\n  }\n", start) + len("\n  }\n")
+        lifted.append(CABIN[start:end])
+    script = """
+      const esc = (v) => String(v == null ? '' : v);
+      const SITE_IN = () => 'the cabin';
+      const Nobo = { icon: (n) => `<svg data-icon="${n}"/>` };
+      const state = { zones: %s, status: %s };
+      const away = () => (%s);
+      %s
+      console.log(tripAlertHtml());
+    """ % (
+        json.dumps(zones), json.dumps(status),
+        json.dumps(away_period or {"enabled": False}), "\n".join(lifted),
+    )
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def _room(name, sensors, zone_id="1"):
+    return {"zone_id": zone_id, "name": name, "sensors": sensors}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_leaving_with_a_window_open_is_called_out_on_the_top_card():
+    markup = _render_trip_alert(
+        [_room("Kitchen", [_sensor("Kitchen Window", "window", "open")])],
+        {"global_override_mode": "away"},
+    )
+    assert "still open" in markup, markup
+    assert "Kitchen" in markup and "Kitchen Window" in markup
+    assert "on\n          Away" in markup or "is on" in markup
+    assert 'data-icon="alert"' in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_running_away_period_counts_even_if_the_hub_stopped_honouring_it():
+    """You are still not there, which is the whole point of the warning."""
+    markup = _render_trip_alert(
+        [_room("Kitchen", [_sensor("Terrace Door", "door", "open")])],
+        {"global_override_mode": None},
+        away_period={"enabled": True, "currently_active": True},
+    )
+    assert "Door still open" in markup, markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_an_away_exception_room_does_not_stop_the_house_counting_as_away():
+    """A room held on Eco while the house is Away reads as "mixed" from the
+    zones alone, which is why the global override is asked for instead."""
+    markup = _render_trip_alert(
+        [
+            _room("Kitchen", [_sensor("Kitchen Window", "window", "open")]),
+            _room("Large Bathroom", [], zone_id="2"),
+        ],
+        {"global_override_mode": "away"},
+    )
+    assert "still open" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_nothing_is_said_when_somebody_is_home():
+    markup = _render_trip_alert(
+        [_room("Kitchen", [_sensor("Kitchen Window", "window", "open")])],
+        {"global_override_mode": None},
+    )
+    assert markup == "", markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_nothing_is_said_when_the_place_is_shut_up_properly():
+    markup = _render_trip_alert(
+        [_room("Kitchen", [_sensor("Kitchen Window", "window", "closed")])],
+        {"global_override_mode": "away"},
+    )
+    assert markup == "", markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_several_rooms_are_each_named():
+    markup = _render_trip_alert(
+        [
+            _room("Kitchen", [_sensor("Kitchen Window", "window", "open")]),
+            _room("Living Room", [
+                _sensor("Terrace Door", "door", "open"),
+                _sensor("Window Left", "window", "open"),
+            ], zone_id="2"),
+        ],
+        {"global_override_mode": "away"},
+    )
+    assert "3 sensors still open" in markup, markup
+    for name in ("Kitchen", "Living Room", "Terrace Door", "Window Left"):
+        assert name in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_sensor_that_cannot_be_reached_is_worth_saying_while_away():
+    """Away is exactly when "I cannot tell you" matters as much as "it is open"."""
+    markup = _render_trip_alert(
+        [_room("Kitchen", [
+            _sensor("Kitchen Window", "window", "closed", available=False),
+        ])],
+        {"global_override_mode": "away"},
+    )
+    assert "cannot be checked" in markup, markup
+    assert "Kitchen Window" in markup
+    # ...and the room list names them rather than repeating the headline.
+    assert markup.count("cannot be checked") == 1, markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_an_open_window_leads_and_an_unreachable_one_follows():
+    markup = _render_trip_alert(
+        [_room("Kitchen", [
+            _sensor("Kitchen Window", "window", "open"),
+            _sensor("Back Door", "door", "closed", available=False),
+        ])],
+        {"global_override_mode": "away"},
+    )
+    assert markup.index("still open") < markup.index("cannot be checked"), markup
+
+
+def test_the_top_card_has_somewhere_to_put_the_alert():
+    html = (ROOT / "ui" / "cabin" / "index.html").read_text(encoding="utf-8")
+    assert 'id="tripAlert"' in html
+    assert 'role="alert"' in html
+    assert ".trip-alert" in CSS
+    # It outranks whatever else the card was saying.
+    assert ".trip:has(.trip-alert:not([hidden]))" in CSS

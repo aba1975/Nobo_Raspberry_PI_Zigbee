@@ -116,6 +116,20 @@ An unknown or unavailable contact is not closed, so it can neither clear a
 left-open warning nor release a hold. A room says why its rule is standing
 down: already colder, no heater, or no hub.
 
+### Leaving with something open
+
+The per-room warning answers "has this been open a while?". It does not answer
+"did I shut up the place before I drove off?", which is a different question
+with a different urgency, so it gets its own warning at the top of the front
+page whenever the house is on a global Away — set by hand or by a scheduled
+away period — and any contact is open. It carries no delay: being away is what
+changes the stakes.
+
+Whether the house is away is read from `global_override_mode` on
+`/api/status`, not inferred from the zones. A house on Away with one room kept
+on Eco by an away exception does not read as "away" if you only look at what
+each zone is running.
+
 ### Simulated hub state
 
 Demo mode has to answer "what would this room fall back to?", which means it

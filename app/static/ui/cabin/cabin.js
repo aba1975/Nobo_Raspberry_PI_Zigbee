@@ -264,6 +264,91 @@
    * The trip card
    * ---------------------------------------------------------------- */
 
+  /* Left the building with something still open.
+   *
+   * The zone cards already warn about an open contact, but they warn after
+   * that room's own delay and you have to be looking at them. This is the case
+   * where neither holds: the house has been put on Away, so somebody has gone,
+   * and a door or window is still open. There is no delay on purpose — being
+   * away is what changes the stakes, not how long it has been open — and it
+   * goes at the top of the card about leaving, because that is where somebody
+   * checking "did I lock up?" is already looking.
+   */
+  function awayNow() {
+    const status = state.status || {};
+    const trip = away();
+    // The global override is the truthful answer; a house on Away with one
+    // room held on Eco by an away exception does not read as "away" from the
+    // zones alone. The running away period is included as well, so a period
+    // the hub has stopped honouring still counts as "you are not here".
+    return status.global_override_mode === 'away'
+      || Boolean(trip.enabled && trip.currently_active);
+  }
+
+  function openWhileAway() {
+    if (!awayNow()) return null;
+    const rooms = state.zones
+      .map(zone => ({
+        zone,
+        open: (zone.sensors || []).filter(s => s.available && s.state === 'open'),
+        offline: (zone.sensors || []).filter(s => !s.available),
+      }))
+      .filter(entry => entry.open.length || entry.offline.length);
+    const open = rooms.flatMap(entry => entry.open);
+    const offline = rooms.flatMap(entry => entry.offline);
+    if (!open.length && !offline.length) return null;
+    return { rooms, open, offline };
+  }
+
+  /* Kept free of the DOM so the wording can be exercised directly. */
+  function tripAlertHtml() {
+    const found = openWhileAway();
+    if (!found) return '';
+
+    const { rooms, open, offline } = found;
+    const headline = open.length
+      ? (open.length === 1
+          ? `${sensorKindLabel(open[0])} still open`
+          : `${sensorCountLabel(open)} still open`)
+      : `${sensorCountLabel(offline)} cannot be checked`;
+
+    // The room list names whatever the headline is about, so an alert with
+    // nothing open lists the sensors that cannot be reached instead of saying
+    // the same thing twice.
+    const pick = open.length
+      ? (entry => entry.open)
+      : (entry => entry.offline);
+    const where = rooms
+      .map(entry => [entry, pick(entry)])
+      .filter(([, named]) => named.length)
+      .map(([entry, named]) => `<li><strong>${esc(entry.zone.name)}</strong>
+        <span>${esc(named.map(s => s.name).join(', '))}</span></li>`)
+      .join('');
+
+    const unchecked = open.length && offline.length
+      ? `<p class="trip-alert-also">${esc(sensorCountLabel(offline))} offline, so
+         ${offline.length === 1 ? 'it' : 'they'} cannot be checked:
+         ${esc(compactSensorNames(offline, 4))}.</p>`
+      : '';
+
+    return `
+      <span class="trip-alert-icon" aria-hidden="true">${Nobo.icon('alert')}</span>
+      <div class="trip-alert-body">
+        <strong>${esc(headline)}</strong>
+        <p>${esc(SITE_IN().charAt(0).toUpperCase() + SITE_IN().slice(1))} is on
+          Away — nobody is expected to be here.</p>
+        ${where ? `<ul class="trip-alert-rooms">${where}</ul>` : ''}
+        ${unchecked}
+      </div>`;
+  }
+
+  function renderTripAlert() {
+    const el = $('#tripAlert');
+    const html = tripAlertHtml();
+    el.hidden = !html;
+    el.innerHTML = html;
+  }
+
   function renderTrip() {
     const a = away();
     const card    = $('#trip');
@@ -274,6 +359,8 @@
 
     card.classList.remove('is-away', 'is-heat');
     tl.hidden = true;
+    // Before the branching below, since several of those return early.
+    renderTripAlert();
 
     const mode = Nobo.houseMode(state.zones);
 

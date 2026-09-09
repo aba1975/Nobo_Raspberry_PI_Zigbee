@@ -2818,6 +2818,11 @@ async def get_status():
             "currently_active": currently_active,
         },
         "global_mode_source": global_mode_source,
+        # Which global override the hub is holding, or null for none. Reported
+        # because it cannot be inferred from the zones: a house on global Away
+        # with one room kept on Eco by an away exception reads as "mixed" if
+        # you only look at what each zone is running.
+        "global_override_mode": _global_override_mode() if connected else None,
     }
 
 
