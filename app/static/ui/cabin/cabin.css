@@ -325,12 +325,34 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 /* Said separately from the headline because a room can be both open and out of
    touch with one of its sensors, and the second is easiest to miss. */
+/* A band across the foot of the strip rather than a lozenge beside the count.
+   A sensor that has stopped reporting is a fault with the equipment, not
+   another state of the window, so it reads as its own line instead of a badge
+   competing with the open tally. The only rounding is the strip's own, at the
+   bottom, so the band does not poke out of the card it sits in. */
 .zsensor-offline {
-  grid-column: 2 / -1; justify-self: start; margin-top: .3rem;
-  padding: .12rem .45rem; border-radius: 999px;
-  font-size: .72rem; font-weight: 650;
-  color: var(--amber); background: var(--amber-wash);
-  border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: .42rem;
+  margin: .5rem -.7rem -.55rem;
+  padding: .38rem .7rem;
+  border-top: 1px solid color-mix(in srgb, var(--amber) 40%, var(--rule));
+  /* Square across the top, and along the bottom it follows the inside of the
+     strip's own corners. The left one is tighter because that edge carries the
+     4px accent rule the right edge does not. */
+  border-radius: 0 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 4px);
+  background: var(--amber-wash);
+  /* Amber carries the meaning through the rule, the wash and the glyph; the
+     words themselves are ink, because amber on its own wash is about 2.3:1 and
+     this is the line that has to be read rather than noticed. */
+  color: var(--ink);
+  font-size: .74rem; font-weight: 650;
+}
+.zsensor-offline .icon {
+  width: 15px; height: 15px; flex: none;
+  /* Pulled towards the ink so the glyph clears 3:1 against its own wash; plain
+     amber sits at about 2.3:1, which is fine for decoration and not for a mark
+     that is carrying meaning. */
+  color: color-mix(in srgb, var(--amber) 62%, var(--ink));
 }
 
 .zsensor-closed { border-left-color: color-mix(in srgb, var(--pine) 55%, var(--rule)); }
@@ -389,7 +411,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border-left: 5px solid var(--amber);
   background: var(--amber-wash);
 }
-.sensor-offline-note strong { color: var(--amber); font-size: .95rem; }
+.sensor-offline-note strong { color: var(--ink); font-size: .95rem; }
 .sensor-offline-note small { color: var(--ink-soft); }
 
 .sensor-rule-line { margin: .2rem 0 .8rem; font-size: .85rem; color: var(--ink-soft); }

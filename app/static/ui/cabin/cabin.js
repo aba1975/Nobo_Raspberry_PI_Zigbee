@@ -942,10 +942,11 @@
     // stays on the card whatever else is going on in the room.
     const alsoOffline = unavailable.length && open.length
       ? `<span class="zsensor-offline" title="${esc(compactSensorNames(unavailable, 4))}">
-           ${esc(offlineNote(unavailable))}</span>`
+           ${Nobo.icon('alert')}${esc(offlineNote(unavailable))}</span>`
       : '';
 
     const rule = sensorRuleLine(zone);
+    // The offline band goes last so it sits along the foot of the strip.
     return `<div class="zsensor zsensor-${tone}">
       ${icon}
       <span class="zsensor-copy">
@@ -955,8 +956,8 @@
       ${open.length
         ? `<span class="zsensor-tally">${open.length}<i>/${summary.sensor_count}</i></span>`
         : ''}
-      ${alsoOffline}
       ${rule ? `<small class="zsensor-rule">${rule.text}</small>` : ''}
+      ${alsoOffline}
     </div>`;
   }
 

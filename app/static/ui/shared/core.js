@@ -153,6 +153,10 @@ const Nobo = (() => {
    * ------------------------------------------------------------- */
 
   const ICON_PATHS = {
+    /* A fault, not a state of the house: used where something has stopped
+       reporting rather than where a room is simply cold. */
+    alert:   '<path d="M12 4.2 2.9 19.8h18.2z"/><path d="M12 9.6v4.4"/>' +
+             '<circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/>',
     home:    '<path d="M3.2 10.6 12 3.4l8.8 7.2"/><path d="M5.6 9.6V20h12.8V9.6"/>',
     comfort: '<circle cx="12" cy="12" r="3.9"/><path d="M12 2.4v2.2M12 19.4v2.2M4.9 4.9l1.6 1.6' +
              'M17.5 17.5l1.6 1.6M2.4 12h2.2M19.4 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/>',

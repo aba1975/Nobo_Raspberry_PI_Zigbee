@@ -161,6 +161,15 @@ def test_offline_stays_on_the_zone_card_while_something_else_is_open():
     # The badge is chosen on its own facts, not inside the headline's if/else.
     assert "const alsoOffline = unavailable.length && open.length" in headline
     assert "zsensor-offline" in headline and ".zsensor-offline" in CSS
+    # A band along the foot of the strip, not a lozenge beside the count.
+    band = CSS.split(".zsensor-offline {")[1].split("}")[0]
+    assert "999px" not in band, "the offline warning is a band, not a pill"
+    assert "border-radius: 0 0" in band, "its top corners are square"
+    assert "grid-column: 1 / -1" in band, "it spans the whole strip"
+    # Amber on its own wash is about 2.3:1, which will not do for the line
+    # that has to be read.
+    assert "color: var(--ink);" in band
+    assert "alert" in CORE, "the warning glyph is part of the shared icon set"
     # And the zone detail says it once at card level, above the rows.
     assert "sensor-offline-note" in CABIN and ".sensor-offline-note" in CSS
     assert "offlineNote" in CABIN
@@ -263,7 +272,7 @@ def _render_zone_strip(zone):
       const esc = (v) => String(v == null ? '' : v);
       const sensorIcon = () => '<i/>';
       const sensorRuleLine = () => null;
-      const Nobo = { fmtAgo: () => '20 min ago' };
+      const Nobo = { fmtAgo: () => '20 min ago', icon: (n) => `<svg data-icon="${n}"/>` };
       %s
       console.log(sensorZoneHeadline(%s));
     """ % ("\n".join(lifted), json.dumps(zone))
