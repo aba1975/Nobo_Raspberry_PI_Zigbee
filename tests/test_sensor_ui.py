@@ -6,6 +6,7 @@ API, an escaping hole on a user-supplied name, sensor wording leaking into
 Classic — and leave visual judgement to a person with the app open.
 """
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -147,6 +148,24 @@ def test_a_sensor_the_pi_has_lost_is_shown_as_offline_with_a_last_heard_time():
     assert ".sensor-row.is-offline" in CSS
 
 
+def test_offline_stays_on_the_zone_card_while_something_else_is_open():
+    """Open and out-of-touch are separate facts and a room can have both.
+
+    They shared one headline, so a single open contact hid the fact that
+    another sensor had gone quiet — which is when knowing it matters most,
+    because a sensor nobody can hear from might be open too.
+    """
+    headline = CABIN[
+        CABIN.index("function sensorZoneHeadline"):CABIN.index("function sensorRow")
+    ]
+    # The badge is chosen on its own facts, not inside the headline's if/else.
+    assert "const alsoOffline = unavailable.length && open.length" in headline
+    assert "zsensor-offline" in headline and ".zsensor-offline" in CSS
+    # And the zone detail says it once at card level, above the rows.
+    assert "sensor-offline-note" in CABIN and ".sensor-offline-note" in CSS
+    assert "offlineNote" in CABIN
+
+
 def test_reading_what_a_room_will_do_does_not_need_admin_settings():
     # The action travels on the zone payload, so an ordinary user sees "about
     # to set this room to Eco" without being able to open the settings that
@@ -173,7 +192,7 @@ def test_a_persistent_warning_does_not_re_announce_itself_on_every_update():
     assert 'role="alert"' not in CABIN.replace(
         'role="alert" would be worse still and', ''
     )
-    assert '<div aria-live="polite">${warning}</div>' in CABIN
+    assert '<div aria-live="polite">${warning}${offline}</div>' in CABIN
 
 
 def test_sensor_names_are_escaped_before_they_reach_the_markup():
@@ -221,3 +240,116 @@ def test_a_delay_reads_the_way_somebody_would_say_it():
     assert "1 minute" in result.stdout
     assert "5 minutes" in result.stdout
     assert "1 hour" in result.stdout
+
+
+def _render_zone_strip(zone):
+    """Run the real zone-card strip in node and return the markup.
+
+    The pure rendering helpers are lifted out of the interface and evaluated
+    with stubs for the few things they lean on, so this exercises the actual
+    branching rather than asserting on the source text.
+    """
+    wanted = [
+        "function sensorKindLabel", "function sensorGroupNoun",
+        "function sensorCountLabel", "function compactSensorNames",
+        "function offlineNote", "function sensorZoneHeadline",
+    ]
+    lifted = []
+    for marker in wanted:
+        start = CABIN.index(marker)
+        end = CABIN.index("\n  }\n", start) + len("\n  }\n")
+        lifted.append(CABIN[start:end])
+    script = """
+      const esc = (v) => String(v == null ? '' : v);
+      const sensorIcon = () => '<i/>';
+      const sensorRuleLine = () => null;
+      const Nobo = { fmtAgo: () => '20 min ago' };
+      %s
+      console.log(sensorZoneHeadline(%s));
+    """ % ("\n".join(lifted), json.dumps(zone))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _sensor(name, kind, state, available=True):
+    return {
+        "name": name, "kind": kind, "state": state, "available": available,
+        "battery": 100, "last_seen_at": "2026-09-09T08:00:00+02:00",
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_the_card_shows_open_and_offline_at_the_same_time():
+    """The case that was reported: one open, one offline, both must be visible."""
+    markup = _render_zone_strip({
+        "zone_id": "5",
+        "name": "Kitchen",
+        "sensors": [
+            _sensor("Kitchen Window", "window", "open"),
+            _sensor("Kitchen Window 2", "window", "closed", available=False),
+            _sensor("Back Door", "door", "closed"),
+        ],
+        "sensor_summary": {
+            "sensor_count": 3, "open_count": 1, "unavailable_count": 1,
+            "warning_raised": False, "state": "open",
+        },
+    })
+    assert "Window open" in markup, markup
+    assert "Kitchen Window" in markup
+    # ...and the one that used to disappear the moment anything opened.
+    assert "offline" in markup, markup
+    assert "zsensor-offline" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_offline_is_the_headline_when_nothing_is_open():
+    markup = _render_zone_strip({
+        "zone_id": "5",
+        "name": "Kitchen",
+        "sensors": [
+            _sensor("Kitchen Window", "window", "closed"),
+            _sensor("Kitchen Window 2", "window", "closed", available=False),
+        ],
+        "sensor_summary": {
+            "sensor_count": 2, "open_count": 0, "unavailable_count": 1,
+            "warning_raised": False, "state": "unavailable",
+        },
+    })
+    assert "1 window offline" in markup, markup
+    # No second badge repeating what the headline already says.
+    assert "zsensor-offline" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_with_nothing_wrong_says_so_plainly():
+    markup = _render_zone_strip({
+        "zone_id": "5", "name": "Kitchen",
+        "sensors": [_sensor("Kitchen Window", "window", "closed")],
+        "sensor_summary": {
+            "sensor_count": 1, "open_count": 0, "unavailable_count": 0,
+            "warning_raised": False, "state": "closed",
+        },
+    })
+    assert "All closed" in markup
+    assert "offline" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_left_open_room_escalates_its_wording_and_still_flags_offline():
+    markup = _render_zone_strip({
+        "zone_id": "5", "name": "Kitchen",
+        "sensors": [
+            _sensor("Terrace Door", "door", "open"),
+            _sensor("Kitchen Window", "window", "closed", available=False),
+        ],
+        "sensor_summary": {
+            "sensor_count": 2, "open_count": 1, "unavailable_count": 1,
+            "warning_raised": True, "state": "open",
+        },
+    })
+    assert "Door left open" in markup, markup
+    assert "zsensor-warning" in markup
+    assert "zsensor-offline" in markup
