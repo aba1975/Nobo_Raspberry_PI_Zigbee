@@ -890,6 +890,20 @@
   /* The strip on the front-page zone card. It has one job: say what is open,
      how many, and whether it has been open long enough to care about - close
      enough to read at arm's length without opening the room. */
+  /* Whether the Pi is still hearing from a sensor is a different fact from
+     whether the window is open, and a room can have both at once. They used to
+     share one headline, so a single open contact hid the fact that another
+     sensor had gone quiet — exactly when knowing it matters most, because a
+     sensor nobody can hear from might be open too. */
+  function offlineNote(sensors) {
+    const oldest = sensors
+      .map(sensor => sensor.last_seen_at)
+      .filter(Boolean)
+      .sort()[0];
+    const since = oldest ? Nobo.fmtAgo(oldest) : '';
+    return `${sensorCountLabel(sensors)} offline${since ? ` · last heard ${since}` : ''}`;
+  }
+
   function sensorZoneHeadline(zone) {
     const summary = zone.sensor_summary;
     const items = zone.sensors || [];
@@ -904,6 +918,7 @@
     let headline = 'All closed';
     let detail = total;
 
+    // The headline can only say one thing, so it says the most urgent one.
     if (open.length) {
       tone = summary.warning_raised ? 'warning' : 'open';
       icon = sensorIcon(open[0]);
@@ -923,6 +938,13 @@
       detail = total;
     }
 
+    // ...and anything the headline could not carry gets its own badge, so it
+    // stays on the card whatever else is going on in the room.
+    const alsoOffline = unavailable.length && open.length
+      ? `<span class="zsensor-offline" title="${esc(compactSensorNames(unavailable, 4))}">
+           ${esc(offlineNote(unavailable))}</span>`
+      : '';
+
     const rule = sensorRuleLine(zone);
     return `<div class="zsensor zsensor-${tone}">
       ${icon}
@@ -933,6 +955,7 @@
       ${open.length
         ? `<span class="zsensor-tally">${open.length}<i>/${summary.sensor_count}</i></span>`
         : ''}
+      ${alsoOffline}
       ${rule ? `<small class="zsensor-rule">${rule.text}</small>` : ''}
     </div>`;
   }
@@ -1035,13 +1058,23 @@
          </div>`
       : '';
 
+    const unreachable = items.filter(sensor => !sensor.available);
+    const offline = unreachable.length
+      ? `<div class="sensor-offline-note">
+           <strong>${esc(offlineNote(unreachable))}</strong>
+           <small>${esc(compactSensorNames(unreachable, 4))} — the state shown was
+             the last one reported, so ${unreachable.length === 1 ? 'it' : 'they'}
+             may have been opened since.</small>
+         </div>`
+      : '';
+
     return `
       <section class="card sensor-card">
         <div class="card-head">
           <h2>Doors and windows</h2>
           <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
         </div>
-        <div aria-live="polite">${warning}</div>
+        <div aria-live="polite">${warning}${offline}</div>
         ${rule && !summary.warning_raised
           ? `<p class="sensor-rule-line is-${rule.tone}">${rule.text}</p>` : ''}
         ${items.length
