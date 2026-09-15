@@ -188,20 +188,28 @@ class Zigbee2MqttContactSensorProvider:
         await self._end_pairing(PairingOutcome.CANCELLED)
 
     def pairing_status(self) -> PairingStatus:
+        """Derived, never stored — this must stay free of side effects.
+
+        It is called twice per automation pass and the two results compared to
+        decide whether anything is worth broadcasting. A version of this that
+        settled the expiry *as* it was read made the first call do the
+        transition, so the comparison saw no change and the window closing was
+        never announced: somebody would watch "3s left" and then nothing.
+        """
         remaining = self._pairing_seconds_remaining()
-        if self._pairing_until is not None and remaining == 0:
-            # Nothing came.  Reported as expired rather than as silence, because
-            # a window that closed unannounced is the most confusing outcome for
-            # somebody standing there holding a button.
-            self._pairing_until = None
-            if self._pairing_outcome is None:
-                self._pairing_outcome = PairingOutcome.EXPIRED
-            remaining = None
+        expired = self._pairing_until is not None and remaining == 0
+        active = self._pairing_until is not None and not expired
+        outcome = self._pairing_outcome
+        if outcome is None and expired:
+            # Reported rather than left silent. A join window that simply goes
+            # quiet leaves a person pressing a button at a radio that stopped
+            # listening minutes ago.
+            outcome = PairingOutcome.EXPIRED
         return PairingStatus(
             supported=True,
-            active=self._pairing_until is not None,
-            seconds_remaining=remaining,
-            outcome=self._pairing_outcome,
+            active=active,
+            seconds_remaining=remaining if active else None,
+            outcome=outcome,
             sensor_id=self._pairing_sensor_id,
             detail=self._pairing_detail,
         )
