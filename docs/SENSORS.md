@@ -87,10 +87,42 @@ Removal asks Zigbee2MQTT and waits for its `device_leave` event rather than
 treating the request as the outcome, which would hide a sensor that is still on
 the mesh.
 
-### Not yet verified
+### Verified against real hardware, 15 September 2026
 
-No sensor has joined a mesh at the time of writing. Nothing here claims mesh
-reliability, range, Aqara re-parenting behaviour, or battery-reporting accuracy.
+An Aqara MCCGQ11LM joined a SONOFF ZBDongle-P (Z-Stack coordinator build
+20250321) on channel 15 and sent exactly these payloads:
+
+```
+zigbee2mqtt/0x00158d008c8bc4f2/availability {"state":"online"}
+zigbee2mqtt/0x00158d008c8bc4f2 {"contact":true,"linkquality":98}    magnet on
+zigbee2mqtt/0x00158d008c8bc4f2 {"contact":false,"linkquality":105}  magnet off
+zigbee2mqtt/0x00158d008c8bc4f2 {"contact":true,"linkquality":98}    back on
+```
+
+That settles the inversion from the hardware rather than from the
+documentation: the device's own definition reads *"Indicates if the contact is
+closed (= true) or open (= false)"*, with `value_on: false` and
+`value_off: true`. `tests/fake_zigbee2mqtt.py` now carries that definition
+verbatim, and `test_the_payloads_a_real_aqara_sent` replays the captured
+payloads.
+
+Two things worth knowing from it:
+
+**A report carries no battery.** Zigbee2MQTT's definition says battery "can take
+up to 24 hours before reported", so every newly paired sensor legitimately has
+none. The provider leaves it `null` and the UI renders nothing rather than a
+fault; substituting the last value or showing a warning would cry wolf on every
+new sensor.
+
+**A re-pairing sensor emits `device_leave` immediately before `device_joined`.**
+Metadata is therefore kept when a device leaves, so it returns to its room and
+name rather than arriving anonymous.
+
+Still unverified: mesh range and reliability over distance, Aqara re-parenting
+onto a repeater, battery-reporting accuracy, and behaviour over days rather than
+minutes. Link quality was 98–105 of 255 with the sensor near the coordinator,
+which says nothing about the far end of the building.
+
 `tests/fake_zigbee2mqtt.py` fakes Zigbee2MQTT's *topic* contract, which is the
 part this application can get wrong; the MQTT wire protocol underneath is the
 client library's responsibility and is deliberately not reimplemented. The same

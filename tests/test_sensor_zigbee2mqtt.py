@@ -534,3 +534,63 @@ def test_bad_zigbee_metadata_is_refused(tmp_path, row):
 
     with pytest.raises(InvalidSensorData):
         save_zigbee_metadata({ADDRESS: row}, tmp_path / "meta.json")
+
+
+# -- recorded from real hardware -------------------------------------------
+#
+# An Aqara MCCGQ11LM (IEEE 0x00158d008c8bc4f2) joined a real ZBDongle-P and
+# sent exactly these payloads.  They are here so the assumptions above are
+# anchored to something a radio actually produced rather than to what the
+# documentation implies.
+
+
+@pytest.mark.asyncio
+async def test_the_payloads_a_real_aqara_sent(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    broker = z2m._broker
+
+    # Verbatim, including the absence of a battery field.
+    for payload, expected in (
+        ('{"contact":true,"linkquality":98}', ContactState.CLOSED),
+        ('{"contact":false,"linkquality":105}', ContactState.OPEN),
+        ('{"contact":true,"linkquality":98}', ContactState.CLOSED),
+    ):
+        await broker.publish(f"zigbee2mqtt/{ADDRESS}", payload)
+        assert (await provider.list())[0].state is expected
+
+
+@pytest.mark.asyncio
+async def test_no_battery_reading_is_normal_not_a_fault(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    # Zigbee2MQTT's own definition says battery "can take up to 24 hours
+    # before reported", so a freshly paired sensor legitimately has none.
+    # Substituting a number here would invent a reading, and showing a fault
+    # would cry wolf on every new sensor.
+    await z2m.report(ADDRESS, contact=True, linkquality=98)
+
+    sensor = (await provider.list())[0]
+    assert sensor.battery is None
+    assert sensor.available is True
+    assert sensor.state is ContactState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_a_rejoining_sensor_leaves_then_joins(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await provider.update(ADDRESS, name="Kitchen window", zone_id="3")
+    events.clear()
+
+    # A real Aqara re-pairing emits device_leave immediately before joining
+    # again.  The sensor must come back to its room, not arrive anonymous.
+    await z2m.device_left(ADDRESS)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    sensor = (await provider.list())[0]
+    assert (sensor.name, sensor.zone_id) == ("Kitchen window", "3")
+    assert [event.kind for event in events] == [
+        SensorEventKind.REMOVED, SensorEventKind.CREATED,
+    ]
