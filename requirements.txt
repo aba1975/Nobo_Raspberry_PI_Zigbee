@@ -5,3 +5,6 @@ pydantic>=2.0.0
 websockets>=11.0
 bcrypt>=4.0.0
 python-multipart>=0.0.7
+# Only used when the contact-sensor provider is set to zigbee2mqtt; the import
+# is lazy, so a Nobø-only installation never loads it.
+aiomqtt>=2.0.0

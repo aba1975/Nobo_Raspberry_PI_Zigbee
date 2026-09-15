@@ -14,16 +14,27 @@ or vendor payloads. A provider supplies:
 - async lifecycle and CRUD/pairing operations;
 - a callback whenever a snapshot changes.
 
-`sensor_provider.py` defines that contract. `sensor_simulated.py` is the only
-implementation in this release. The API, warning aggregation, WebSocket
-payloads, UI, persistence policy, and heating automation do not depend on its
-storage format.
+`sensor_provider.py` defines that contract. `sensor_simulated.py` and
+`sensor_zigbee2mqtt.py` implement it. The API, warning aggregation, WebSocket
+payloads, UI, persistence policy, and heating automation do not depend on either
+one's storage format.
 
 ## The real provider: Zigbee2MQTT out of process
 
 **Decision: Zigbee2MQTT and a broker run as their own containers, and the
 application is a pure MQTT consumer. The radio stack does not run inside
 `server.py`.**
+
+`sensor_zigbee2mqtt.py` implements this against the `ContactSensorProvider`
+contract; `sensor_mqtt.py` carries the transport. The MQTT client library is
+imported lazily, so a Nobø-only installation neither needs it nor loads it, and
+selecting the provider without it gives a clear instruction rather than an
+import traceback.
+
+Select it with `provider: "zigbee2mqtt"` in the sensor settings. The broker
+address comes from `NOBO_MQTT_URL` (default `mqtt://127.0.0.1:1883`) and the
+topic root from `NOBO_MQTT_BASE_TOPIC` (default `zigbee2mqtt`). Neither is
+stored in sensor records, and neither is returned by the API.
 
 The alternative — zigpy in process, no broker, one less moving part — was
 rejected on the strength of this repository's own history. `server.py` already
@@ -57,20 +68,34 @@ window. Those remain a choice made at pairing.
 Retained messages mean a restart gets current state immediately rather than
 waiting for something to move.
 
-### One contract change is needed
+### One contract change was needed
 
 `pair()` returning a `ContactSnapshot` is achievable for a simulator and not for
-a radio: a real join takes anywhere from seconds to never. Pairing therefore has
-to become two steps — open the permit-join window, and let the device arrive as
-a `CREATED` event through `subscribe()`. The UI already updates over the
-WebSocket, so it can show a "searching" state and then the device. Naming, type
-and room are collected *after* the device joins, which is also the better
-sequence, because until it joins there is nothing to name.
+a radio: a real join takes anywhere from seconds to never. Pairing is therefore
+two steps — `begin_pairing()` opens the permit-join window, and the device
+arrives as a `CREATED` event through `subscribe()`. The UI already updates over
+the WebSocket, so it can show a "searching" state and then the device. Naming,
+type and room are collected *after* the device joins, which is also the better
+sequence, because until it joins there is nothing to name. Calling `pair()` or
+`create()` on the Zigbee provider raises rather than inventing a device.
+
+A sensor that has joined but has not yet reported is `unknown`, not `closed`.
+Claiming closed would mean the left-open warning and the heating rule both
+trusted a fact nobody reported.
+
+Removal asks Zigbee2MQTT and waits for its `device_leave` event rather than
+treating the request as the outcome, which would hide a sensor that is still on
+the mesh.
 
 ### Not yet verified
 
 No sensor has joined a mesh at the time of writing. Nothing here claims mesh
 reliability, range, Aqara re-parenting behaviour, or battery-reporting accuracy.
+`tests/fake_zigbee2mqtt.py` fakes Zigbee2MQTT's *topic* contract, which is the
+part this application can get wrong; the MQTT wire protocol underneath is the
+client library's responsibility and is deliberately not reimplemented. The same
+caveat applies as to `fake_hub.py`: it proves a message was understood, not that
+a radio delivered it.
 
 ### Test rig
 
