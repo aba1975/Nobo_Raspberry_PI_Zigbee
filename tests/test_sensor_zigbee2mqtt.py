@@ -749,3 +749,67 @@ def test_the_simulator_has_no_pairing_window():
     # straight create form, not a progress display that would never move.
     assert status.supported is False
     assert status.active is False
+
+
+@pytest.mark.asyncio
+async def test_reading_the_status_does_not_change_it(rig, events):
+    """The automation loop reads this twice and compares the two results.
+
+    A version that settled the expiry as it was read made the first call do
+    the transition, so the comparison found no change and the window closing
+    was never broadcast — somebody would watch "3s left" and then nothing.
+    """
+    provider, _z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await provider.begin_pairing(60)
+    clock.advance(61)
+
+    first = provider.pairing_status()
+    second = provider.pairing_status()
+
+    assert first == second
+    assert first.outcome is PairingOutcome.EXPIRED
+    assert first.active is False
+
+
+@pytest.mark.asyncio
+async def test_the_moment_of_expiry_is_visible_as_a_change(rig, events):
+    provider, _z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await provider.begin_pairing(60)
+
+    while_open = provider.pairing_status()
+    clock.advance(61)
+    after = provider.pairing_status()
+
+    # Something a browser can see must actually differ across the deadline,
+    # or the loop has nothing to announce.
+    assert while_open.active is True and after.active is False
+    assert (while_open.active, while_open.outcome) != (after.active, after.outcome)
+
+
+@pytest.mark.asyncio
+async def test_an_expired_window_stays_expired(rig, events):
+    provider, _z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await provider.begin_pairing(60)
+    clock.advance(600)
+
+    # Not quietly back to "nothing has happened" ten minutes later.
+    assert provider.pairing_status().outcome is PairingOutcome.EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_a_join_just_before_the_deadline_is_not_overwritten_by_expiry(
+    rig, events
+):
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await provider.begin_pairing(60)
+    await _interview(z2m, ADDRESS, "successful", contact_device(ADDRESS))
+
+    clock.advance(600)
+
+    status = provider.pairing_status()
+    assert status.outcome is PairingOutcome.JOINED
+    assert status.sensor_id == ADDRESS

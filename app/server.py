@@ -2003,6 +2003,7 @@ def _sensor_view_signature() -> tuple:
     so an unconditional broadcast here would send every zone change twice — and
     a client reading one update per change would then be one behind.
     """
+    pairing = _sensor_pairing_response()
     return (
         tuple(
             (item.sensor_id, item.state.value, item.available, item.battery)
@@ -2019,8 +2020,11 @@ def _sensor_view_signature() -> tuple:
             for zone_id, aggregate in sorted(sensor_zone_aggregates.items())
         ),
         # A person waiting at a sensor with a paperclip needs the window's
-        # progress pushed to them, not polled for.
-        tuple(sorted(_sensor_pairing_response().items(), key=lambda kv: kv[0])),
+        # progress pushed to them, not polled for. Only the transitions
+        # though — the countdown ticks every second and is already polled by
+        # the pairing sheet, so putting it here would broadcast the whole
+        # house once a second for four minutes.
+        (pairing["active"], pairing["outcome"], pairing["sensor_id"]),
     )
 
 
