@@ -634,11 +634,29 @@ def test_pairing_goes_through_the_shared_api_client():
     assert "/api/sensors/pairing" not in CABIN
 
 
-def test_the_poll_stops_when_the_sheet_closes():
-    # An interval left running behind a closed sheet would keep asking the hub
-    # about a window nobody is watching.
-    assert "sheetCleanup = stop;" in CABIN
+def test_dismissing_the_sheet_closes_the_join_window():
+    """Scrim and Escape go through closeSheet, not the buttons.
+
+    Without this the radio stays in permit-join for the rest of its four
+    minutes with nothing on screen saying so, and anything that joins in that
+    time is accepted silently. The hub's device search already does this; the
+    pairing sheet was only doing half of it.
+    """
+    start = CABIN.index("function zigbeePairSheet")
+    end = CABIN.index("\n  function ", start + 10)
+    sheet = CABIN[start:end]
+    assert "onSheetClose(" in sheet
+    assert "cancelSensorPairing()" in sheet
     assert "clearInterval(timer)" in CABIN
+
+
+def test_a_late_poll_cannot_write_into_another_sheet():
+    """clearInterval does not cancel a callback already awaiting."""
+    start = CABIN.index("function zigbeePairSheet")
+    end = CABIN.index("\n  function ", start + 10)
+    sheet = CABIN[start:end]
+    assert "closed = true;" in sheet
+    assert sheet.count("if (closed) return;") >= 3
 
 
 def test_classic_gains_no_sensor_pairing_surface():

@@ -813,3 +813,99 @@ async def test_a_join_just_before_the_deadline_is_not_overwritten_by_expiry(
     status = provider.pairing_status()
     assert status.outcome is PairingOutcome.JOINED
     assert status.sensor_id == ADDRESS
+
+
+# -- what the review found -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_missing_sensor_raises_the_shared_not_found(rig, events):
+    """Both providers must raise the class ``server.py`` catches for 404.
+
+    A provider with its own same-named class is not caught, and the handler
+    answers 500 — which is how a successful pairing ended in "Internal Server
+    Error" when the save arrived before bridge/devices.
+    """
+    import sensor_simulated
+    from sensor_provider import SensorNotFound as Shared
+
+    provider, _z2m = await started(rig, events)
+
+    with pytest.raises(Shared):
+        await provider.update("0x00158d000000dead", name="x")
+    assert sensor_simulated.SensorNotFound is Shared
+    assert SensorNotFound is Shared
+
+
+@pytest.mark.asyncio
+async def test_losing_the_broker_marks_everything_unavailable(rig, events):
+    """The bridge's will covers Zigbee2MQTT stopping, not the broker dying."""
+    provider, z2m, transport, _clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True)
+    assert (await provider.list())[0].available is True
+
+    await provider._connection_lost()
+
+    sensor = (await provider.list())[0]
+    assert sensor.available is False
+    # Not rewritten to closed: what was shut is still shut, we have merely
+    # stopped being able to see it.
+    assert sensor.state is ContactState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_a_nested_friendly_name_still_reports(rig, events):
+    """Zigbee2MQTT allows '/' in a name and publishes it as a nested topic.
+
+    Registered but never heard from is the worst outcome available: the zone
+    can never settle, so a heating override taken for it is never released.
+    """
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS, friendly_name="kitchen/window"))
+
+    await z2m.report("kitchen/window", contact=False, linkquality=98)
+    await z2m.availability("kitchen/window", online=True)
+
+    sensor = (await provider.list())[0]
+    assert sensor.sensor_id == ADDRESS
+    assert sensor.state is ContactState.OPEN
+    assert sensor.available is True
+
+
+@pytest.mark.asyncio
+async def test_a_topic_for_nobody_is_ignored(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True)
+
+    await z2m.report("some/other/thing", contact=False)
+    await z2m.report("0x00158d000000beef", contact=False)
+
+    sensors = await provider.list()
+    assert [item.sensor_id for item in sensors] == [ADDRESS]
+    assert sensors[0].state is ContactState.CLOSED
+
+
+def test_the_unavailable_errors_are_one_family():
+    """A handler answering 503 must not catch only half of them."""
+    from sensor_mqtt import MqttUnavailable
+    from sensor_provider import ProviderUnavailable
+
+    assert issubclass(MqttUnavailable, ProviderUnavailable)
+
+
+def test_a_missing_client_library_is_reported_before_the_task_starts():
+    """Left inside the loop, a missing package killed the task on its first
+    pass while connect() went on to log that it was still trying."""
+    import inspect
+
+    import sensor_mqtt
+
+    source = inspect.getsource(sensor_mqtt.AiomqttTransport.connect)
+    assert "_require_aiomqtt()" in source
+    # And the import itself is at module scope, never on an event-loop thread:
+    # importing from inside the client task can deadlock against an import in
+    # progress elsewhere, turning a missing broker into a hang.
+    assert "_import_aiomqtt" not in inspect.getsource(sensor_mqtt.AiomqttTransport._run)

@@ -33,7 +33,7 @@ from typing import Awaitable, Callable, Optional, Protocol
 
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, PairingOutcome, PairingStatus,
-    SensorEvent, SensorEventKind, SensorKind,
+    ProviderUnavailable, SensorEvent, SensorEventKind, SensorKind, SensorNotFound,
 )
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
@@ -43,14 +43,6 @@ DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 MAX_PERMIT_JOIN_SECONDS = 254
 
 _IEEE = re.compile(r"^0x[0-9a-f]{16}$")
-
-
-class SensorNotFound(KeyError):
-    pass
-
-
-class ProviderUnavailable(RuntimeError):
-    """Zigbee2MQTT is not reachable, so the request cannot be honoured."""
 
 
 class MqttTransport(Protocol):
@@ -111,15 +103,17 @@ class Zigbee2MqttContactSensorProvider:
             return
         self._metadata = self._load_metadata() or {}
         self._transport.on_message(self._handle_message)
+        lost = getattr(self._transport, "on_connection_lost", None)
+        if callable(lost):
+            lost(self._connection_lost)
         await self._transport.connect()
-        for topic in (
-            f"{self._base}/bridge/state",
-            f"{self._base}/bridge/devices",
-            f"{self._base}/bridge/event",
-            f"{self._base}/+",
-            f"{self._base}/+/availability",
-        ):
-            await self._transport.subscribe(topic)
+        # One wildcard rather than a filter per shape. Zigbee2MQTT allows "/"
+        # in a friendly name and publishes it as a nested topic, which no
+        # single-level filter matches — and subscribing for those as they are
+        # discovered would mean calling subscribe() from inside the message
+        # handler, which deadlocks the real client: it waits for the SUBACK on
+        # the very loop that would deliver it.
+        await self._transport.subscribe(f"{self._base}/#")
         self._started = True
 
     async def stop(self) -> None:
@@ -128,6 +122,17 @@ class Zigbee2MqttContactSensorProvider:
         self._started = False
         self._bridge_online = False
         await self._transport.disconnect()
+
+    async def _connection_lost(self) -> None:
+        """The broker went, so nothing we hold is known to be current.
+
+        Zigbee2MQTT's last will covers the bridge stopping. It cannot cover the
+        broker itself dying, and without this the sensors would keep being
+        presented as reachable — the front page would go on asserting that
+        every window is shut, and the away-and-open warning would quietly stop
+        working, with nothing on screen to say why.
+        """
+        await self._on_bridge_state({"state": "offline"})
 
     def _ensure_started(self) -> None:
         if not self._started:
@@ -289,6 +294,10 @@ class Zigbee2MqttContactSensorProvider:
         if not topic.startswith(f"{self._base}/"):
             return
         rest = topic[len(self._base) + 1:]
+        if rest.startswith("bridge/") and rest not in (
+            "bridge/state", "bridge/devices", "bridge/event"
+        ):
+            return
         try:
             document = json.loads(payload.decode("utf-8")) if payload else None
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -300,10 +309,29 @@ class Zigbee2MqttContactSensorProvider:
             await self._on_devices(document)
         elif rest == "bridge/event":
             await self._on_event(document)
-        elif rest.endswith("/availability"):
-            await self._on_availability(rest[: -len("/availability")], document)
-        elif "/" not in rest:
-            await self._on_state(rest, document)
+        elif rest.endswith("/availability") and (
+            address := self._address_for(rest[: -len("/availability")])
+        ):
+            await self._on_availability(address, document)
+        elif (address := self._address_for(rest)) is not None:
+            await self._on_state(address, document)
+
+    def _address_for(self, name: str) -> Optional[str]:
+        """Resolve a topic segment back to the address that identifies a sensor.
+
+        Zigbee2MQTT allows ``/`` in a friendly name and publishes it as a
+        nested topic, so a device called "kitchen/window" reports on
+        ``zigbee2mqtt/kitchen/window``. Matching the known names rather than
+        assuming one level is what keeps such a device from being registered
+        and then never heard from — which would leave its zone unable to settle
+        and its heating override held for ever.
+        """
+        known = self._topic_names.get(name)
+        if known is not None:
+            return known
+        # A device can report before its bridge/devices entry arrives; the
+        # default friendly name is the address itself.
+        return name if name in self._sensors else None
 
     async def _on_bridge_state(self, document) -> None:
         state = (document or {}).get("state") if isinstance(document, dict) else None
@@ -379,8 +407,7 @@ class Zigbee2MqttContactSensorProvider:
                     detail=_describe(data) or "That device is not a contact sensor",
                 )
 
-    async def _on_availability(self, friendly: str, document) -> None:
-        address = self._topic_names.get(friendly, friendly)
+    async def _on_availability(self, address: str, document) -> None:
         snapshot = self._sensors.get(address)
         if snapshot is None:
             return
@@ -390,10 +417,9 @@ class Zigbee2MqttContactSensorProvider:
             return
         await self._store(_replace(snapshot, available=available))
 
-    async def _on_state(self, friendly: str, document) -> None:
+    async def _on_state(self, address: str, document) -> None:
         if not isinstance(document, dict):
             return
-        address = self._topic_names.get(friendly, friendly)
         snapshot = self._sensors.get(address)
         if snapshot is None:
             return

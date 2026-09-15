@@ -209,3 +209,41 @@ def test_pairing_needs_a_session(client):
             assert call().status_code in (302, 401, 403)
     finally:
         client.cookies.update(cookies)
+
+
+# -- what the review found -------------------------------------------------
+
+
+def test_editing_a_sensor_the_provider_does_not_hold_is_404_not_500(client, zigbee):
+    """Reachable straight off a successful pairing.
+
+    The sheet reports "joined" from bridge/event, which can arrive before
+    bridge/devices has registered the device — so Save can name an id the
+    provider does not yet hold. A 500 there reads as a crash at the end of a
+    pairing that actually worked.
+    """
+    enable(client, provider="zigbee2mqtt")
+    missing = "0x00158d000000dead"
+
+    assert client.put(f"/api/sensors/{missing}",
+                      json={"name": "Kitchen window"}).status_code == 404
+    assert client.delete(f"/api/sensors/{missing}").status_code == 404
+
+
+def test_a_broker_that_has_gone_is_503_not_500(client, zigbee, monkeypatch):
+    from sensor_mqtt import MqttUnavailable
+
+    provider, z2m = zigbee
+    enable(client, provider="zigbee2mqtt")
+    client.portal.call(z2m.go_online)
+
+    async def gone(*_args, **_kwargs):
+        raise MqttUnavailable("not connected to the MQTT broker")
+
+    monkeypatch.setattr(provider._transport, "publish", gone)
+
+    response = client.post("/api/sensors/pairing", json={"seconds": 60})
+
+    # Unavailable, not broken: the caller should be told to try again, and the
+    # log should not fill with tracebacks every time the broker restarts.
+    assert response.status_code == 503
