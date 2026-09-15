@@ -94,9 +94,14 @@ def contact_device(
     *,
     friendly_name: Optional[str] = None,
     model: str = "MCCGQ11LM",
-    description: str = "Aqara door & window contact sensor",
+    description: str = "Door and window sensor",
 ) -> dict:
-    """A ``bridge/devices`` entry shaped like a real contact sensor."""
+    """A ``bridge/devices`` entry shaped like a real contact sensor.
+
+    Copied from what a real Aqara MCCGQ11LM sent on joining, not invented.
+    Note ``value_on: false`` / ``value_off: true``: the device reports whether
+    the magnet is in contact, so ``contact: true`` is a *closed* opening.
+    """
     return {
         "ieee_address": address,
         "friendly_name": friendly_name or address,
@@ -109,6 +114,19 @@ def contact_device(
             "description": description,
             "exposes": [
                 {
+                    "type": "numeric",
+                    "name": "battery",
+                    "property": "battery",
+                    "access": 1,
+                    "unit": "%",
+                    "value_min": 0,
+                    "value_max": 100,
+                    # The real definition warns this "can take up to 24 hours
+                    # before reported", which is why a sensor with no battery
+                    # reading is normal rather than faulty.
+                    "category": "diagnostic",
+                },
+                {
                     "type": "binary",
                     "name": "contact",
                     "property": "contact",
@@ -118,10 +136,13 @@ def contact_device(
                 },
                 {
                     "type": "numeric",
-                    "name": "battery",
-                    "property": "battery",
+                    "name": "linkquality",
+                    "property": "linkquality",
                     "access": 1,
-                    "unit": "%",
+                    "unit": "lqi",
+                    "value_min": 0,
+                    "value_max": 255,
+                    "category": "diagnostic",
                 },
             ],
         },
