@@ -1304,10 +1304,15 @@
     let pairing = (state.sensorSettings && state.sensorSettings.pairing) || {};
     let timer = null;
     let joined = null;
+    let closed = false;
 
     const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
 
     function render() {
+      /* The poll awaits before it renders, and clearInterval does not cancel a
+         callback already in flight. Without this a late render would write
+         into whichever sheet had since been opened over this one. */
+      if (closed) return;
       const waiting = pairing.active;
       const found = !!joined;
       $('#sheetTitle').textContent = replacing ? 'Replace sensor' : 'Add a sensor';
@@ -1328,13 +1333,7 @@
     }
 
     function wire() {
-      sheetBody.querySelector('[data-act="cancel"]').onclick = async () => {
-        if (pairing.active) {
-          try { await Nobo.api.cancelSensorPairing(); } catch (e) { /* closing anyway */ }
-        }
-        stop();
-        closeSheet();
-      };
+      sheetBody.querySelector('[data-act="cancel"]').onclick = () => closeSheet();
       const startButton = sheetBody.querySelector('[data-act="start"]');
       if (startButton) startButton.onclick = async (event) => {
         event.currentTarget.disabled = true;
@@ -1360,7 +1359,6 @@
             zone_id: sheetBody.querySelector('#pairSensorZone').value,
           });
           if (replacing) await Nobo.api.removeSensor(replacing.sensor_id);
-          stop();
           closeSheet();
           Nobo.toast(`${name} added`);
           await refresh(true);
@@ -1379,11 +1377,13 @@
       timer = setInterval(async () => {
         let next;
         try { next = await Nobo.api.sensorPairing(); } catch (e) { return; }
+        if (closed) return;
         const settled = !next.active && next.outcome;
         pairing = next;
         if (settled) stop();
         if (settled && next.outcome === 'joined' && next.sensor_id) {
           await refresh(true);
+          if (closed) return;
           joined = configuredSensor(next.sensor_id) || {
             sensor_id: next.sensor_id, name: '', kind: 'window', zone_id: defaultZoneId,
           };
@@ -1393,7 +1393,15 @@
     }
 
     openSheet(replacing ? 'Replace sensor' : 'Add a sensor', '', () => {});
-    sheetCleanup = stop;
+    /* Dismissing the sheet by the scrim or Escape has to close the join window
+       too, exactly as the hub's device search does. Otherwise the radio stays
+       in permit-join for the rest of its four minutes with nothing on screen
+       saying so, and anything that joins in that time is accepted silently. */
+    onSheetClose(() => {
+      closed = true;
+      stop();
+      if (pairing.active) Nobo.api.cancelSensorPairing().catch(() => {});
+    });
     render();
     if (pairing.active) poll();
   }

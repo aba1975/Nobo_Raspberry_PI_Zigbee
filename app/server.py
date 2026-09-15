@@ -43,10 +43,9 @@ from sensor_automation import (
 )
 from sensor_persistence import ActionWhenOpen, SensorSettings, ZoneSensorPolicy
 from sensor_provider import (
-    ContactSnapshot, ContactState, PairingStatus, SensorKind, create_provider,
+    ContactSnapshot, ContactState, PairingStatus, ProviderUnavailable, SensorKind,
+    SensorNotFound, create_provider,
 )
-from sensor_zigbee2mqtt import ProviderUnavailable
-from sensor_simulated import SensorNotFound
 
 # Configure logging
 logging.basicConfig(

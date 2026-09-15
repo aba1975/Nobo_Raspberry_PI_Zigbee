@@ -194,6 +194,30 @@ list in Settings. The simulated provider completes pairing immediately. A
 Zigbee2MQTT provider cannot, because a real join is not instantaneous; see the
 contract change noted above.
 
+### When the sensor stack goes away
+
+Two different failures, and both must end with sensors reported as
+`available: false` rather than their last known state being presented as
+current:
+
+**Zigbee2MQTT stops.** Its last will publishes `bridge/state: offline`, which
+the provider treats as every sensor being unreachable.
+
+**The broker itself dies, or the network goes.** No will is delivered, because
+there is nobody left to deliver it. The transport therefore reports its own
+disconnection, and that is handled identically. Without it the front page would
+go on asserting that every window is shut, and the away-and-open warning would
+quietly stop working, with nothing on screen to say why.
+
+Neither changes the heating: a zone only settles when every one of its contacts
+is *available and closed*, so an override is held either way. What is lost
+without the second path is the operator's only cue to go and look.
+
+`MqttUnavailable` is a subclass of `ProviderUnavailable` so that a handler
+answering 503 cannot catch only half of them, and `SensorNotFound` is defined
+once beside the contract for the same reason — a provider with its own
+same-named class is not caught, and the handler answers 500.
+
 ### What the pairing window says
 
 Somebody pairing a sensor is standing at a door holding a button on a battery
@@ -215,6 +239,11 @@ state of its own, not a return to the beginning.
 The window is polled once a second while that sheet is open, rather than pushed,
 because a countdown has to tick every second and the WebSocket only speaks when
 something changes. The poll stops when the sheet closes.
+
+Dismissing the sheet — by the scrim or by Escape, not only by its buttons —
+closes the join window, as the hub's own device search already did. Otherwise
+the radio stays in permit-join for the rest of its four minutes with nothing on
+screen saying so, and anything that joins in that time is accepted silently.
 
 Zigbee caps a join window at 254 seconds. Offering longer would promise
 something the radio silently clamps, so the API refuses it.

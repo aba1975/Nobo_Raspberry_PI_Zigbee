@@ -12,6 +12,16 @@ import logging
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
+from sensor_provider import ProviderUnavailable
+
+try:
+    import aiomqtt
+except ImportError as _exc:  # pragma: no cover - depends on the environment
+    aiomqtt = None
+    _IMPORT_ERROR = _exc
+else:
+    _IMPORT_ERROR = None
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_URL = "mqtt://127.0.0.1:1883"
@@ -22,8 +32,13 @@ DEFAULT_URL = "mqtt://127.0.0.1:1883"
 RECONNECT_SECONDS = 5.0
 
 
-class MqttUnavailable(RuntimeError):
-    """The MQTT client library is not installed."""
+class MqttUnavailable(ProviderUnavailable):
+    """The MQTT layer cannot serve this request.
+
+    Deliberately a subclass of ``ProviderUnavailable``: the handlers answer 503
+    for that, and a separate hierarchy here meant a broker that had gone away
+    produced a 500 instead.
+    """
 
 
 class AiomqttTransport:
@@ -45,11 +60,26 @@ class AiomqttTransport:
         self._task: Optional[asyncio.Task] = None
         self._ready: Optional[asyncio.Event] = None
         self._closing = False
+        self._on_connection_lost: Optional[Callable[[], Awaitable[None]]] = None
 
     def on_message(self, callback) -> None:
         self._callback = callback
 
+    def on_connection_lost(self, callback) -> None:
+        """Told when the socket goes, which the broker's own will cannot say.
+
+        Zigbee2MQTT publishes a last will, so the *bridge* stopping is visible.
+        A broker that dies, or a network that goes, delivers no will at all —
+        and without this the last known sensor states would be presented as
+        current indefinitely.
+        """
+        self._on_connection_lost = callback
+
     async def connect(self) -> None:
+        # Checked before the task starts. Left to the task, a missing package
+        # killed it on its first pass while connect() went on to log "still
+        # trying", and nothing was.
+        _require_aiomqtt()
         self._closing = False
         self._ready = asyncio.Event()
         self._task = asyncio.create_task(self._run(), name="mqtt-sensor-client")
@@ -84,8 +114,8 @@ class AiomqttTransport:
         await client.publish(topic, payload.encode("utf-8"))
 
     async def _run(self) -> None:
-        aiomqtt = _import_aiomqtt()
         parsed = urlparse(self._url)
+        was_connected = False
         while not self._closing:
             try:
                 async with aiomqtt.Client(
@@ -100,6 +130,7 @@ class AiomqttTransport:
                         await client.subscribe(topic)
                     if self._ready is not None:
                         self._ready.set()
+                    was_connected = True
                     async for message in client.messages:
                         if self._callback is not None:
                             await self._callback(
@@ -113,17 +144,21 @@ class AiomqttTransport:
                 logger.warning("MQTT connection to %s lost: %s", self._url, exc)
             finally:
                 self._client = None
+            if was_connected and self._on_connection_lost is not None:
+                was_connected = False
+                try:
+                    await self._on_connection_lost()
+                except Exception:
+                    logger.exception("MQTT disconnect handler failed")
             if self._closing:
                 break
             await asyncio.sleep(self._reconnect_seconds)
 
 
-def _import_aiomqtt():
-    try:
-        import aiomqtt
-    except ImportError as exc:
+def _require_aiomqtt():
+    if aiomqtt is None:
         raise MqttUnavailable(
             "The Zigbee sensor provider needs the 'aiomqtt' package. "
             "Install it with: pip install aiomqtt"
-        ) from exc
+        ) from _IMPORT_ERROR
     return aiomqtt

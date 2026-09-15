@@ -11,12 +11,8 @@ from typing import Callable, Optional
 from sensor_persistence import load_simulated_sensors, save_simulated_sensors
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, PairingStatus, SensorEvent,
-    SensorEventKind, SensorKind,
+    SensorEventKind, SensorKind, SensorNotFound,
 )
-
-
-class SensorNotFound(KeyError):
-    pass
 
 
 class SimulatedContactSensorProvider:

@@ -12,6 +12,24 @@ from enum import Enum
 from typing import Awaitable, Callable, Optional, Protocol, Sequence, Union
 
 
+class SensorNotFound(KeyError):
+    """No sensor with that id.
+
+    Defined here, beside the contract, because every provider raises it and
+    ``server.py`` catches it to answer 404. A provider that defines its own
+    class of the same name is not caught, and the handler returns 500 instead
+    — which is how a successful pairing used to end in "Internal Server Error".
+    """
+
+
+class ProviderUnavailable(RuntimeError):
+    """The provider cannot honour this request at the moment.
+
+    Answered as 503. Distinct from :class:`SensorNotFound`, which is a 404,
+    and from a programming error, which is a 500 and should stay one.
+    """
+
+
 class ContactState(str, Enum):
     OPEN = "open"
     CLOSED = "closed"
