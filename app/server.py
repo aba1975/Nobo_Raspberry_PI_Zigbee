@@ -42,7 +42,10 @@ from sensor_automation import (
     SensorAutomation,
 )
 from sensor_persistence import ActionWhenOpen, SensorSettings, ZoneSensorPolicy
-from sensor_provider import ContactSnapshot, ContactState, SensorKind, create_provider
+from sensor_provider import (
+    ContactSnapshot, ContactState, PairingStatus, SensorKind, create_provider,
+)
+from sensor_zigbee2mqtt import ProviderUnavailable
 from sensor_simulated import SensorNotFound
 
 # Configure logging
@@ -1090,7 +1093,14 @@ class SensorZonePolicyUpdate(BaseModel):
 
 class SensorSettingsUpdate(BaseModel):
     enabled: bool
+    provider: Optional[str] = None
     zones: Dict[str, SensorZonePolicyUpdate] = Field(default_factory=dict)
+
+
+class SensorPairingStart(BaseModel):
+    # Zigbee caps a join window at 254 seconds, so offering longer would be
+    # promising something the radio silently clamps.
+    seconds: int = Field(default=254, ge=1, le=254)
 
 
 class SensorCreate(BaseModel):
@@ -2008,6 +2018,9 @@ def _sensor_view_signature() -> tuple:
             )
             for zone_id, aggregate in sorted(sensor_zone_aggregates.items())
         ),
+        # A person waiting at a sensor with a paperclip needs the window's
+        # progress pushed to them, not polled for.
+        tuple(sorted(_sensor_pairing_response().items(), key=lambda kv: kv[0])),
     )
 
 
@@ -2632,8 +2645,31 @@ def _sensor_settings_response() -> Dict[str, Any]:
     return {
         "enabled": sensor_settings.enabled,
         "provider": sensor_settings.provider,
+        "providers": sorted(sensor_persistence.PROVIDERS),
         "demo_mode": DEMO_MODE,
+        "pairing": _sensor_pairing_response(),
         "zones": zones,
+    }
+
+
+def _sensor_pairing_response() -> Dict[str, Any]:
+    """What the join window is doing, in the shape the interface needs.
+
+    Always answered, even with sensors off, so the interface never has to
+    decide between "no window" and "cannot tell".
+    """
+    status = PairingStatus()
+    if sensor_provider is not None:
+        getter = getattr(sensor_provider, "pairing_status", None)
+        if callable(getter):
+            status = getter()
+    return {
+        "supported": status.supported,
+        "active": status.active,
+        "seconds_remaining": status.seconds_remaining,
+        "outcome": status.outcome.value if status.outcome else None,
+        "sensor_id": status.sensor_id,
+        "detail": status.detail,
     }
 
 
@@ -2647,9 +2683,16 @@ async def get_sensor_settings(request: Request):
 async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
     global sensor_settings
     _require_admin(_get_session_or_401(request))
-    if body.enabled and not DEMO_MODE:
+    provider = body.provider or sensor_settings.provider
+    if provider not in sensor_persistence.PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail="provider must be one of: "
+                   + ", ".join(sorted(sensor_persistence.PROVIDERS)),
+        )
+    if body.enabled and provider == "simulated" and not DEMO_MODE:
         _sensor_provider_unavailable(
-            "No real Zigbee provider is implemented yet; use simulation in demo mode."
+            "Simulated sensors are demo-only. Choose the Zigbee provider for real hardware."
         )
 
     known_zone_ids = {str(zone["zone_id"]) for zone in _build_zones_data()}
@@ -2682,11 +2725,15 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
                 detail="Could not release every sensor-owned heating override; sensors remain enabled.",
             )
     previous = sensor_settings
-    updated = SensorSettings(enabled=body.enabled, provider="simulated", zones=policies)
+    updated = SensorSettings(enabled=body.enabled, provider=provider, zones=policies)
     sensor_persistence.save_sensor_settings(updated)
     sensor_settings = updated
     try:
         if body.enabled:
+            if previous.provider != provider:
+                # A different radio means a different set of sensors, so the
+                # running service cannot simply be left in place.
+                await stop_sensor_service()
             await start_sensor_service()
             await evaluate_sensor_automation()
         else:
@@ -2703,6 +2750,47 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
 async def get_sensors():
     _require_sensor_enabled()
     return {"sensors": [_sensor_snapshot_dict(item) for item in sensor_snapshots]}
+
+
+@app.get("/api/sensors/pairing")
+async def get_sensor_pairing(request: Request):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    return _sensor_pairing_response()
+
+
+@app.post("/api/sensors/pairing")
+async def start_sensor_pairing(request: Request, body: SensorPairingStart):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    opener = getattr(sensor_provider, "begin_pairing", None)
+    if not callable(opener):
+        _sensor_provider_unavailable(
+            "This provider has no pairing window; add a simulated sensor instead."
+        )
+    try:
+        await opener(body.seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    wake_sensor_automation()
+    return _sensor_pairing_response()
+
+
+@app.delete("/api/sensors/pairing")
+async def stop_sensor_pairing(request: Request):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    closer = getattr(sensor_provider, "cancel_pairing", None)
+    if not callable(closer):
+        _sensor_provider_unavailable("This provider has no pairing window.")
+    try:
+        await closer()
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    wake_sensor_automation()
+    return _sensor_pairing_response()
 
 
 async def _finish_sensor_mutation() -> None:

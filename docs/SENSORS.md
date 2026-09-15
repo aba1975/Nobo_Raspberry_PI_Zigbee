@@ -152,6 +152,38 @@ re-pairing everything, so it belongs in `scripts/backup.sh`. Note also that the
 application container runs as uid 1001 and `nobo` is not in `dialout`, so device
 passthrough and group handling need attention at that point.
 
+## Running it
+
+Both extra containers sit behind a Compose profile, as `tls` does, so a
+Nobø-only installation starts nothing and needs no dongle:
+
+```
+COMPOSE_PROFILES=zigbee
+NOBO_ZIGBEE_ADAPTER=/dev/serial/by-id/usb-...-if00-port0
+```
+
+Always the by-id path, never `/dev/ttyUSB0`: USB numbering is not stable across
+reboots, and pointing a coordinator at the wrong adapter is not a failure that
+announces itself. `ZIGBEE2MQTT_TAG` is pinned so a rebuild cannot change the
+Zigbee stack under a working mesh.
+
+Then choose the provider in Settings. `simulated` stays demo-only; `zigbee2mqtt`
+is allowed in either mode, which is what lets real sensors be tested against a
+simulated hub without touching a building's heating.
+
+### Moving the dongle to another installation
+
+Sensors are paired to the *coordinator*, not to the Pi, but the network key and
+device database live in the `zigbee2mqtt-data` volume, which `scripts/backup.sh`
+now captures. Move the dongle without that volume and every sensor has to be
+paired again by hand, at the door or window it is stuck to.
+
+Names, door/window types and rooms are keyed by IEEE address in
+`data/zigbee_sensor_metadata.json`. Carry that file across and re-paired sensors
+return to the rooms and names they already had instead of arriving anonymous —
+which is the difference between re-pairing ten sensors and re-pairing *and*
+re-describing them.
+
 ## Pairing and management
 
 Settings contains only the feature switch, provider status, paired count, and
@@ -161,6 +193,31 @@ their zone, beside the state they report, rather than growing one unbounded
 list in Settings. The simulated provider completes pairing immediately. A
 Zigbee2MQTT provider cannot, because a real join is not instantaneous; see the
 contract change noted above.
+
+### What the pairing window says
+
+Somebody pairing a sensor is standing at a door holding a button on a battery
+device, so the interface has to distinguish four things, and in particular has
+to distinguish *nothing has happened yet* from *nothing is going to*:
+
+| State | Shown as |
+| --- | --- |
+| window open | "Listening for a sensor", with the seconds remaining counting down |
+| a contact sensor joined | "Sensor found", then the name/type/room form |
+| something joined that is not a contact sensor | "That is not a contact sensor", naming what it was |
+| the interview did not finish | "Pairing failed" |
+| the window closed with nothing | "Nothing joined in time" |
+
+The last is the one worth having: a join window that simply goes quiet leaves a
+person pressing a button at a radio that stopped listening minutes ago. It is a
+state of its own, not a return to the beginning.
+
+The window is polled once a second while that sheet is open, rather than pushed,
+because a countdown has to tick every second and the WebSocket only speaks when
+something changes. The poll stops when the sheet closes.
+
+Zigbee caps a join window at 254 seconds. Offering longer would promise
+something the radio silently clamps, so the API refuses it.
 
 Existing schema-v1 simulated records predate the type field and migrate to
 `window`, which preserves them without guessing from a user-editable name.
