@@ -94,10 +94,35 @@ class ContactSensorProvider(Protocol):
 
 def create_provider(name: str, *, demo_mode: bool, **kwargs) -> ContactSensorProvider:
     """Construct a provider without allowing simulation to masquerade as hardware."""
-    if name != "simulated":
-        raise ValueError(f"Unsupported sensor provider: {name}")
-    if not demo_mode:
-        raise RuntimeError("The simulated sensor provider is available only in demo mode")
-    from sensor_simulated import SimulatedContactSensorProvider
+    if name == "simulated":
+        if not demo_mode:
+            raise RuntimeError(
+                "The simulated sensor provider is available only in demo mode"
+            )
+        from sensor_simulated import SimulatedContactSensorProvider
 
-    return SimulatedContactSensorProvider(**kwargs)
+        return SimulatedContactSensorProvider(**kwargs)
+
+    if name == "zigbee2mqtt":
+        # Deliberately not gated on demo mode.  That gate exists so a simulator
+        # cannot pretend to be hardware, which says nothing about real sensors
+        # running beside a simulated hub — the arrangement used to test Zigbee
+        # equipment without touching a building's heating.
+        import os
+
+        from sensor_mqtt import DEFAULT_URL, AiomqttTransport
+        from sensor_persistence import load_zigbee_metadata, save_zigbee_metadata
+        from sensor_zigbee2mqtt import Zigbee2MqttContactSensorProvider
+
+        url = kwargs.pop("url", None) or os.environ.get("NOBO_MQTT_URL", DEFAULT_URL)
+        base_topic = kwargs.pop("base_topic", None) or os.environ.get(
+            "NOBO_MQTT_BASE_TOPIC", "zigbee2mqtt"
+        )
+        transport = kwargs.pop("transport", None) or AiomqttTransport(url)
+        kwargs.setdefault("load_metadata", load_zigbee_metadata)
+        kwargs.setdefault("save_metadata", save_zigbee_metadata)
+        return Zigbee2MqttContactSensorProvider(
+            transport=transport, base_topic=base_topic, **kwargs
+        )
+
+    raise ValueError(f"Unsupported sensor provider: {name}")

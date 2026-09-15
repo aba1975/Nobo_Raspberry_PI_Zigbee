@@ -17,6 +17,11 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
 SENSOR_AUTOMATION_STATE_FILE = DATA_DIR / "sensor_automation_state.json"
+ZIGBEE_METADATA_FILE = DATA_DIR / "zigbee_sensor_metadata.json"
+
+# ``simulated`` exists only in demo mode; ``zigbee2mqtt`` talks to real
+# hardware through a Zigbee2MQTT bridge.  See docs/SENSORS.md.
+PROVIDERS = frozenset({"simulated", "zigbee2mqtt"})
 
 
 class ActionWhenOpen(str, Enum):
@@ -198,8 +203,10 @@ def _parse_settings(payload: Any) -> SensorSettings:
     doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
     enabled = _require_bool(doc.get("enabled"), "enabled")
     provider = doc.get("provider")
-    if provider != "simulated":
-        raise InvalidSensorData("provider must be 'simulated'")
+    if provider not in PROVIDERS:
+        raise InvalidSensorData(
+            "provider must be one of: " + ", ".join(sorted(PROVIDERS))
+        )
     version = doc["schema_version"]
     zones: Dict[str, ZoneSensorPolicy] = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
@@ -303,6 +310,46 @@ def save_simulated_sensors(sensors: list[Mapping[str, Any]], path: Optional[Path
     _atomic_write(path or SIMULATED_SENSORS_FILE, {
         "schema_version": SCHEMA_VERSION, "sensors": parsed,
     })
+
+
+def load_zigbee_metadata(path: Optional[Path] = None) -> dict:
+    """What this application knows about a Zigbee sensor that the mesh does not.
+
+    Name, door/window type and room are choices a person made; none of them can
+    be read off the hardware.  Keyed by IEEE address so they survive a device
+    being renamed in Zigbee2MQTT, or removed and paired again.
+    """
+    return _load(path or ZIGBEE_METADATA_FILE, {}, _parse_zigbee_metadata)
+
+
+def save_zigbee_metadata(metadata: Mapping[str, Any], path: Optional[Path] = None) -> None:
+    parsed = _parse_zigbee_metadata(
+        {"schema_version": SCHEMA_VERSION, "sensors": dict(metadata)}
+    )
+    _atomic_write(path or ZIGBEE_METADATA_FILE, {
+        "schema_version": SCHEMA_VERSION, "sensors": parsed,
+    })
+
+
+def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
+    doc = _document(payload, (SCHEMA_VERSION,))
+    result: Dict[str, dict] = {}
+    for address, raw in _require_dict(doc.get("sensors"), "sensors").items():
+        if not isinstance(address, str) or not address:
+            raise InvalidSensorData("sensor ids must be non-empty strings")
+        row = _exact_fields(raw, ("name", "kind", "zone_id"), f"sensors.{address}")
+        name = row["name"]
+        if not isinstance(name, str) or not name.strip() or len(name) > 80:
+            raise InvalidSensorData(f"sensors.{address}.name must be 1 to 80 characters")
+        if row["kind"] not in ("door", "window"):
+            raise InvalidSensorData(f"sensors.{address}.kind must be door or window")
+        zone_id = row["zone_id"]
+        if zone_id is not None and (not isinstance(zone_id, str) or not zone_id.strip()):
+            raise InvalidSensorData(
+                f"sensors.{address}.zone_id must be a non-empty string or null"
+            )
+        result[address] = {"name": name, "kind": row["kind"], "zone_id": zone_id}
+    return result
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
