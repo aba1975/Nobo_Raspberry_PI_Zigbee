@@ -19,18 +19,81 @@ implementation in this release. The API, warning aggregation, WebSocket
 payloads, UI, persistence policy, and heating automation do not depend on its
 storage format.
 
-## Future Zigbee2MQTT provider
+## The real provider: Zigbee2MQTT out of process
 
-A future provider can subscribe to Zigbee2MQTT device and bridge topics,
-translate `contact`, `availability`, and `battery` values into the normalized
-snapshot, and translate pairing requests into Zigbee2MQTT permit-join
-operations. Provider configuration and credentials must remain outside sensor
-records and must not be returned by the API.
+**Decision: Zigbee2MQTT and a broker run as their own containers, and the
+application is a pure MQTT consumer. The radio stack does not run inside
+`server.py`.**
 
-That integration is not implemented or verified here. In particular, this
-release makes no claim about dongle discovery, Zigbee mesh reliability,
-Zigbee2MQTT topic variants, retained MQTT messages, or physical sensor battery
-reporting.
+The alternative — zigpy in process, no broker, one less moving part — was
+rejected on the strength of this repository's own history. `server.py` already
+owns a dedicated event loop for the hub socket, and all four rules in "Talking
+to a Real Hub" exist because that one connection was got wrong. A second radio
+stack sharing that process can take the heating down with it, and the heating is
+the part that matters when the building is empty in winter. Out of process, a
+Zigbee failure is contained: sensors report `available: false`, which the UI
+already states honestly, and the Nobø control keeps running.
+
+Zigbee2MQTT also owns the device handling. Aqara contact sensors are notoriously
+non-standard, and its converters are a large body of work that would otherwise
+have to be reimplemented against hardware, blind.
+
+### What the provider translates
+
+| Zigbee2MQTT | Snapshot field |
+| --- | --- |
+| `zigbee2mqtt/<name>` → `contact` | `state` — **`contact: true` means CLOSED.** Inverting this is the single easiest way to make the whole feature backwards while looking plausible, so it is asserted by test |
+| `zigbee2mqtt/<name>/availability` → `state` | `available` |
+| `zigbee2mqtt/<name>` → `battery` | `battery` |
+| `zigbee2mqtt/bridge/devices` | the device list, and `ieee_address` as the identity |
+
+Identity is the **IEEE address**, not a generated UUID and not the friendly
+name. It survives renaming, re-pairing and a Zigbee2MQTT restart, so a sensor
+that is removed and re-paired returns to the room it was already assigned to.
+Name, door/window type and zone assignment stay in this application — the mesh
+has no concept of a room, and no device reports whether it is on a door or a
+window. Those remain a choice made at pairing.
+
+Retained messages mean a restart gets current state immediately rather than
+waiting for something to move.
+
+### One contract change is needed
+
+`pair()` returning a `ContactSnapshot` is achievable for a simulator and not for
+a radio: a real join takes anywhere from seconds to never. Pairing therefore has
+to become two steps — open the permit-join window, and let the device arrive as
+a `CREATED` event through `subscribe()`. The UI already updates over the
+WebSocket, so it can show a "searching" state and then the device. Naming, type
+and room are collected *after* the device joins, which is also the better
+sequence, because until it joins there is nothing to name.
+
+### Not yet verified
+
+No sensor has joined a mesh at the time of writing. Nothing here claims mesh
+reliability, range, Aqara re-parenting behaviour, or battery-reporting accuracy.
+
+### Test rig
+
+A rig lives on the demo Pi at `/opt/zigbee-test`, deliberately **outside** the
+application's `compose.yml` so that nothing about the heating stack changes
+until the radio is proven. It runs Mosquitto bound to loopback only and
+Zigbee2MQTT with its frontend behind a token. Tear it down with
+`cd /opt/zigbee-test && sudo docker compose down`.
+
+The Zigbee channel is **15**, chosen against a measured survey rather than the
+default: the site has 16 access points on Wi-Fi 1/6/11 with seven on channel 11,
+including the Pi's own radio, which sits centimetres from the dongle. Zigbee 15
+(2425 MHz) occupies the designed gap between Wi-Fi 1 and 6 and is furthest from
+that dominant adjacent cluster. The default, channel 11, would have sat inside
+Wi-Fi 1. **This choice is effectively permanent** — changing it later means
+re-pairing every sleepy device.
+
+When Zigbee2MQTT moves into the application stack it must go behind a Compose
+profile, as `tls` already is, so a Nobø-only installation starts nothing extra.
+Its data directory holds the network key and device database; losing it means
+re-pairing everything, so it belongs in `scripts/backup.sh`. Note also that the
+application container runs as uid 1001 and `nobo` is not in `dialout`, so device
+passthrough and group handling need attention at that point.
 
 ## Pairing and management
 
@@ -38,8 +101,9 @@ Settings contains only the feature switch, provider status, paired count, and
 an **Add sensor** entry point. Pairing collects the physical type (door or
 window), a useful name, and the zone assignment. Sensors are then managed in
 their zone, beside the state they report, rather than growing one unbounded
-list in Settings. The simulated provider completes pairing immediately; a
-future Zigbee2MQTT provider will use the same flow while permit-join is active.
+list in Settings. The simulated provider completes pairing immediately. A
+Zigbee2MQTT provider cannot, because a real join is not instantaneous; see the
+contract change noted above.
 
 Existing schema-v1 simulated records predate the type field and migrate to
 `window`, which preserves them without guessing from a user-editable name.
