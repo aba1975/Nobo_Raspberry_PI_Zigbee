@@ -1188,30 +1188,90 @@
       ${String(selected || '') === String(zone.zone_id) ? 'selected' : ''}>${esc(zone.name)}</option>`).join('');
   }
 
-  function pairSensorSheet(defaultZoneId = '', replacing = null) {
-    const demo = state.sensorSettings && state.sensorSettings.demo_mode;
-    openSheet(replacing ? 'Replace sensor' : 'Pair a sensor', `
-      <p class="zd-sub">${demo
-        ? 'Demo mode creates a simulated contact immediately. With Zigbee hardware this screen will open pairing, wait for the device, then save these details.'
-        : 'Put the sensor into pairing mode, then give it a clear name and room.'}</p>
+  /* What a pairing window is doing, said plainly.
+
+     Somebody is standing at a door holding a paperclip against a battery
+     device, so the two things they need are whether the window is still open
+     and whether anything happened. A silent window that has quietly expired is
+     the worst possible answer, which is why "expired" is a state of its own
+     rather than a return to the beginning. */
+  const PAIRING_REPORT = {
+    joined:    { tone: 'ok',    icon: 'check',  title: 'Sensor found' },
+    ignored:   { tone: 'warn',  icon: 'alert',  title: 'That is not a contact sensor' },
+    failed:    { tone: 'error', icon: 'alert',  title: 'Pairing failed' },
+    cancelled: { tone: 'idle',  icon: 'normal', title: 'Pairing stopped' },
+    expired:   { tone: 'warn',  icon: 'alert',  title: 'Nothing joined in time' },
+  };
+
+  function pairingReport(pairing) {
+    if (!pairing) return null;
+    if (pairing.active) {
+      const left = pairing.seconds_remaining;
+      return {
+        tone: 'busy', icon: 'listen', title: 'Listening for a sensor',
+        detail: left == null
+          ? 'Hold the sensor\u2019s button until it blinks.'
+          : `Hold the sensor\u2019s button until it blinks. ${left}s left.`,
+      };
+    }
+    const known = PAIRING_REPORT[pairing.outcome];
+    if (!known) return null;
+    const detail = pairing.detail || (
+      pairing.outcome === 'joined' ? 'Now give it a name and a room.'
+      : pairing.outcome === 'expired' ? 'The window closed before anything joined. Try again, closer to the hub if it keeps failing.'
+      : pairing.outcome === 'cancelled' ? 'No sensor was added.'
+      : '');
+    return { ...known, detail };
+  }
+
+  function pairingStatusHtml(pairing) {
+    const report = pairingReport(pairing);
+    if (!report) return '';
+    return `<div class="pair-status is-${report.tone}" role="status" aria-live="polite">
+        <span class="pair-status-icon" aria-hidden="true">${Nobo.icon(report.icon)}</span>
+        <span class="pair-status-text">
+          <strong>${esc(report.title)}</strong>
+          ${report.detail ? `<span>${esc(report.detail)}</span>` : ''}
+        </span>
+      </div>`;
+  }
+
+  function sensorDetailsFields(sensor, defaultZoneId) {
+    return `
       <label class="field"><span>Sensor type</span>
         <select id="pairSensorKind">
-          <option value="window" ${(replacing && replacing.kind === 'door') ? '' : 'selected'}>Window</option>
-          <option value="door" ${(replacing && replacing.kind === 'door') ? 'selected' : ''}>Door</option>
+          <option value="window" ${(sensor && sensor.kind === 'door') ? '' : 'selected'}>Window</option>
+          <option value="door" ${(sensor && sensor.kind === 'door') ? 'selected' : ''}>Door</option>
         </select>
       </label>
       <label class="field"><span>Name</span>
         <input id="pairSensorName" type="text" maxlength="80" autocomplete="off"
-          value="${esc(replacing ? replacing.name : '')}" placeholder="Kitchen window">
+          value="${esc(sensor ? sensor.name : '')}" placeholder="Kitchen window">
       </label>
       <label class="field"><span>Zone</span>
-        <select id="pairSensorZone">${sensorZoneOptions(replacing ? replacing.zone_id : defaultZoneId)}</select>
-      </label>
-      ${replacing ? '<div class="note">The old sensor is removed only after its replacement has paired successfully.</div>' : ''}
+        <select id="pairSensorZone">${sensorZoneOptions(
+          sensor && sensor.zone_id ? sensor.zone_id : defaultZoneId)}</select>
+      </label>`;
+  }
+
+  function pairSensorSheet(defaultZoneId = '', replacing = null) {
+    const settings = state.sensorSettings || {};
+    const hasWindow = !!(settings.pairing && settings.pairing.supported);
+    if (!hasWindow) { simulatedSensorSheet(defaultZoneId, replacing); return; }
+    zigbeePairSheet(defaultZoneId, replacing);
+  }
+
+  /* The simulator has no radio, so there is no window to wait at: the form is
+     the whole of it. */
+  function simulatedSensorSheet(defaultZoneId, replacing) {
+    openSheet(replacing ? 'Replace sensor' : 'Add a sensor', `
+      <p class="zd-sub">Demo mode creates a simulated contact immediately.</p>
+      ${sensorDetailsFields(replacing, defaultZoneId)}
+      ${replacing ? '<div class="note">The old sensor is removed only after its replacement exists.</div>' : ''}
       <div class="sheet-actions">
         <button class="btn" type="button" data-act="cancel">Cancel</button>
         <button class="btn btn-primary" type="button" data-act="pair">
-          ${demo ? (replacing ? 'Replace simulated sensor' : 'Add simulated sensor') : 'Start pairing'}
+          ${replacing ? 'Replace simulated sensor' : 'Add simulated sensor'}
         </button>
       </div>`, (root) => {
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
@@ -1235,6 +1295,107 @@
         }
       };
     });
+  }
+
+  /* Real pairing is two steps because a radio join takes anywhere from seconds
+     to never. Open the window, wait, and only then ask what the thing is
+     called — until it has joined there is nothing to name. */
+  function zigbeePairSheet(defaultZoneId, replacing) {
+    let pairing = (state.sensorSettings && state.sensorSettings.pairing) || {};
+    let timer = null;
+    let joined = null;
+
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+    function render() {
+      const waiting = pairing.active;
+      const found = !!joined;
+      $('#sheetTitle').textContent = replacing ? 'Replace sensor' : 'Add a sensor';
+      sheetBody.innerHTML = `
+        ${found ? '' : `<p class="zd-sub">Press <strong>Start pairing</strong>, then hold the button on the sensor until its light blinks. Do this where the sensor will live, not next to the hub.</p>`}
+        ${pairingStatusHtml(pairing)}
+        ${found ? sensorDetailsFields(joined, defaultZoneId) : ''}
+        ${found && replacing ? '<div class="note">The old sensor is removed only after its replacement has paired.</div>' : ''}
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="cancel">${waiting ? 'Stop' : 'Close'}</button>
+          ${found
+            ? '<button class="btn btn-primary" type="button" data-act="save">Save sensor</button>'
+            : `<button class="btn btn-primary" type="button" data-act="start" ${waiting ? 'disabled' : ''}>
+                 ${waiting ? 'Listening\u2026' : (pairing.outcome ? 'Try again' : 'Start pairing')}
+               </button>`}
+        </div>`;
+      wire();
+    }
+
+    function wire() {
+      sheetBody.querySelector('[data-act="cancel"]').onclick = async () => {
+        if (pairing.active) {
+          try { await Nobo.api.cancelSensorPairing(); } catch (e) { /* closing anyway */ }
+        }
+        stop();
+        closeSheet();
+      };
+      const startButton = sheetBody.querySelector('[data-act="start"]');
+      if (startButton) startButton.onclick = async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          pairing = await Nobo.api.startSensorPairing(254);
+          joined = null;
+          render();
+          poll();
+        } catch (e) {
+          Nobo.toast(e.message, 'error');
+          event.currentTarget.disabled = false;
+        }
+      };
+      const saveButton = sheetBody.querySelector('[data-act="save"]');
+      if (saveButton) saveButton.onclick = async (event) => {
+        const name = sheetBody.querySelector('#pairSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.updateSensor(joined.sensor_id, {
+            name,
+            kind: sheetBody.querySelector('#pairSensorKind').value,
+            zone_id: sheetBody.querySelector('#pairSensorZone').value,
+          });
+          if (replacing) await Nobo.api.removeSensor(replacing.sensor_id);
+          stop();
+          closeSheet();
+          Nobo.toast(`${name} added`);
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    }
+
+    /* Polled rather than pushed, only while this sheet is open, because a
+       countdown has to tick every second and the WebSocket only speaks when
+       something changes. */
+    function poll() {
+      stop();
+      timer = setInterval(async () => {
+        let next;
+        try { next = await Nobo.api.sensorPairing(); } catch (e) { return; }
+        const settled = !next.active && next.outcome;
+        pairing = next;
+        if (settled) stop();
+        if (settled && next.outcome === 'joined' && next.sensor_id) {
+          await refresh(true);
+          joined = configuredSensor(next.sensor_id) || {
+            sensor_id: next.sensor_id, name: '', kind: 'window', zone_id: defaultZoneId,
+          };
+        }
+        render();
+      }, 1000);
+    }
+
+    openSheet(replacing ? 'Replace sensor' : 'Add a sensor', '', () => {});
+    sheetCleanup = stop;
+    render();
+    if (pairing.active) poll();
   }
 
   function editSensorSheet(sensorId) {

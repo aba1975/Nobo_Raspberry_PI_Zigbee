@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Protocol
 
 from sensor_provider import (
-    ContactSnapshot, ContactState, EventCallback, SensorEvent, SensorEventKind,
-    SensorKind,
+    ContactSnapshot, ContactState, EventCallback, PairingOutcome, PairingStatus,
+    SensorEvent, SensorEventKind, SensorKind,
 )
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
@@ -98,6 +99,10 @@ class Zigbee2MqttContactSensorProvider:
         self._callbacks: list[EventCallback] = []
         self._started = False
         self._bridge_online = False
+        self._pairing_until: Optional[datetime] = None
+        self._pairing_outcome: Optional[PairingOutcome] = None
+        self._pairing_sensor_id: Optional[str] = None
+        self._pairing_detail: Optional[str] = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -169,12 +174,64 @@ class Zigbee2MqttContactSensorProvider:
             )
         self._require_bridge()
         await self._request("permit_join", {"time": seconds})
+        self._pairing_until = self._aware_now() + timedelta(seconds=seconds)
+        self._pairing_outcome = None
+        self._pairing_sensor_id = None
+        self._pairing_detail = None
+        await self._announce_pairing()
         return seconds
 
     async def cancel_pairing(self) -> None:
         self._ensure_started()
         self._require_bridge()
         await self._request("permit_join", {"time": 0})
+        await self._end_pairing(PairingOutcome.CANCELLED)
+
+    def pairing_status(self) -> PairingStatus:
+        remaining = self._pairing_seconds_remaining()
+        if self._pairing_until is not None and remaining == 0:
+            # Nothing came.  Reported as expired rather than as silence, because
+            # a window that closed unannounced is the most confusing outcome for
+            # somebody standing there holding a button.
+            self._pairing_until = None
+            if self._pairing_outcome is None:
+                self._pairing_outcome = PairingOutcome.EXPIRED
+            remaining = None
+        return PairingStatus(
+            supported=True,
+            active=self._pairing_until is not None,
+            seconds_remaining=remaining,
+            outcome=self._pairing_outcome,
+            sensor_id=self._pairing_sensor_id,
+            detail=self._pairing_detail,
+        )
+
+    def _pairing_seconds_remaining(self) -> Optional[int]:
+        if self._pairing_until is None:
+            return None
+        # Rounded up, so a countdown never reads zero while there is still
+        # time to press a button, and asking for 120 does not immediately
+        # display 119.
+        left = (self._pairing_until - self._aware_now()).total_seconds()
+        return max(0, math.ceil(left))
+
+    async def _end_pairing(
+        self,
+        outcome: PairingOutcome,
+        *,
+        sensor_id: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        self._pairing_until = None
+        self._pairing_outcome = outcome
+        self._pairing_sensor_id = sensor_id
+        self._pairing_detail = detail
+        await self._announce_pairing()
+
+    async def _announce_pairing(self) -> None:
+        await self._dispatch(
+            SensorEvent(SensorEventKind.PAIRING, self._pairing_sensor_id or "", None)
+        )
 
     async def update(
         self,
@@ -282,11 +339,37 @@ class Zigbee2MqttContactSensorProvider:
         data = document.get("data")
         if not isinstance(data, dict):
             return
+        kind = document.get("type")
         address = data.get("ieee_address")
         if not _is_address(address):
             return
-        if document.get("type") == "device_leave":
+
+        if kind == "device_leave":
             await self._forget(address)
+            return
+
+        if kind != "device_interview" or self._pairing_until is None:
+            return
+
+        status = data.get("status")
+        if status == "failed":
+            await self._end_pairing(
+                PairingOutcome.FAILED,
+                sensor_id=address,
+                detail="The device started joining but the interview did not finish",
+            )
+        elif status == "successful":
+            if _is_contact_sensor(data):
+                await self._end_pairing(PairingOutcome.JOINED, sensor_id=address)
+            else:
+                # A repeater or plug is a perfectly good thing to have joined;
+                # it is simply not a contact sensor, and saying so beats
+                # leaving the window apparently unanswered.
+                await self._end_pairing(
+                    PairingOutcome.IGNORED,
+                    sensor_id=address,
+                    detail=_describe(data) or "That device is not a contact sensor",
+                )
 
     async def _on_availability(self, friendly: str, document) -> None:
         address = self._topic_names.get(friendly, friendly)
@@ -450,6 +533,16 @@ def _exposes(definition: dict) -> list:
             item for item in (expose.get("features") or []) if isinstance(item, dict)
         )
     return found
+
+
+def _describe(entry: dict) -> Optional[str]:
+    definition = entry.get("definition")
+    if not isinstance(definition, dict):
+        return None
+    vendor = definition.get("vendor")
+    description = definition.get("description") or definition.get("model")
+    parts = [item for item in (vendor, description) if isinstance(item, str) and item]
+    return " ".join(parts)[:120] or None
 
 
 def _default_name(entry: dict, address: str) -> str:

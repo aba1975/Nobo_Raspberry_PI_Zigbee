@@ -10,7 +10,9 @@ from tests.fake_zigbee2mqtt import (
     FakeBroker, FakeTransport, FakeZigbee2Mqtt, contact_device, other_device,
     topic_matches,
 )
-from sensor_provider import ContactState, SensorEventKind, SensorKind
+from sensor_provider import (
+    ContactState, PairingOutcome, SensorEventKind, SensorKind,
+)
 from sensor_zigbee2mqtt import (
     MAX_PERMIT_JOIN_SECONDS, ProviderUnavailable, SensorNotFound,
     Zigbee2MqttContactSensorProvider,
@@ -594,3 +596,156 @@ async def test_a_rejoining_sensor_leaves_then_joins(rig, events):
     assert [event.kind for event in events] == [
         SensorEventKind.REMOVED, SensorEventKind.CREATED,
     ]
+
+
+# -- pairing status --------------------------------------------------------
+#
+# Somebody is standing there holding a button on a battery device.  Every one
+# of these outcomes has to be distinguishable from "nothing is happening".
+
+
+async def _interview(z2m, address, status, device=None):
+    import json
+    data = dict(device or {"ieee_address": address})
+    data["ieee_address"] = address
+    data["status"] = status
+    await z2m._broker.publish(
+        "zigbee2mqtt/bridge/event",
+        json.dumps({"type": "device_interview", "data": data}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_happening_by_default(rig, events):
+    provider, _z2m = await started(rig, events)
+
+    status = provider.pairing_status()
+    assert status.supported is True
+    assert status.active is False
+    assert status.outcome is None
+
+
+@pytest.mark.asyncio
+async def test_a_window_reports_itself_open_and_counting_down(rig, events):
+    provider, _z2m, _transport, clock, _store = rig
+    await started(rig, events)
+
+    await provider.begin_pairing(120)
+    assert provider.pairing_status().active is True
+    assert provider.pairing_status().seconds_remaining == 120
+
+    clock.advance(45)
+    assert provider.pairing_status().seconds_remaining == 75
+
+
+@pytest.mark.asyncio
+async def test_a_successful_join_is_reported(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+
+    await _interview(z2m, ADDRESS, "successful", contact_device(ADDRESS))
+
+    status = provider.pairing_status()
+    assert status.active is False
+    assert status.outcome is PairingOutcome.JOINED
+    assert status.sensor_id == ADDRESS
+
+
+@pytest.mark.asyncio
+async def test_a_failed_interview_is_reported(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+
+    await _interview(z2m, ADDRESS, "failed")
+
+    status = provider.pairing_status()
+    assert status.active is False
+    assert status.outcome is PairingOutcome.FAILED
+    assert "interview" in (status.detail or "")
+
+
+@pytest.mark.asyncio
+async def test_something_that_is_not_a_contact_sensor_says_so(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+
+    # A repeater is a fine thing to have joined; it is just not a sensor.
+    await _interview(z2m, "0x0017880100abcdef", "successful",
+                     other_device("0x0017880100abcdef"))
+
+    status = provider.pairing_status()
+    assert status.outcome is PairingOutcome.IGNORED
+    assert "IKEA" in (status.detail or "")
+    assert await provider.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_window_that_closes_with_nothing_says_expired(rig, events):
+    provider, _z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await provider.begin_pairing(60)
+
+    clock.advance(61)
+
+    status = provider.pairing_status()
+    assert status.active is False
+    assert status.outcome is PairingOutcome.EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_cancelling_says_cancelled(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+
+    await provider.cancel_pairing()
+
+    assert provider.pairing_status().outcome is PairingOutcome.CANCELLED
+    assert z2m.permit_join_requests == [254, 0]
+
+
+@pytest.mark.asyncio
+async def test_an_interview_outside_a_window_is_not_an_outcome(rig, events):
+    provider, z2m = await started(rig, events)
+
+    # A device re-announcing itself must not look like a pairing result to
+    # somebody who never opened the window.
+    await _interview(z2m, ADDRESS, "successful", contact_device(ADDRESS))
+
+    assert provider.pairing_status().outcome is None
+
+
+@pytest.mark.asyncio
+async def test_starting_a_new_window_clears_the_last_outcome(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+    await _interview(z2m, ADDRESS, "failed")
+    assert provider.pairing_status().outcome is PairingOutcome.FAILED
+
+    await provider.begin_pairing(254)
+
+    status = provider.pairing_status()
+    assert status.active is True
+    assert status.outcome is None
+
+
+@pytest.mark.asyncio
+async def test_pairing_changes_are_announced(rig, events):
+    provider, z2m = await started(rig, events)
+    events.clear()
+
+    await provider.begin_pairing(254)
+    await _interview(z2m, ADDRESS, "successful", contact_device(ADDRESS))
+
+    # The interface must not have to poll to find out.
+    assert SensorEventKind.PAIRING in [event.kind for event in events]
+
+
+def test_the_simulator_has_no_pairing_window():
+    from sensor_simulated import SimulatedContactSensorProvider
+
+    status = SimulatedContactSensorProvider().pairing_status()
+
+    # Unsupported, not "idle": the interface should offer the simulator's
+    # straight create form, not a progress display that would never move.
+    assert status.supported is False
+    assert status.active is False

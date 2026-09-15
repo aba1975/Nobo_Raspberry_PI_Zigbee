@@ -94,6 +94,10 @@ const Nobo = (() => {
                                   method: 'DELETE' }),
     simulateSensor: (id, body) => req(`/api/sensors/${encodeURIComponent(id)}/simulate`, {
                                    method: 'POST', body: JSON.stringify(body) }),
+    sensorPairing:  ()        => req('/api/sensors/pairing'),
+    startSensorPairing: (seconds) => req('/api/sensors/pairing', {
+                                  method: 'POST', body: JSON.stringify({ seconds }) }),
+    cancelSensorPairing: ()   => req('/api/sensors/pairing', { method: 'DELETE' }),
 
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
@@ -158,6 +162,12 @@ const Nobo = (() => {
     alert:   '<path d="M12 4.2 2.9 19.8h18.2z"/><path d="M12 9.6v4.4"/>' +
              '<circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/>',
     home:    '<path d="M3.2 10.6 12 3.4l8.8 7.2"/><path d="M5.6 9.6V20h12.8V9.6"/>',
+    /* Something finished, as opposed to something being wrong. */
+    check:   '<path d="M4.6 12.4 9.6 17.4 19.4 6.8"/>',
+    /* A radio listening for a device that has not arrived yet. */
+    listen:  '<circle cx="12" cy="12" r="2.4"/><path d="M7.8 7.8a5.9 5.9 0 0 0 0 8.4"/>' +
+             '<path d="M16.2 16.2a5.9 5.9 0 0 0 0-8.4"/><path d="M5 5a9.9 9.9 0 0 0 0 14"/>' +
+             '<path d="M19 19a9.9 9.9 0 0 0 0-14"/>',
     comfort: '<circle cx="12" cy="12" r="3.9"/><path d="M12 2.4v2.2M12 19.4v2.2M4.9 4.9l1.6 1.6' +
              'M17.5 17.5l1.6 1.6M2.4 12h2.2M19.4 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/>',
     eco:     '<path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a7.7 7.7 0 1 0 11.1 11.1z"/>',

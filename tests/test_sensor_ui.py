@@ -509,3 +509,142 @@ def test_the_top_card_has_somewhere_to_put_the_alert():
     assert ".trip-alert" in CSS
     # It outranks whatever else the card was saying.
     assert ".trip:has(.trip-alert:not([hidden]))" in CSS
+
+
+# -- the pairing window ----------------------------------------------------
+#
+# Somebody is at a door holding a paperclip against a battery device, so every
+# outcome has to be distinguishable — and "nothing came" has to be
+# distinguishable from "still waiting".
+
+
+def _render_pairing(pairing):
+    """Run the real pairing-status renderer in node and return the markup."""
+    wanted = ["function pairingReport", "function pairingStatusHtml"]
+    lifted = []
+    for marker in wanted:
+        start = CABIN.index(marker)
+        end = CABIN.index("\n  }\n", start) + len("\n  }\n")
+        lifted.append(CABIN[start:end])
+    table_start = CABIN.index("  const PAIRING_REPORT = {")
+    table_end = CABIN.index("\n  };\n", table_start) + len("\n  };\n")
+    script = """
+      const esc = (v) => String(v == null ? '' : v);
+      const Nobo = { icon: (n) => `<svg data-icon="${n}"/>` };
+      %s
+      %s
+      console.log(pairingStatusHtml(%s));
+    """ % (CABIN[table_start:table_end], "\n".join(lifted), json.dumps(pairing))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_an_open_window_says_it_is_listening_and_counts_down():
+    markup = _render_pairing(
+        {"supported": True, "active": True, "seconds_remaining": 97, "outcome": None}
+    )
+
+    assert "is-busy" in markup
+    assert "Listening for a sensor" in markup
+    assert "97s left" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_found_sensor_says_so_and_asks_for_a_name():
+    markup = _render_pairing(
+        {"supported": True, "active": False, "outcome": "joined",
+         "sensor_id": "0x00158d008c8bc4f2"}
+    )
+
+    assert "is-ok" in markup
+    assert "Sensor found" in markup
+    assert "name" in markup.lower()
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_failure_is_not_shown_as_a_success():
+    markup = _render_pairing(
+        {"supported": True, "active": False, "outcome": "failed",
+         "detail": "The device started joining but the interview did not finish"}
+    )
+
+    assert "is-error" in markup
+    assert "Pairing failed" in markup
+    assert "is-ok" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_window_that_found_nothing_says_so_rather_than_going_quiet():
+    markup = _render_pairing(
+        {"supported": True, "active": False, "outcome": "expired"}
+    )
+
+    # The failure this guards against is a window that closes unannounced,
+    # leaving somebody pressing a button at a sensor that stopped listening.
+    assert "is-warn" in markup
+    assert "Nothing joined in time" in markup
+    assert "is-busy" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_repeater_is_not_reported_as_a_broken_sensor():
+    markup = _render_pairing(
+        {"supported": True, "active": False, "outcome": "ignored",
+         "detail": "IKEA TRETAKT smart plug"}
+    )
+
+    assert "is-warn" in markup
+    assert "not a contact sensor" in markup
+    assert "TRETAKT" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_nothing_is_claimed_before_anything_has_happened():
+    assert _render_pairing(
+        {"supported": True, "active": False, "outcome": None}
+    ).strip() == ""
+
+
+def test_every_outcome_the_server_can_send_is_rendered():
+    """A new outcome must not land in the interface as silence."""
+    from sensor_provider import PairingOutcome
+
+    for outcome in PairingOutcome:
+        assert f"{outcome.value}:" in CABIN, outcome.value
+
+
+def test_the_pairing_status_has_a_tone_for_each_state():
+    for tone in ("is-busy", "is-ok", "is-warn", "is-error", "is-idle"):
+        assert f".pair-status.{tone}" in CSS
+    # Colour alone is not an answer, so the wording repeats it.
+    assert "not an answer" in CSS
+    # Only the unfinished state moves.
+    assert "prefers-reduced-motion" in CSS
+
+
+def test_pairing_goes_through_the_shared_api_client():
+    for call in ("sensorPairing", "startSensorPairing", "cancelSensorPairing"):
+        assert call in CORE
+        assert call in CABIN
+    assert "/api/sensors/pairing" in CORE
+    assert "/api/sensors/pairing" not in CABIN
+
+
+def test_the_poll_stops_when_the_sheet_closes():
+    # An interval left running behind a closed sheet would keep asking the hub
+    # about a window nobody is watching.
+    assert "sheetCleanup = stop;" in CABIN
+    assert "clearInterval(timer)" in CABIN
+
+
+def test_classic_gains_no_sensor_pairing_surface():
+    # Classic deliberately has no sensor controls at all. It does talk about
+    # pairing Nobø receivers, which is a different thing entirely, so this
+    # checks for the sensor pairing surface rather than the word.
+    for hook in ("/api/sensors/pairing", "pair-status", "startSensorPairing",
+                 "Listening for a sensor"):
+        assert hook not in CLASSIC

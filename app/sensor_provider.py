@@ -43,6 +43,35 @@ class SensorEventKind(str, Enum):
     CREATED = "created"
     UPDATED = "updated"
     REMOVED = "removed"
+    PAIRING = "pairing"
+
+
+class PairingOutcome(str, Enum):
+    """How a pairing attempt ended."""
+
+    JOINED = "joined"
+    IGNORED = "ignored"      # something joined, but it is not a contact sensor
+    FAILED = "failed"        # it tried to join and the interview did not finish
+    CANCELLED = "cancelled"  # a person closed the window
+    EXPIRED = "expired"      # the window closed with nothing having joined
+
+
+@dataclass(frozen=True)
+class PairingStatus:
+    """What the pairing window is doing, for the benefit of the interface.
+
+    Deliberately explicit about the difference between *nothing has happened
+    yet* and *nothing is going to*: a person holding a button on a battery
+    device needs to know whether to keep waiting, and a silent window that has
+    quietly expired is the most confusing possible answer.
+    """
+
+    supported: bool = False
+    active: bool = False
+    seconds_remaining: Optional[int] = None
+    outcome: Optional[PairingOutcome] = None
+    sensor_id: Optional[str] = None
+    detail: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +117,8 @@ class ContactSensorProvider(Protocol):
     ) -> ContactSnapshot: ...
 
     async def remove(self, sensor_id: str) -> None: ...
+
+    def pairing_status(self) -> PairingStatus: ...
 
     def subscribe(self, callback: EventCallback) -> Unsubscribe: ...
 

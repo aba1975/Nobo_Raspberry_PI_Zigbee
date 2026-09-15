@@ -10,8 +10,8 @@ from typing import Callable, Optional
 
 from sensor_persistence import load_simulated_sensors, save_simulated_sensors
 from sensor_provider import (
-    ContactSnapshot, ContactState, EventCallback, SensorEvent, SensorEventKind,
-    SensorKind,
+    ContactSnapshot, ContactState, EventCallback, PairingStatus, SensorEvent,
+    SensorEventKind, SensorKind,
 )
 
 
@@ -162,6 +162,15 @@ class SimulatedContactSensorProvider:
             last_seen_at=now,
         )
         return await self._store(updated)
+
+    def pairing_status(self) -> PairingStatus:
+        """There is no radio, so there is no window to wait at.
+
+        Reported as unsupported rather than as permanently idle, so the
+        interface offers the simulator's straight "create it" form instead of
+        a progress display that would never move.
+        """
+        return PairingStatus(supported=False)
 
     def subscribe(self, callback: EventCallback):
         self._callbacks.append(callback)

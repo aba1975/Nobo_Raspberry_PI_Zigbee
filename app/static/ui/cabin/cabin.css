@@ -1097,3 +1097,51 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   margin-left: .4rem; font-size: .66rem;
 }
 .notify-head .badge-need { text-transform: none; letter-spacing: 0; }
+
+/* ---------------------------------------------------------------------------
+   Pairing status
+
+   Somebody is at a door with a battery device in one hand and a phone in the
+   other, so this has to be readable at arm's length and has to say which of
+   four things is true: listening, found, went wrong, or nothing came. Tone
+   carries the meaning and the wording repeats it, because a colour alone is
+   not an answer and roughly one man in twelve cannot use it.
+   --------------------------------------------------------------------------- */
+.d .pair-status {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  margin: 4px 0 18px;
+  border-radius: 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  /* A 3px rule down the leading edge, the same device the zone cards use, so
+     the state reads before any of the words do. */
+  border-left: 3px solid var(--ink-faint);
+}
+.d .pair-status-icon { display: flex; flex: 0 0 auto; padding-top: 1px; color: var(--ink-faint); }
+.d .pair-status-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.d .pair-status-text strong { font-size: 1rem; line-height: 1.25; color: var(--ink); }
+.d .pair-status-text span { font-size: .875rem; line-height: 1.4; color: var(--ink-soft); }
+
+.d .pair-status.is-busy  { border-left-color: var(--frost);  background: var(--frost-wash); }
+.d .pair-status.is-busy  .pair-status-icon { color: var(--frost); }
+.d .pair-status.is-ok    { border-left-color: var(--pine);   background: var(--pine-wash); }
+.d .pair-status.is-ok    .pair-status-icon { color: var(--pine); }
+.d .pair-status.is-warn  { border-left-color: var(--amber);  background: var(--amber-wash); }
+.d .pair-status.is-warn  .pair-status-icon { color: var(--amber); }
+.d .pair-status.is-error { border-left-color: var(--danger); background: var(--danger-wash); }
+.d .pair-status.is-error .pair-status-icon { color: var(--danger); }
+.d .pair-status.is-idle  { border-left-color: var(--ink-faint); }
+
+/* Listening is the only state that is still going, so it is the only one that
+   moves. Everything else is a settled answer and should sit still. */
+.d .pair-status.is-busy .pair-status-icon { animation: pair-listen 1.6s ease-in-out infinite; }
+@keyframes pair-listen {
+  0%, 100% { opacity: .45; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .d .pair-status.is-busy .pair-status-icon { animation: none; opacity: 1; }
+}
