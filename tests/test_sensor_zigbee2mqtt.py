@@ -1014,3 +1014,24 @@ def test_a_missing_client_library_is_reported_before_the_task_starts():
     # importing from inside the client task can deadlock against an import in
     # progress elsewhere, turning a missing broker into a hang.
     assert "_import_aiomqtt" not in inspect.getsource(sensor_mqtt.AiomqttTransport._run)
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_sensor_does_not_keep_its_name_and_room(rig, events):
+    """Zigbee2MQTT republishes bridge/devices *before* it answers the removal.
+
+    So by the time the reply arrives the sensor is already out of the
+    registry, and a cleanup conditional on finding it there never ran — the
+    deleted sensor's name and room stayed on disk and would have come back
+    with it.
+    """
+    provider, z2m, _transport, _clock, store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await provider.update(ADDRESS, name="Master Bedroom Left Window", zone_id="7")
+    assert ADDRESS in store
+
+    await provider.remove(ADDRESS)
+
+    assert await provider.list() == []
+    assert ADDRESS not in store
