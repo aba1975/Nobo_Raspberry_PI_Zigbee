@@ -420,10 +420,14 @@ class Zigbee2MqttContactSensorProvider:
         if waiter is None or waiter.done():
             return
         if document.get("status") == "ok":
-            # A removal the user asked for really is a removal: the metadata
-            # goes too. It is only kept when a device *leaves*, where it may
-            # well be coming back.
-            await self._forget(identifier, keep_metadata=False)
+            # A removal the user asked for really is a removal: the name and
+            # room go too. Dropped here rather than inside _forget, because
+            # Zigbee2MQTT republishes bridge/devices *before* it answers, so
+            # the sensor is usually already gone from the registry by now and
+            # a cleanup conditional on finding it there never ran.
+            if self._metadata.pop(identifier, None) is not None:
+                self._save_metadata(self._metadata)
+            await self._forget(identifier)
             waiter.set_result(None)
         else:
             waiter.set_exception(
@@ -557,16 +561,13 @@ class Zigbee2MqttContactSensorProvider:
         )
         return snapshot
 
-    async def _forget(self, address: str, *, keep_metadata: bool = True) -> None:
+    async def _forget(self, address: str) -> None:
         if self._sensors.pop(address, None) is None:
             return
-        if keep_metadata:
-            # A sensor that leaves may well be coming back — a flat battery, a
-            # re-pair — so it returns to the room and name it already had
-            # rather than arriving anonymous.
-            pass
-        elif self._metadata.pop(address, None) is not None:
-            self._save_metadata(self._metadata)
+        # The metadata is deliberately left alone. A sensor that drops off may
+        # well be coming back — a flat battery, a re-pair — and should return
+        # to the room and name it already had rather than arriving anonymous.
+        # A removal the user *asked* for clears it separately.
         await self._emit_removed(address)
 
     def _remember(self, snapshot: ContactSnapshot) -> None:

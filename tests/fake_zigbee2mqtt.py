@@ -288,7 +288,14 @@ class FakeZigbee2Mqtt:
                 item for item in self.devices
                 if item["ieee_address"] != body["id"]
             ]
+            # Order matters and is copied from the real thing: the device list
+            # is republished BEFORE the reply, so anything that cleans up on
+            # the reply must not depend on the device still being registered.
+            await self.publish_devices()
             await self._broker.publish(
                 f"{self._base}/bridge/response/device/remove",
-                json.dumps({"data": {"id": body["id"]}, "status": "ok"}),
+                json.dumps({
+                    "data": {"id": body["id"], "force": bool(body.get("force"))},
+                    "status": "ok",
+                }),
             )
