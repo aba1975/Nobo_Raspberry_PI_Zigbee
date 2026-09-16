@@ -134,4 +134,11 @@ def redirect_persistence(tmp_path, monkeypatch):
         "SENSOR_AUTOMATION_STATE_FILE",
         tmp_path / "sensor_automation_state.json",
     )
+    # The account store too. It was left out, and a test that changed a
+    # password or a role therefore rewrote the real users.json and broke every
+    # test after it — the whole suite failing on an admin check because one
+    # test earlier had demoted the account the shared session belongs to.
+    monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    auth.init_user_store()
     yield

@@ -1177,3 +1177,16 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px dashed var(--rule);
   font-style: normal;
 }
+
+/* The security banner.
+
+   Deliberately not the amber of a left-open window, nor the red of a heating
+   fault. This is neither: the house is fine, the software is not being used
+   safely. Distinct enough that it cannot be read as a heating problem, loud
+   enough that it cannot be read as advice. */
+.d .trip-alert.is-security {
+  border-color: var(--m-sched);
+  background: var(--m-sched-wash);
+}
+.d .trip-alert.is-security .trip-alert-icon { color: var(--m-sched); }
+.d .trip-alert.is-security .btn { margin-top: 12px; }

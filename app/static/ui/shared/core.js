@@ -49,6 +49,13 @@ const Nobo = (() => {
                                        method: 'POST', body: JSON.stringify(temps) }),
     logout:        ()              => req('/auth/logout', { method: 'POST' }),
     me:            ()              => req('/auth/me'),
+    changePassword: (current, next) => req('/auth/change-password', {
+                                       method: 'POST',
+                                       body: JSON.stringify({
+                                         current_password: current,
+                                         new_password: next,
+                                         confirm_password: next,
+                                       }) }),
 
     /* Added for concept D. All pre-existing endpoints - see docs/UI_REDESIGN.md. */
 

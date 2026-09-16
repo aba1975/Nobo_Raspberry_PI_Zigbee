@@ -342,6 +342,74 @@
       </div>`;
   }
 
+  /* Changing your own password. The endpoint has existed since the beginning
+     and nothing ever called it, so the only way to stop using the password
+     this software ships with was to edit a file on the Pi. */
+  function changePasswordSheet() {
+    openSheet('Change password', `
+      <p class="zd-sub">This is the password for signing in to this page. It is
+        not the Raspberry Pi's own password.</p>
+      <label class="field"><span>Current password</span>
+        <input id="pwCurrent" type="password" autocomplete="current-password">
+      </label>
+      <label class="field"><span>New password</span>
+        <input id="pwNew" type="password" autocomplete="new-password"
+          placeholder="At least 8 characters">
+      </label>
+      <label class="field"><span>New password again</span>
+        <input id="pwConfirm" type="password" autocomplete="new-password">
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Change it</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const current = root.querySelector('#pwCurrent').value;
+        const next    = root.querySelector('#pwNew').value;
+        const confirm = root.querySelector('#pwConfirm').value;
+        if (next.length < 8) { Nobo.toast('Use at least 8 characters', 'error'); return; }
+        if (next !== confirm) { Nobo.toast('The new passwords do not match', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.changePassword(current, next);
+          closeSheet();
+          Nobo.toast('Password changed');
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* The password every installation ships with is written in the README, so it
+     is public knowledge and protects nothing. Anyone who reaches this page can
+     already be assumed to know it. Saying so where it cannot be missed is the
+     only honest thing to do, and it stops the moment it is changed. */
+  function renderPasswordAlert() {
+    const el = $('#passwordAlert');
+    if (!el) return;
+    const show = !!(state.me && state.me.using_default_password);
+    el.hidden = !show;
+    el.innerHTML = show ? `
+      <span class="trip-alert-icon" aria-hidden="true">${Nobo.icon('alert')}</span>
+      <div class="trip-alert-body">
+        <strong>Anyone can sign in to this</strong>
+        <p>This account still uses the password every copy of this software is
+          installed with, and that password is published in its documentation.
+          Until it is changed, anybody who can reach this page can control the
+          heating.</p>
+        <button class="btn btn-primary" type="button" data-act="fix-password">
+          Choose a password
+        </button>
+      </div>` : '';
+    if (show) {
+      el.querySelector('[data-act="fix-password"]').onclick = () => changePasswordSheet();
+    }
+  }
+
   function renderTripAlert() {
     const el = $('#tripAlert');
     const html = tripAlertHtml();
@@ -361,6 +429,7 @@
     tl.hidden = true;
     // Before the branching below, since several of those return early.
     renderTripAlert();
+    renderPasswordAlert();
 
     const mode = Nobo.houseMode(state.zones);
 
@@ -3732,6 +3801,7 @@
         <h2>Your account</h2>
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
+          <button class="btn" type="button" data-act="change-password">Change password</button>
           <button class="btn" type="button" data-act="signout">Sign out</button>
         </div>
         <div class="sheet-actions">
@@ -3765,6 +3835,7 @@
     root.querySelector('[data-act="save-site"]').onclick = saveSite;
     root.querySelector('[data-act="open-log"]').onclick = showLog;
     root.querySelector('[data-act="add-schedule"]').onclick = addWeekProfile;
+    root.querySelector('[data-act="change-password"]').onclick = changePasswordSheet;
     root.querySelector('[data-act="signout"]').onclick = async () => {
       try { await Nobo.api.logout(); } catch (_) {}
       window.location.href = '/login';

@@ -6998,7 +6998,16 @@ async def auth_me(request: Request):
     session = _get_session_or_401(request)
     users = auth.load_users()
     user = users.get(session["username"], {})
-    return {"username": session["username"], "role": user.get("role", "user")}
+    role = user.get("role", "user")
+    return {
+        "username": session["username"],
+        "role": role,
+        # Only ever told to an administrator, and only about their own login:
+        # it is a prompt to act, not a fact worth publishing to anyone else.
+        "using_default_password": (
+            role == "admin" and auth.is_using_default_password(session["username"])
+        ),
+    }
 
 
 @app.post("/auth/change-password")
