@@ -79,6 +79,16 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 
 Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 
+### Door and window sensors (optional)
+
+| Feature | What it does |
+| --- | --- |
+| **Zigbee contact sensors** | Pair door and window sensors to the Pi with a Zigbee USB stick. Off unless you ask for it: no dongle, no broker and no extra containers for a heating-only installation. |
+| **Left-open warnings** | A room says which of its openings is open, and how many. After a delay you choose — immediately, or up to an hour — it becomes a warning you cannot miss. Offline is shown as its own state, because "I cannot tell you" is not the same as "it is shut". |
+| **Heating when something is open** | Optionally put the room into Away, Eco or Comfort, or hand it back to its schedule, while a contact stays open. Only an override this feature applied is ever released, and Comfort is never sent to "put things back". |
+| **Leaving with something open** | If the house is on Away and anything is open, the front page says so and names the rooms, with no delay — being away is what changes the stakes. |
+| **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. |
+
 ### Heating control
 
 | Feature | What it does |
@@ -207,9 +217,38 @@ driven off.
 A zone does not need a heater to be monitored. Add an empty zone and assign a
 sensor to it; warnings work normally and heating actions stay unavailable.
 
-The real-provider contract and its limits are documented in
-[`docs/SENSORS.md`](docs/SENSORS.md). Zigbee2MQTT/MQTT integration is a future
-provider and has not been tested against hardware.
+### The hardware side
+
+Real sensors work. An Aqara MCCGQ11LM contact sensor is paired to a SONOFF
+ZBDongle-P and reporting through the whole chain — radio, Zigbee2MQTT, MQTT,
+the application, the interface — and the payloads it sent are recorded in
+[`docs/SENSORS.md`](docs/SENSORS.md) rather than paraphrased.
+
+Zigbee2MQTT and a broker run as **their own containers**, behind a Compose
+profile in the same way HTTPS is. A Nobø-only installation starts neither and
+needs no dongle:
+
+```bash
+# .env
+COMPOSE_PROFILES=zigbee
+NOBO_ZIGBEE_ADAPTER=/dev/serial/by-id/usb-...-if00-port0
+```
+
+The radio stack stays out of the process that owns the hub socket, deliberately.
+If Zigbee falls over, sensors report themselves unavailable — which the
+interface says plainly — and the heating carries on. That separation is the
+whole reason for the extra container, and it is argued out in `docs/SENSORS.md`.
+
+Two things that would otherwise waste an afternoon, both established on
+hardware. **Zigbee2MQTT's `contact: true` means closed**, because the device
+reports whether the *magnet* is in contact, not whether the opening is. And a
+sensor's **battery level cannot be asked for** — it is report-only on this
+model, arrives about an hour after pairing, and a blank reading in the meantime
+is normal rather than a fault.
+
+Still unproved: mesh range at distance, Aqara re-parenting onto a repeater, and
+behaviour over weeks rather than hours. `docs/SENSORS.md` marks those as
+untested rather than quietly implying otherwise.
 
 #### These used to be marked "does not work with a real hub"
 

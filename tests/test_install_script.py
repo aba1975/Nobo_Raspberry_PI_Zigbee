@@ -242,3 +242,22 @@ def test_the_guide_leads_with_a_plain_clone():
     assert "<details>" in step
     assert "personal-access-tokens" in step
     assert "Contents: Read-only" in step
+
+
+def test_the_readme_does_not_still_call_the_sensors_unbuilt():
+    """It described Zigbee2MQTT as "a future provider ... not been tested
+    against hardware" long after one was paired and reporting."""
+    assert "is a future" not in README
+    assert "has not been tested against hardware" not in README
+
+
+def test_the_readme_describes_the_sensors_it_ships_with():
+    """This is the public front page. A headline feature that appears only in
+    the .env reference is a feature nobody finds."""
+    assert "Door and window sensors (optional)" in README
+    assert "COMPOSE_PROFILES=zigbee" in README
+    # The two facts that otherwise cost an afternoon each.
+    assert "`contact: true` means closed" in README
+    assert "cannot be asked for" in README
+    # And it stays honest about what is still unproved.
+    assert "Still unproved" in README
