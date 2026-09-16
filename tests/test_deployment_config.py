@@ -399,3 +399,16 @@ class TestTheClockFollowsTheSeason:
         # an instant changes, never the instant itself.
         assert "clock: Callable[[], float] = time.time" in source
         assert "strftime" not in source
+
+
+def test_zigbee2mqtt_is_told_to_timestamp_reports(compose):
+    """Without it the only timestamp is when *we* received the message.
+
+    A broker replays retained messages on every reconnect, so each restart
+    would reset "last heard" for every sensor — including the flat ones, which
+    is the case that age exists to expose. Set in the environment rather than
+    the configuration file because that file is generated inside the volume on
+    first run, so a fresh installation would otherwise not have it.
+    """
+    env = compose["services"]["zigbee2mqtt"].get("environment") or []
+    assert "ZIGBEE2MQTT_CONFIG_ADVANCED_LAST_SEEN=ISO_8601" in [str(e) for e in env]

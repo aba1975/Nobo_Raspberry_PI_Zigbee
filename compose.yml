@@ -143,6 +143,17 @@ services:
       # read as UTC by the C library anyway, and would look like it had been
       # configured when it had not. Set NOBO_TZ to your own zone.
       - TZ=${NOBO_TZ:-UTC}
+      # Stamp each report with when the device actually spoke.
+      #
+      # Without this the only timestamp available is when *we* received the
+      # message, and a broker replays retained messages on every reconnect —
+      # so each restart would reset "last heard" for every sensor, including
+      # the ones whose batteries are flat, which is the case it exists for.
+      #
+      # Set here rather than in the configuration file because that file is
+      # generated inside the volume on first run, so a fresh installation
+      # would otherwise not have it.
+      - ZIGBEE2MQTT_CONFIG_ADVANCED_LAST_SEEN=ISO_8601
 
 volumes:
   nobo-data:
