@@ -732,6 +732,9 @@ def test_a_battery_nobody_has_reported_is_named_not_left_blank():
     and another showing an empty space looks like a fault when it is not.
     """
     assert "Battery not reported yet" in CABIN
+    # And says it cannot be hurried: on the MCCGQ11LM battery is report-only,
+    # and asking for it is refused with "No converter available".
+    assert "cannot be asked for it" in CABIN
     assert "sensor-batt.is-unknown" in CSS
     # Quieter than a real reading, and quieter than the low warning: this is
     # the absence of news, not bad news.
