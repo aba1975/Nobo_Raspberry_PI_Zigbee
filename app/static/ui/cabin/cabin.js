@@ -1057,7 +1057,7 @@
        been told reads as a broken sensor, so the gap is named instead. */
     const battery = sensor.battery == null
       ? `<span class="sensor-batt is-unknown"
-           title="This sensor has not reported its battery level yet. Battery devices send it on their own schedule, which can take a day.">Battery not reported yet</span>`
+           title="This sensor has not reported its battery level yet. It cannot be asked for it — battery devices send it on their own schedule, usually within an hour of pairing.">Battery not reported yet</span>`
       : `<span class="sensor-batt ${low ? 'is-low' : ''}"
            title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%${
              low ? ' low' : ''}</span>`;

@@ -108,11 +108,23 @@ payloads.
 
 Two things worth knowing from it:
 
-**A report carries no battery.** Zigbee2MQTT's definition says battery "can take
-up to 24 hours before reported", so every newly paired sensor legitimately has
-none. The provider leaves it `null` and the UI renders nothing rather than a
-fault; substituting the last value or showing a warning would cry wolf on every
-new sensor.
+**A report carries no battery, and it cannot be asked for.** Zigbee2MQTT's
+definition says battery "can take up to 24 hours before reported", and
+requesting it explicitly is refused outright:
+
+```
+zigbee2mqtt/<device>/get {"battery":""}
+  -> error: No converter available for 'battery' on '0x00158d008c8bc4f2'
+```
+
+On the MCCGQ11LM it is report-only, so a newly paired sensor simply has no
+level until the device volunteers one. Measured on this hardware: both sensors
+were interviewed at 09:11 and first reported battery at 10:02 — **51 minutes**.
+
+The provider therefore leaves it `null`, and the interface names the gap rather
+than rendering an empty space, which reads as a broken sensor next to one
+showing a percentage. Substituting the last value, or showing a warning, would
+invent a reading or cry wolf on every new sensor.
 
 **A re-pairing sensor emits `device_leave` immediately before `device_joined`.**
 Metadata is therefore kept when a device leaves, so it returns to its room and
