@@ -46,6 +46,7 @@ from sensor_provider import (
     ContactSnapshot, ContactState, PairingStatus, ProviderUnavailable, SensorKind,
     SensorNotFound, create_provider,
 )
+from sensor_zigbee2mqtt import SensorRemovalFailed
 
 # Configure logging
 logging.basicConfig(
@@ -2650,9 +2651,21 @@ def _sensor_settings_response() -> Dict[str, Any]:
         "provider": sensor_settings.provider,
         "providers": sorted(sensor_persistence.PROVIDERS),
         "demo_mode": DEMO_MODE,
+        # Whether these sensors can be *made* to say things, which is a
+        # different question from whether the hub is simulated. Real Zigbee
+        # sensors beside a demo hub is a supported arrangement, and offering
+        # to type in their battery level would be offering to invent a
+        # hardware reading.
+        "simulated": _provider_can_simulate(),
         "pairing": _sensor_pairing_response(),
         "zones": zones,
     }
+
+
+def _provider_can_simulate() -> bool:
+    return sensor_provider is not None and callable(
+        getattr(sensor_provider, "simulate", None)
+    )
 
 
 def _sensor_pairing_response() -> Dict[str, Any]:
@@ -2836,23 +2849,43 @@ async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
 
 
 @app.delete("/api/sensors/{sensor_id}")
-async def remove_sensor(request: Request, sensor_id: str):
+async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
     try:
-        await sensor_provider.remove(sensor_id)
+        remover = sensor_provider.remove
+        if force:
+            await remover(sensor_id, force=True)
+        else:
+            await remover(sensor_id)
         await _finish_sensor_mutation()
         return {"status": "success"}
     except SensorNotFound:
         raise HTTPException(status_code=404, detail="Sensor not found")
+    except SensorRemovalFailed as exc:
+        # 409, not 500: nothing is broken. The device would not leave — almost
+        # always because it is a battery sensor and asleep — and the caller has
+        # a real choice to make about forcing it, so say so rather than
+        # deciding for them.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{exc} You can remove it anyway, but it may rejoin later.",
+        )
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/api/sensors/{sensor_id}/simulate")
 async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulationUpdate):
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
-    if not DEMO_MODE:
-        _sensor_provider_unavailable("Sensor simulation is demo-only")
+    if not _provider_can_simulate():
+        # Deliberately the provider and not DEMO_MODE: the hub can be
+        # simulated while the sensors are real, and a real sensor's battery
+        # and contact are readings, not settings.
+        _sensor_provider_unavailable(
+            "These sensors report their own state; it cannot be set by hand."
+        )
     try:
         state = ContactState(body.state) if body.state is not None else None
         sensor = await sensor_provider.simulate(

@@ -19,7 +19,9 @@ from sensor_automation import SensorAutomation
 from sensor_persistence import SensorSettings
 from sensor_provider import PairingOutcome, PairingStatus
 from sensor_zigbee2mqtt import ProviderUnavailable, Zigbee2MqttContactSensorProvider
-from tests.fake_zigbee2mqtt import FakeBroker, FakeTransport, FakeZigbee2Mqtt
+from tests.fake_zigbee2mqtt import (
+    FakeBroker, FakeTransport, FakeZigbee2Mqtt, contact_device,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -247,3 +249,72 @@ def test_a_broker_that_has_gone_is_503_not_500(client, zigbee, monkeypatch):
     # Unavailable, not broken: the caller should be told to try again, and the
     # log should not fill with tracebacks every time the broker restarts.
     assert response.status_code == 503
+
+
+# -- what the user found on the hardware -----------------------------------
+
+
+def test_a_real_sensors_battery_cannot_be_typed_in(client, zigbee):
+    """The hub is simulated here and the sensors are not.
+
+    Gating the simulator's controls on demo mode conflated the two, so a real
+    Aqara offered an editable battery percentage — a number the hardware never
+    reported.
+    """
+    provider, z2m = zigbee
+    body = enable(client, provider="zigbee2mqtt")
+
+    assert body["simulated"] is False
+
+    response = client.post(
+        f"/api/sensors/{'0x00158d008c8bc4f2'}/simulate", json={"battery": 50}
+    )
+    assert response.status_code == 501
+    assert "report their own state" in response.json()["detail"]
+
+
+def test_a_simulated_sensor_can_still_be_driven(client):
+    body = enable(client)
+    assert body["simulated"] is True
+
+    created = client.post(
+        "/api/sensors", json={"name": "Kitchen window", "zone_id": "5"}
+    )
+    assert created.status_code == 200, created.text
+    sensor_id = created.json()["sensor_id"]
+
+    response = client.post(f"/api/sensors/{sensor_id}/simulate", json={"battery": 50})
+    assert response.status_code == 200
+    assert response.json()["battery"] == 50
+
+
+def test_a_sensor_that_will_not_leave_is_reported_not_silently_kept(client, zigbee):
+    """What the user hit: Delete appeared to work and the sensor stayed.
+
+    Zigbee2MQTT asks the device to leave first, and a battery contact sensor
+    is asleep almost all of the time.
+    """
+    provider, z2m = zigbee
+    enable(client, provider="zigbee2mqtt")
+    client.portal.call(z2m.go_online)
+    client.portal.call(z2m.add_device, contact_device("0x00158d008c8bc4f2"))
+    z2m.refuse_removal = True
+
+    response = client.delete("/api/sensors/0x00158d008c8bc4f2")
+
+    assert response.status_code == 409
+    assert "rejoin later" in response.json()["detail"]
+    assert len(client.get("/api/sensors").json()["sensors"]) == 1
+
+
+def test_a_forced_removal_gets_rid_of_it(client, zigbee):
+    provider, z2m = zigbee
+    enable(client, provider="zigbee2mqtt")
+    client.portal.call(z2m.go_online)
+    client.portal.call(z2m.add_device, contact_device("0x00158d008c8bc4f2"))
+    z2m.refuse_removal = True
+
+    response = client.delete("/api/sensors/0x00158d008c8bc4f2?force=true")
+
+    assert response.status_code == 200
+    assert client.get("/api/sensors").json()["sensors"] == []

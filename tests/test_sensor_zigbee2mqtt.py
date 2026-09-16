@@ -15,7 +15,7 @@ from sensor_provider import (
 )
 from sensor_zigbee2mqtt import (
     MAX_PERMIT_JOIN_SECONDS, ProviderUnavailable, SensorNotFound,
-    Zigbee2MqttContactSensorProvider,
+    SensorRemovalFailed, Zigbee2MqttContactSensorProvider,
 )
 
 ADDRESS = "0x00158d0001a2b3c4"
@@ -351,19 +351,80 @@ async def test_cancel_pairing_closes_the_window(rig, events):
 
 
 @pytest.mark.asyncio
-async def test_remove_asks_zigbee2mqtt_and_waits_for_it(rig, events):
-    provider, z2m = await started(rig, events)
+async def test_remove_waits_for_zigbee2mqtt_to_confirm(rig, events):
+    provider, z2m, _transport, _clock, store = rig
+    await started(rig, events)
     await z2m.add_device(contact_device(ADDRESS))
+    await provider.update(ADDRESS, name="Kitchen window", zone_id="3")
 
     await provider.remove(ADDRESS)
 
     assert z2m.removed == [ADDRESS]
-    # Still listed: the request is not the outcome, and dropping it here would
-    # hide a sensor that is still on the mesh.
+    assert await provider.list() == []
+    # A removal the user asked for really is a removal. Keeping the metadata
+    # here is what made a deleted sensor come straight back.
+    assert ADDRESS not in store
+
+
+@pytest.mark.asyncio
+async def test_a_removal_that_fails_says_so_and_keeps_the_sensor(rig, events):
+    """The ordinary case for a battery contact sensor, not an exotic one.
+
+    Zigbee2MQTT asks the device to leave first, and one that reports twice a
+    day is asleep. Firing the request and returning made Delete appear to work
+    while the sensor stayed exactly where it was.
+    """
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    z2m.refuse_removal = True
+
+    with pytest.raises(SensorRemovalFailed) as caught:
+        await provider.remove(ADDRESS)
+
+    assert "did not leave" in str(caught.value)
     assert [item.sensor_id for item in await provider.list()] == [ADDRESS]
 
-    await z2m.device_left(ADDRESS)
+
+@pytest.mark.asyncio
+async def test_a_forced_removal_gets_rid_of_a_sleeping_sensor(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    z2m.refuse_removal = True
+
+    await provider.remove(ADDRESS, force=True)
+
     assert await provider.list() == []
+    assert z2m.remove_requests[-1]["force"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_silent_zigbee2mqtt_is_a_failure_not_a_hang(rig, events, monkeypatch):
+    import sensor_zigbee2mqtt
+
+    monkeypatch.setattr(sensor_zigbee2mqtt, "REMOVE_TIMEOUT_SECONDS", 0.05)
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    z2m.ignore_requests = True
+
+    with pytest.raises(SensorRemovalFailed):
+        await provider.remove(ADDRESS)
+
+    # And it must not be left holding a waiter for a reply that never came.
+    assert provider._remove_waiters == {}
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_leaves_keeps_its_room(rig, events):
+    provider, z2m, _transport, _clock, store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await provider.update(ADDRESS, name="Kitchen window", zone_id="3")
+
+    await z2m.device_left(ADDRESS)
+
+    # Different from a deletion: a flat battery or a re-pair should not cost
+    # the user the name and room they chose.
+    assert store[ADDRESS]["zone_id"] == "3"
 
 
 @pytest.mark.asyncio

@@ -90,7 +90,9 @@ const Nobo = (() => {
                                   method: 'POST', body: JSON.stringify(body) }),
     updateSensor:  (id, body) => req(`/api/sensors/${encodeURIComponent(id)}`, {
                                   method: 'PUT', body: JSON.stringify(body) }),
-    removeSensor:  (id)       => req(`/api/sensors/${encodeURIComponent(id)}`, {
+    removeSensor:  (id, force = false) =>
+                                req(`/api/sensors/${encodeURIComponent(id)}`
+                                    + (force ? '?force=true' : ''), {
                                   method: 'DELETE' }),
     simulateSensor: (id, body) => req(`/api/sensors/${encodeURIComponent(id)}/simulate`, {
                                    method: 'POST', body: JSON.stringify(body) }),

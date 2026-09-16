@@ -187,6 +187,12 @@ class FakeZigbee2Mqtt:
         self.devices: list[dict] = []
         self.permit_join_requests: list[int] = []
         self.removed: list[str] = []
+        self.remove_requests: list[dict] = []
+        # A sleeping battery device cannot be told to leave, which is the
+        # ordinary case for a contact sensor rather than an exotic one.
+        self.refuse_removal = False
+        # Zigbee2MQTT wedged or gone: requests accepted, never answered.
+        self.ignore_requests = False
         broker.register([f"{base_topic}/bridge/request/#"], self._on_request)
 
     async def go_online(self) -> None:
@@ -246,6 +252,8 @@ class FakeZigbee2Mqtt:
         )
 
     async def _on_request(self, topic: str, payload: bytes) -> None:
+        if self.ignore_requests:
+            return
         action = topic[len(f"{self._base}/bridge/request/"):]
         body = json.loads(payload.decode("utf-8"))
         if action == "permit_join":
@@ -255,7 +263,22 @@ class FakeZigbee2Mqtt:
                 json.dumps({"data": {"time": body["time"]}, "status": "ok"}),
             )
         elif action == "device/remove":
+            self.remove_requests.append(dict(body))
+            if self.refuse_removal and not body.get("force"):
+                await self._broker.publish(
+                    f"{self._base}/bridge/response/device/remove",
+                    json.dumps({
+                        "data": {"id": body["id"]},
+                        "status": "error",
+                        "error": "Device did not leave the network",
+                    }),
+                )
+                return
             self.removed.append(body["id"])
+            self.devices = [
+                item for item in self.devices
+                if item["ieee_address"] != body["id"]
+            ]
             await self._broker.publish(
                 f"{self._base}/bridge/response/device/remove",
                 json.dumps({"data": {"id": body["id"]}, "status": "ok"}),
