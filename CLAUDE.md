@@ -285,6 +285,32 @@ Four rules, each learned from a bug:
 
 Also worth knowing:
 
+- **The hub keeps its own clock, and only this application sets it.** The
+  `HELLO` handshake carries `yyyyMMddHHmmss` and is sent **once, at connect**
+  (`pynobo` line 648); the keep-alive `HANDSHAKE` carries no time, and `H05`
+  reports serial, versions and production date but *no* clock — so the hub's
+  time cannot be read back, and drift cannot be observed from here.
+
+  The consequence is seasonal. The hub runs the week profile itself, in wall
+  clock. Norway is UTC+1 in winter and UTC+2 in summer, so at each transition a
+  connection that simply stays up leaves the hub an hour out until something
+  forces a fresh `HELLO` — in practice the hub's own ~18-hourly reboot. Spring
+  is the one that matters: Comfort would start an hour *late*, in a building
+  whose whole purpose is not being cold.
+
+  Not reproduced on hardware, and deliberately not guessed at: it rests on the
+  hub adopting the `HELLO` timestamp, which is the usual understanding for a
+  device with no RTC or NTP but is not something this repository has proved.
+  The cheap mitigation is to force one reconnect when `local_now().utcoffset()`
+  changes — twice a year, costing nothing if the premise is wrong. It has not
+  been implemented, because it means displacing a healthy hub client and rule 4
+  above exists for a reason.
+
+  Everything on *this* side of the wire is already correct and was checked:
+  `local_now()` is `datetime.now().astimezone()` and follows DST; the away
+  schedule stores absolute ISO-8601 instants and compares them in UTC; sensor
+  delays are durations in epoch seconds, which DST cannot move.
+
 - pynobo has no handling for `Y00`/`Y01`/`Y03`/`Y04`, so device search and
   pairing go entirely through `HubProtocolTap`.- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
   not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.

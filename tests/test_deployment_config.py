@@ -361,3 +361,41 @@ class TestTheClock:
         env = compose["services"]["zigbee2mqtt"].get("environment") or []
         assert any(str(item).startswith("TZ=") for item in env)
         assert "NOBO_TZ" in env_example
+
+
+class TestTheClockFollowsTheSeason:
+    """Norway is UTC+1 in winter and UTC+2 in summer.
+
+    Every wall-clock decision this application makes has to move with that, and
+    the ways it could silently fail to are all cheap to pin down.
+    """
+
+    def test_local_now_follows_the_system_zone(self):
+        import inspect
+        import server
+
+        source = inspect.getsource(server.local_now)
+        # .astimezone() picks up the offset in force *now*, so a DST change
+        # needs no restart and no configuration.
+        assert "datetime.now().astimezone()" in source
+        assert "utcnow" not in source
+
+    def test_the_away_schedule_stores_instants_not_wall_clock(self):
+        import inspect
+        import away_schedule
+
+        source = inspect.getsource(away_schedule)
+        # "Away until 17:00 on Sunday" is stored as an absolute instant, so an
+        # hour appearing or vanishing overnight cannot move it.
+        assert "timezone.utc" in source
+        assert "fromisoformat" in source
+
+    def test_sensor_delays_are_durations(self):
+        import inspect
+        import sensor_automation
+
+        source = inspect.getsource(sensor_automation)
+        # Epoch seconds, which DST does not touch: only the local rendering of
+        # an instant changes, never the instant itself.
+        assert "clock: Callable[[], float] = time.time" in source
+        assert "strftime" not in source
