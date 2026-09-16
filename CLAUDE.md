@@ -298,13 +298,25 @@ Also worth knowing:
   is the one that matters: Comfort would start an hour *late*, in a building
   whose whole purpose is not being cold.
 
-  Not reproduced on hardware, and deliberately not guessed at: it rests on the
-  hub adopting the `HELLO` timestamp, which is the usual understanding for a
-  device with no RTC or NTP but is not something this repository has proved.
-  The cheap mitigation is to force one reconnect when `local_now().utcoffset()`
-  changes — twice a year, costing nothing if the premise is wrong. It has not
-  been implemented, because it means displacing a healthy hub client and rule 4
-  above exists for a reason.
+  `resync_hub_clock_if_season_changed()` handles it: the offset in force when
+  `HELLO` was sent is recorded beside the connection, the reconnect loop
+  compares it with the offset now, and a change forces one reconnect so the hub
+  is told the new local time. The new offset is claimed *before* the attempt, so
+  a reconnect that fails does not retry every five seconds until the next
+  season — the hub's own reboot stays the backstop it always was.
+
+  This is the one thing in the codebase that displaces a *healthy* hub client on
+  purpose, which is otherwise precisely the mistake rule 4 exists to prevent. It
+  therefore goes through `connect_to_hub_sync(force=True)`, the same guarded
+  path a configuration change uses, which serialises the attempt and hands
+  whatever it replaces to `stop_hub_client()`. `tests/test_hub_clock_resync.py`
+  asserts that, and the existing leak tests still hold.
+
+  The premise is still unproved: it rests on the hub adopting the `HELLO`
+  timestamp, which is the usual understanding for a device with no RTC or NTP
+  but is not something this repository has demonstrated, and the hub reports no
+  clock so it cannot be checked. The mitigation costs one reconnect twice a
+  year, which is cheap enough to be worth it even if the premise is wrong.
 
   Everything on *this* side of the wire is already correct and was checked:
   `local_now()` is `datetime.now().astimezone()` and follows DST; the away

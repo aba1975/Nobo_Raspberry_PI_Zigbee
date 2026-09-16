@@ -15,7 +15,7 @@ import threading
 import time
 from collections import deque
 from typing import Dict, List, Optional, Any, Set, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -1498,16 +1498,26 @@ class HubProtocolTap:
 
 hub_tap: Optional[HubProtocolTap] = None
 
+# The UTC offset in force when the current connection said HELLO, which is the
+# one and only time the hub is told what time it is. Compared against the
+# offset now to notice a daylight-saving change; None until first connected.
+hub_clock_offset: Optional[timedelta] = None
 
-def connect_to_hub_sync():
-    """Connect to the Nobø Hub (synchronous, runs in thread)"""
-    global hub, hub_connected, hub_tap
+
+def connect_to_hub_sync(force: bool = False):
+    """Connect to the Nobø Hub (synchronous, runs in thread).
+
+    ``force`` replaces a healthy client on purpose. The only caller that wants
+    that is the clock resync: the hub takes its time from ``HELLO`` and from
+    nothing else, so the only way to correct it is to say hello again.
+    """
+    global hub, hub_connected, hub_tap, hub_clock_offset
 
     # One attempt at a time. See hub_connect_lock for why this matters.
     with hub_connect_lock:
         with connection_lock:
             generation = hub_config_generation
-            if hub is not None and hub_connected:
+            if hub is not None and hub_connected and not force:
                 # Another attempt won the race while this one was queued.
                 # Connecting again would take a second slot on the hub for a
                 # client nobody would ever use.
@@ -1521,6 +1531,10 @@ def connect_to_hub_sync():
             # Attach before connecting, so the initial data dump is captured too.
             tap = HubProtocolTap()
             tap.attach(new_hub)
+            # Captured beside the connection, not before it: this is the
+            # offset that was in force when pynobo put the wall-clock time
+            # into HELLO, which is the only time the hub is ever told.
+            handshake_offset = local_now().utcoffset()
             hub_loop.run(new_hub.start(), timeout=30)
             with connection_lock:
                 if generation != hub_config_generation:
@@ -1534,6 +1548,7 @@ def connect_to_hub_sync():
                     hub = new_hub
                     hub_tap = tap
                     hub_connected = True
+                    hub_clock_offset = handshake_offset
 
             if stale:
                 # The user changed the configuration while we were connecting. This
@@ -1587,7 +1602,7 @@ def connect_to_hub_sync():
             raise
 
 
-async def connect_to_hub():
+async def connect_to_hub(force: bool = False):
     """Connect to the Nobø Hub (async wrapper)"""
     global hub_thread, hub_connected
     
@@ -1599,7 +1614,9 @@ async def connect_to_hub():
         return
     
     # Run the synchronous connection in a thread to avoid event loop conflicts
-    hub_thread = threading.Thread(target=connect_to_hub_sync, daemon=True)
+    hub_thread = threading.Thread(
+        target=connect_to_hub_sync, args=(force,), daemon=True
+    )
     hub_thread.start()
     
     # Wait a moment for connection to establish
@@ -1690,6 +1707,58 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
     }
 
 
+async def resync_hub_clock_if_season_changed() -> bool:
+    """Say hello again when the clocks go forward or back.
+
+    The hub keeps its own clock and takes it from ``HELLO`` alone — the
+    keep-alive carries no time, and ``H05`` reports versions but no clock, so
+    the hub's idea of the time cannot even be read back to check. It then runs
+    the week profile itself, in wall clock.
+
+    So a connection that simply stays up across a transition leaves the hub an
+    hour out until its own roughly eighteen-hourly reboot forces a fresh
+    handshake. In October that starts Comfort an hour early, which merely costs
+    electricity. In March it starts an hour late, in a building whose whole
+    purpose is not being cold.
+
+    Twice a year, therefore, this deliberately displaces a healthy client. That
+    is otherwise exactly what must not happen — see the connection rules — so
+    it goes through the same guarded path a configuration change uses, which
+    serialises the attempt and shuts down whatever it replaces.
+    """
+    global hub_clock_offset
+
+    if DEMO_MODE or hub_clock_offset is None:
+        return False
+    current = local_now().utcoffset()
+    if current is None or current == hub_clock_offset:
+        return False
+
+    was, now_ = _format_offset(hub_clock_offset), _format_offset(current)
+    logger.warning(
+        "Clock offset changed from %s to %s — reconnecting so the hub is told "
+        "the new local time", was, now_,
+    )
+    add_log_entry(
+        "sent",
+        f"Daylight saving changed ({was} to {now_}); resending the time to the hub",
+        source="hub",
+    )
+    # Claimed before the attempt, so a failure does not leave this retrying
+    # every five seconds for the rest of the season. The hub's own reboot
+    # remains the backstop, as it was before this existed.
+    hub_clock_offset = current
+    await connect_to_hub(force=True)
+    return True
+
+
+def _format_offset(offset: timedelta) -> str:
+    total = int(offset.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"UTC{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
 async def reconnect_loop():
     """Background task that monitors hub connectivity and reconnects with exponential backoff.
 
@@ -1776,6 +1845,13 @@ async def reconnect_loop():
             if interval != MIN_INTERVAL:
                 interval = MIN_INTERVAL
                 attempt = 0
+            try:
+                await resync_hub_clock_if_season_changed()
+            except Exception as exc:
+                # Never fatal to the loop: a failed resync costs an hour of
+                # schedule twice a year, whereas a dead reconnect loop costs
+                # the heating entirely.
+                logger.error("Clock resync failed: %s", exc)
 
 
 def hub_update_callback(hub_instance):
