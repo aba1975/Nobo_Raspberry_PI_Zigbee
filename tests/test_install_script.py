@@ -261,3 +261,36 @@ def test_the_readme_describes_the_sensors_it_ships_with():
     assert "cannot be asked for" in README
     # And it stays honest about what is still unproved.
     assert "Still unproved" in README
+
+
+def _anchors(markdown: str) -> set[str]:
+    """GitHub's slug: lowercase, punctuation dropped, spaces to hyphens."""
+    import re
+
+    found = set()
+    for line in markdown.splitlines():
+        if not line.startswith("#"):
+            continue
+        title = line.lstrip("#").strip()
+        slug = re.sub(r"[^\w\s-]", "", title.lower())
+        found.add(re.sub(r"\s+", "-", slug).strip("-"))
+    return found
+
+
+@pytest.mark.parametrize("name", ["README.md", "docs/INSTALL.md", "docs/SENSORS.md"])
+def test_every_internal_link_points_somewhere(name):
+    """Renaming a heading leaves the links to it pointing at nothing.
+
+    That is how "Contact sensors (simulated provider)" left two dead links in
+    the table of contents of a public README — invisible in the diff, obvious
+    to anyone who clicked.
+    """
+    import re
+
+    text = (ROOT / name).read_text(encoding="utf-8")
+    headings = _anchors(text)
+    dead = sorted({
+        target for target in re.findall(r"\]\(#([^)]+)\)", text)
+        if target not in headings
+    })
+    assert not dead, f"{name} links to headings that do not exist: {dead}"
