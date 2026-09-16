@@ -761,3 +761,28 @@ def test_unpairing_shows_that_something_is_happening():
 def test_the_first_dialog_warns_that_a_second_may_follow():
     # So the "Remove anyway" step reads as a continuation, not a failure.
     assert "asleep most of the time" in CABIN
+
+
+def test_a_quiet_sensor_is_mentioned_long_before_anything_calls_it_offline():
+    """Zigbee2MQTT waits 25 hours before declaring a battery device offline.
+
+    That is right for avoiding false alarms and useless for noticing a flat
+    battery: for most of a day a dead sensor looks exactly like a healthy one,
+    and whatever it last said is still believed — including "open", which can
+    hold a room's heating action the whole time.
+    """
+    assert "function sensorIsStale" in CABIN
+    assert "nothing heard since" in CABIN
+    assert "SENSOR_QUIET_HOURS = 6" in CABIN
+    # And the threshold is justified against what real sensors do, not picked.
+    assert "two and a half hours between" in CABIN
+
+
+def test_staleness_is_not_confused_with_offline():
+    start = CABIN.index("function sensorRow")
+    end = CABIN.index("\n  /* One line summarising the rule", start)
+    row = CABIN[start:end]
+    # Offline keeps its own wording; stale is a separate, softer statement.
+    assert "last heard from" in row
+    assert "nothing heard since" in row
+    assert row.index("!sensor.available") < row.index("sensorIsStale(sensor)")

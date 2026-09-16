@@ -623,7 +623,10 @@ def test_zigbee_metadata_round_trips(tmp_path):
     )
 
     assert load_zigbee_metadata(path) == {
-        ADDRESS: {"name": "Kitchen window", "kind": "window", "zone_id": "3"}
+        ADDRESS: {
+            "name": "Kitchen window", "kind": "window", "zone_id": "3",
+            "last_seen": None,
+        }
     }
 
 
@@ -1035,3 +1038,92 @@ async def test_a_deleted_sensor_does_not_keep_its_name_and_room(rig, events):
 
     assert await provider.list() == []
     assert ADDRESS not in store
+
+
+
+# -- knowing when a sensor was last heard from ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_last_heard_survives_a_restart(rig, events):
+    """A battery sensor is quiet by design, so the only way to tell a dead one
+    from a merely silent one is when it last spoke.
+
+    Taking "now" at registration made a sensor whose battery died days ago
+    claim it had just been heard from, every time the application started —
+    which is precisely the moment somebody is most likely to be looking.
+    """
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True, last_seen=clock().isoformat())
+    spoke_at = (await provider.list())[0].last_seen_at
+
+    clock.advance(3 * 24 * 60 * 60)
+    await provider.stop()
+    await provider.start()
+    await z2m.publish_devices()
+
+    sensor = (await provider.list())[0]
+    assert sensor.last_seen_at == spoke_at
+    # The state itself does come back, from the broker's retained copy of the
+    # last report — that is real information and worth having. What must not
+    # come back with it is a fresh timestamp, which would dress three-day-old
+    # news up as current.
+    assert sensor.state is ContactState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_every_report_updates_what_is_remembered(rig, events):
+    provider, z2m, _transport, clock, store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True)
+    first = store[ADDRESS]["last_seen"]
+
+    clock.advance(600)
+    await z2m.report(ADDRESS, contact=False)
+
+    assert store[ADDRESS]["last_seen"] != first
+
+
+def test_metadata_written_before_last_seen_existed_still_loads(tmp_path):
+    """Refusing the old three-field shape would throw away every name and room
+    on the next start."""
+    import json
+
+    from sensor_persistence import SCHEMA_VERSION, load_zigbee_metadata
+
+    path = tmp_path / "zigbee_sensor_metadata.json"
+    path.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "sensors": {
+            ADDRESS: {"name": "Kitchen window", "kind": "window", "zone_id": "3"},
+        },
+    }), encoding="utf-8")
+
+    loaded = load_zigbee_metadata(path)
+
+    assert loaded[ADDRESS]["name"] == "Kitchen window"
+    assert loaded[ADDRESS]["zone_id"] == "3"
+    assert loaded[ADDRESS]["last_seen"] is None
+
+
+def test_a_nonsense_last_seen_is_refused(tmp_path):
+    import json
+
+    from sensor_persistence import InvalidSensorData, SCHEMA_VERSION, load_zigbee_metadata
+
+    path = tmp_path / "zigbee_sensor_metadata.json"
+    for bad in ("not-a-date", "2026-09-16T12:00:00"):  # the second has no zone
+        path.write_text(json.dumps({
+            "schema_version": SCHEMA_VERSION,
+            "sensors": {
+                ADDRESS: {
+                    "name": "x", "kind": "window", "zone_id": None, "last_seen": bad,
+                },
+            },
+        }), encoding="utf-8")
+        # _load backs up and returns the default rather than raising, so the
+        # observable result is that nothing survives a corrupt file.
+        assert load_zigbee_metadata(path) == {}

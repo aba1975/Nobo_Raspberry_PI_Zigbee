@@ -206,6 +206,40 @@ list in Settings. The simulated provider completes pairing immediately. A
 Zigbee2MQTT provider cannot, because a real join is not instantaneous; see the
 contract change noted above.
 
+### A flat battery looks exactly like a quiet one
+
+Zigbee2MQTT will not call a battery device offline until it has been silent for
+**25 hours** (`availability.passive.timeout`, 1500 minutes). That default is
+right and should not be shortened casually: a contact sensor speaks only when
+something changes, and the ones here have gone **two and a half hours between
+reports with perfectly good batteries**. Anything much tighter cries wolf.
+
+The consequence is worth stating plainly. For most of a day after a battery
+dies, the sensor reads as present and whatever it last said is still believed —
+including `open`, which will hold that room's heating action for the whole
+period. Tested by pulling a battery: two hours later the system still reported
+the sensor available and the window open, which is correct behaviour and
+unhelpful news.
+
+So the interface names the silence long before anything is willing to call it
+offline: past six hours a sensor says *"nothing heard since ..."* rather than
+sitting there looking healthy. Six hours is chosen against measured behaviour,
+not taste.
+
+Two things make that age trustworthy:
+
+**It is the device's timestamp, not ours.** With `last_seen: ISO_8601` set in
+Zigbee2MQTT, each report carries when the device actually spoke. A broker
+replays retained messages on every reconnect, and counting a replay as a fresh
+sighting reset "last heard" for every sensor each time the application
+started — including the flat ones, which is exactly the case it exists for.
+
+**It survives a restart.** The age is kept in
+`data/zigbee_sensor_metadata.json` beside the name and room. Taking "now" at
+registration made a sensor whose battery died days ago claim it had just been
+heard from, every time the application started — the one moment somebody is
+most likely to be looking at it.
+
 ### When the sensor stack goes away
 
 Two different failures, and both must end with sensors reported as

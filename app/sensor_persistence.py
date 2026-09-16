@@ -337,7 +337,17 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
     for address, raw in _require_dict(doc.get("sensors"), "sensors").items():
         if not isinstance(address, str) or not address:
             raise InvalidSensorData("sensor ids must be non-empty strings")
-        row = _exact_fields(raw, ("name", "kind", "zone_id"), f"sensors.{address}")
+        # Two shapes are accepted on purpose. Installations written before
+        # last_seen was kept have three fields, and refusing those would throw
+        # away every name and room assignment on the next start.
+        fields = set(_require_dict(raw, f"sensors.{address}"))
+        if fields == {"name", "kind", "zone_id"}:
+            row = dict(raw)
+            row["last_seen"] = None
+        else:
+            row = _exact_fields(
+                raw, ("name", "kind", "zone_id", "last_seen"), f"sensors.{address}"
+            )
         name = row["name"]
         if not isinstance(name, str) or not name.strip() or len(name) > 80:
             raise InvalidSensorData(f"sensors.{address}.name must be 1 to 80 characters")
@@ -348,7 +358,28 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
             raise InvalidSensorData(
                 f"sensors.{address}.zone_id must be a non-empty string or null"
             )
-        result[address] = {"name": name, "kind": row["kind"], "zone_id": zone_id}
+        last_seen = row["last_seen"]
+        if last_seen is not None:
+            if not isinstance(last_seen, str):
+                raise InvalidSensorData(
+                    f"sensors.{address}.last_seen must be a timestamp or null"
+                )
+            try:
+                parsed = datetime.fromisoformat(last_seen)
+            except ValueError as exc:
+                raise InvalidSensorData(
+                    f"sensors.{address}.last_seen is not a valid timestamp"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise InvalidSensorData(
+                    f"sensors.{address}.last_seen must include a timezone"
+                )
+        result[address] = {
+            "name": name,
+            "kind": row["kind"],
+            "zone_id": zone_id,
+            "last_seen": last_seen,
+        }
     return result
 
 

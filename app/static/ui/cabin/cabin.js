@@ -1117,6 +1117,19 @@
     </div>`;
   }
 
+  /* How long a sensor may be quiet before its silence is worth mentioning.
+     Six hours: the real ones here have gone two and a half hours between
+     reports with perfectly good batteries, so anything much shorter would cry
+     wolf, and a whole day is too late to be useful. */
+  const SENSOR_QUIET_HOURS = 6;
+
+  function sensorIsStale(sensor) {
+    if (!sensor.last_seen_at) return false;
+    const heard = new Date(sensor.last_seen_at).getTime();
+    if (Number.isNaN(heard)) return false;
+    return (Date.now() - heard) > SENSOR_QUIET_HOURS * 3600 * 1000;
+  }
+
   function sensorRow(sensor, admin) {
     const open = sensor.available && sensor.state === 'open';
     const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
@@ -1133,9 +1146,18 @@
     /* Offline means the Pi is no longer hearing from the sensor, which is a
        different worry from a window being open — so it says when it was last
        heard from rather than leaving you to guess how stale the state is. */
-    const detail = sensor.available
-      ? sensorKindLabel(sensor)
-      : `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`;
+    /* A battery contact sensor only speaks when something changes, so silence
+       is normal — until it is not. Zigbee2MQTT waits 25 hours before calling
+       one offline, which is right for avoiding false alarms and useless for
+       noticing a flat battery: for most of a day a dead sensor looks exactly
+       like a healthy one, and whatever it last said is still being believed.
+       So the age of that last word is shown once it gets old, well before
+       anything is willing to call it offline. */
+    const detail = !sensor.available
+      ? `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`
+      : sensorIsStale(sensor)
+        ? `${sensorKindLabel(sensor)} · nothing heard since ${Nobo.fmtAgo(sensor.last_seen_at)}`
+        : sensorKindLabel(sensor);
     return `
       <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'}">
         ${sensorIcon(sensor)}

@@ -518,7 +518,14 @@ class Zigbee2MqttContactSensorProvider:
 
         state = _contact_state(document.get("contact"), snapshot.state)
         battery = _battery(document.get("battery"), snapshot.battery)
-        stamp = self._aware_now()
+        # Prefer the device's own timestamp. A broker replays retained
+        # messages on every reconnect, and counting a replay as a fresh
+        # sighting reset "last heard" for every sensor each time the
+        # application started — including the ones whose batteries were flat,
+        # which is exactly what this is for. Needs `last_seen: ISO_8601` in
+        # Zigbee2MQTT; without it the receive time is the best available, and
+        # is wrong only across a restart.
+        stamp = _parse_stamp(document.get("last_seen")) or self._aware_now()
         changed = state != snapshot.state
         updated = _replace(
             snapshot,
@@ -531,12 +538,18 @@ class Zigbee2MqttContactSensorProvider:
             last_seen_at=stamp,
         )
         await self._store(updated)
+        self._remember(updated)
 
     # -- registry ----------------------------------------------------------
 
     def _new_snapshot(self, address: str, entry: dict) -> ContactSnapshot:
         meta = self._metadata.get(address) or {}
         stamp = self._aware_now()
+        # When we last actually heard from it, carried across restarts. Taking
+        # "now" here made a sensor whose battery died days ago claim it had
+        # just been heard from, every time the application started — which is
+        # the one moment somebody is most likely to be looking.
+        heard = _parse_stamp(meta.get("last_seen")) or stamp
         return ContactSnapshot(
             sensor_id=address,
             provider_id=f"zigbee2mqtt:{address}",
@@ -547,7 +560,7 @@ class Zigbee2MqttContactSensorProvider:
             available=False,
             battery=None,
             changed_at=stamp,
-            last_seen_at=stamp,
+            last_seen_at=heard,
         )
 
     async def _store(self, snapshot: ContactSnapshot) -> ContactSnapshot:
@@ -575,6 +588,7 @@ class Zigbee2MqttContactSensorProvider:
             "name": snapshot.name,
             "kind": snapshot.kind.value,
             "zone_id": snapshot.zone_id,
+            "last_seen": snapshot.last_seen_at.isoformat(),
         }
         self._save_metadata(self._metadata)
 
@@ -618,6 +632,16 @@ class Zigbee2MqttContactSensorProvider:
 
 
 # -- payload translation ---------------------------------------------------
+
+
+def _parse_stamp(value) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def _contact_state(value, previous: ContactState) -> ContactState:

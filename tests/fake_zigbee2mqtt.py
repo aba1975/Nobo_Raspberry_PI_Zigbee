@@ -239,7 +239,12 @@ class FakeZigbee2Mqtt:
         )
         await self.publish_devices()
 
-    async def report(self, friendly_name: str, **payload) -> None:
+    async def report(self, friendly_name: str, *, last_seen=None, **payload) -> None:
+        """Zigbee2MQTT stamps each report with the device's own last_seen when
+        configured to, which is what makes a replayed retained message
+        distinguishable from a fresh one."""
+        if last_seen is not None:
+            payload["last_seen"] = last_seen
         await self._broker.publish(
             f"{self._base}/{friendly_name}", json.dumps(payload), retain=True
         )
