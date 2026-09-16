@@ -46,9 +46,10 @@ MAX_PERMIT_JOIN_SECONDS = 254
 # How long to wait for Zigbee2MQTT to answer a removal. It talks to the device
 # first, and a battery contact sensor sleeps between reports, so the honest
 # answer for one that is not listening is "that failed", not silence.
-REMOVE_TIMEOUT_SECONDS = 20.0
+REMOVE_TIMEOUT_SECONDS = 15.0
 
 _IEEE = re.compile(r"^0x[0-9a-f]{16}$")
+_IEEE_ANYWHERE = re.compile(r"0x[0-9a-f]{16}")
 
 
 class SensorRemovalFailed(ProviderUnavailable):
@@ -412,8 +413,9 @@ class Zigbee2MqttContactSensorProvider:
     async def _on_remove_response(self, document) -> None:
         if not isinstance(document, dict):
             return
-        data = document.get("data")
-        identifier = data.get("id") if isinstance(data, dict) else None
+        identifier = self._which_removal(document)
+        if identifier is None:
+            return
         waiter = self._remove_waiters.get(identifier)
         if waiter is None or waiter.done():
             return
@@ -429,6 +431,31 @@ class Zigbee2MqttContactSensorProvider:
                     str(document.get("error") or "Zigbee2MQTT refused the removal")
                 )
             )
+
+    def _which_removal(self, document: dict) -> Optional[str]:
+        """Work out which removal a bridge reply is about.
+
+        A *successful* reply echoes the id. A failure does not: Zigbee2MQTT
+        sends ``{"data": {}, "error": "Failed to remove device '0x...'"}``.
+        Keying only on ``data.id`` therefore dropped every failure on the
+        floor, and the request sat until it timed out — so the one case this
+        was written for, a sleeping battery sensor, reported "Zigbee2MQTT did
+        not answer" twenty seconds later instead of what actually happened.
+        """
+        data = document.get("data")
+        if isinstance(data, dict) and data.get("id") in self._remove_waiters:
+            return data["id"]
+        # The address is in the error text even when the payload omits it.
+        error = document.get("error")
+        if isinstance(error, str):
+            for found in _IEEE_ANYWHERE.findall(error.lower()):
+                if found in self._remove_waiters:
+                    return found
+        # A removal is a deliberate act from a confirmation dialog, so one
+        # outstanding is the ordinary case and guessing is safe there.
+        if len(self._remove_waiters) == 1:
+            return next(iter(self._remove_waiters))
+        return None
 
     async def _on_event(self, document) -> None:
         if not isinstance(document, dict):
