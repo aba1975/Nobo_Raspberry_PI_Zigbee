@@ -231,8 +231,14 @@ def test_a_private_repository_fails_with_an_explanation_not_a_prompt():
     assert "Could not download the software" in SOURCE
 
 
-def test_the_guide_covers_the_private_repository_case():
-    assert "personal-access-tokens" in GUIDE
-    assert "Contents: Read-only" in GUIDE
-    # And says what the token can do, rather than just telling them to paste it.
-    assert "read-only and limited to this one repository" in GUIDE
+def test_the_guide_leads_with_a_plain_clone():
+    """The repository is public, so the ordinary path needs no credentials and
+    must not be buried under a detour for the case that no longer applies."""
+    step = GUIDE[GUIDE.index("## Step 4"):GUIDE.index("## Step 5")]
+    plain = step.index("git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git")
+    assert "YOUR_TOKEN" not in step[:plain]
+    # The token path survives for anyone working from a private fork, but as
+    # troubleshooting rather than as a step.
+    assert "<details>" in step
+    assert "personal-access-tokens" in step
+    assert "Contents: Read-only" in step
