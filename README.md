@@ -146,13 +146,21 @@ interface says so rather than pretending the change worked.
 | Edit weekly schedules | ✅ | ✅ |
 | Add, rename, share and delete schedules | ✅ | ✅ |
 | Add or delete a zone | ✅ | ✅ |
-| Add, remove, move, rename or replace a device | ✅ | ✅ |
-| **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
+| Add a device **by typing its serial** | ✅ | ✅ verified on a real hub |
+| Remove, move, rename or replace a device | ✅ | ✅ verified on a real hub |
+| **Automatic search** for a device in pairing mode | ❌ | ⚠️ implemented, never tested |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
 | **Contact sensors** | ✅ simulated, or real Zigbee | ✅ simulated, or real Zigbee |
 
 **Everything on that list has now been run against a real hub**, on a house of
-7 zones and 11 heaters. The one exception is the row marked above.
+7 zones and 11 heaters. The one exception is automatic search.
+
+Note the two device rows are different things, and only one is untested.
+*Adding a heater by typing the 12-digit serial from its label* works and has
+been done on real hardware — removing a heater and adding it back put it in
+the right zone under the right name. *Automatic search* is the separate feature
+where the hub listens for a device already in pairing mode, and that is what no
+hardware has confirmed.
 
 Contact sensors are the odd row out, because they do not depend on the hub at
 all: they arrive over a separate radio. Simulated sensors need demo mode; real
