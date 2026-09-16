@@ -482,7 +482,12 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sensor-copy { min-width: 0; }
 .sensor-copy strong { display: block; }
 .sensor-copy small { display: block; margin-top: .1rem; color: var(--ink-soft); font-size: .78rem; }
-.sensor-facts { display: flex; align-items: center; gap: .45rem; }
+.sensor-facts {
+  display: flex; align-items: center; gap: .45rem;
+  /* Three facts is more than a phone row can hold in one line, and the
+     alternative to wrapping is squeezing the sensor's name. */
+  flex-wrap: wrap; justify-content: flex-end;
+}
 .sensor-state {
   display: inline-flex; width: max-content;
   padding: .2rem .55rem; border-radius: 999px;
@@ -500,6 +505,22 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   color: var(--danger); font-weight: 700;
   padding: .1rem .4rem; border-radius: 999px; background: var(--danger-wash);
 }
+
+/* Signal strength, sat beside the battery. Both answer "is this sensor going
+   to keep working where it is?", so they read as one group. Only a weak link
+   is coloured as a problem — a fair one is a hint, not a fault. */
+.sensor-signal {
+  display: inline-flex; align-items: center; gap: .2rem;
+  font-size: .76rem; color: var(--ink-soft);
+}
+.sensor-signal .icon { width: .95em; height: .95em; }
+.sensor-signal.is-good { color: var(--pine); }
+.sensor-signal.is-fair { color: var(--amber); }
+.sensor-signal.is-weak {
+  color: var(--danger); font-weight: 700;
+  padding: .1rem .4rem; border-radius: 999px; background: var(--danger-wash);
+}
+.sensor-signal.is-unknown { color: var(--ink-faint); }
 .sensor-actions { grid-template-columns: repeat(4, auto); }
 
 /* The rule, summarised. Read often, changed rarely, so it is one line with the

@@ -1130,6 +1130,32 @@
     return (Date.now() - heard) > SENSOR_QUIET_HOURS * 3600 * 1000;
   }
 
+  /* Zigbee link quality, 0 to 255, as the coordinator scored the last message
+     it heard. The raw number means nothing to anybody, and its only practical
+     use is answering "does this spot need a repeater?", so it is shown as a
+     verdict with the number kept in the tooltip.
+
+     The bands follow the common Zigbee2MQTT reading of LQI: comfortably above
+     100 is a solid link, below 50 is marginal. Note this describes the *last
+     hop* — a sensor reporting through a repeater is being scored on the short
+     leg to that repeater, not on its distance from the Pi. */
+  function sensorSignal(sensor) {
+    const lqi = sensor.link_quality;
+    if (lqi == null) {
+      return `<span class="sensor-signal is-unknown"
+        title="No signal reading yet. It arrives with the sensor's next report.">Signal unknown</span>`;
+    }
+    const band = lqi >= 100 ? 'good' : lqi >= 50 ? 'fair' : 'weak';
+    const word = band === 'good' ? 'Good signal'
+      : band === 'fair' ? 'Fair signal' : 'Weak signal';
+    const advice = band === 'weak'
+      ? ' A repeater — any mains-powered Zigbee device — placed between here and the Pi would help.'
+      : band === 'fair' ? ' Usable, but a repeater nearby would make it more reliable.' : '';
+    return `<span class="sensor-signal is-${band}"
+      title="Link quality ${esc(lqi)} of 255, measured on the last hop.${esc(advice)}"
+      >${Nobo.icon('signal')}<span>${word}</span></span>`;
+  }
+
   function sensorRow(sensor, admin) {
     const open = sensor.available && sensor.state === 'open';
     const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
@@ -1168,6 +1194,7 @@
         <span class="sensor-facts">
           <span class="sensor-state sensor-${esc(sensor.available ? sensor.state : 'unavailable')}">${esc(label)}</span>
           ${battery}
+          ${sensorSignal(sensor)}
         </span>
         ${admin ? `<span class="dev-actions sensor-actions">
           <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
@@ -1613,6 +1640,11 @@
         <label class="field"><span>Battery percentage</span>
           <input id="editSensorBattery" type="number" min="0" max="100"
             value="${sensor.battery == null ? '' : esc(sensor.battery)}">
+        </label>
+        <label class="field"><span>Link quality (0–255)</span>
+          <input id="editSensorLqi" type="number" min="0" max="255"
+            value="${sensor.link_quality == null ? '' : esc(sensor.link_quality)}">
+          <small>100 or more reads as a good signal, under 50 as weak.</small>
         </label>` : ''}
       <div class="sheet-actions">
         <button class="btn" type="button" data-act="cancel">Cancel</button>
@@ -1630,11 +1662,14 @@
           });
           if (demo) {
             const battery = root.querySelector('#editSensorBattery').value;
+            const lqi = root.querySelector('#editSensorLqi').value;
             await Nobo.api.simulateSensor(sensor.sensor_id, {
               state: root.querySelector('#editSensorState').value,
               available: root.querySelector('#editSensorAvailable').checked,
               battery: battery === '' ? undefined : Number(battery),
               clear_battery: battery === '',
+              link_quality: lqi === '' ? undefined : Number(lqi),
+              clear_link_quality: lqi === '',
             });
           }
           closeSheet();

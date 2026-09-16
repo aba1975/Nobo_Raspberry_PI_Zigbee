@@ -518,6 +518,9 @@ class Zigbee2MqttContactSensorProvider:
 
         state = _contact_state(document.get("contact"), snapshot.state)
         battery = _battery(document.get("battery"), snapshot.battery)
+        # Signal strength of the hop we just heard. Unlike battery it rides
+        # along with every report, so it is known from the first message.
+        link = _link_quality(document.get("linkquality"), snapshot.link_quality)
         # Prefer the device's own timestamp. A broker replays retained
         # messages on every reconnect, and counting a replay as a fresh
         # sighting reset "last heard" for every sensor each time the
@@ -531,6 +534,7 @@ class Zigbee2MqttContactSensorProvider:
             snapshot,
             state=state,
             battery=battery,
+            link_quality=link,
             # A report is proof the device is reachable, whatever the
             # availability topic last said.
             available=True,
@@ -558,7 +562,13 @@ class Zigbee2MqttContactSensorProvider:
             zone_id=meta.get("zone_id"),
             state=ContactState.UNKNOWN,
             available=False,
-            battery=None,
+            # The readings are restored; the contact state deliberately is not.
+            # Whether a window is open now is a safety question and must be
+            # heard from the hardware, but a battery level and a signal
+            # strength are simply the last measurements taken, and blanking
+            # them left both empty for hours after every update.
+            battery=_stored_reading(meta.get("battery"), 100),
+            link_quality=_stored_reading(meta.get("link_quality"), 255),
             changed_at=stamp,
             last_seen_at=heard,
         )
@@ -589,6 +599,8 @@ class Zigbee2MqttContactSensorProvider:
             "kind": snapshot.kind.value,
             "zone_id": snapshot.zone_id,
             "last_seen": snapshot.last_seen_at.isoformat(),
+            "battery": snapshot.battery,
+            "link_quality": snapshot.link_quality,
         }
         self._save_metadata(self._metadata)
 
@@ -657,6 +669,20 @@ def _battery(value, previous: Optional[int]) -> Optional[int]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return previous
     return max(0, min(100, round(value)))
+
+
+def _stored_reading(value, ceiling: int) -> Optional[int]:
+    """A reading read back from metadata, ignored unless it is plausible."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0, min(ceiling, round(value)))
+
+
+def _link_quality(value, previous: Optional[int]) -> Optional[int]:
+    """Zigbee LQI, 0 to 255, as the coordinator scored the last hop."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return previous
+    return max(0, min(255, round(value)))
 
 
 def _is_address(value) -> bool:

@@ -204,8 +204,9 @@ through a USB stick; see [the hardware side](#the-hardware-side) below.
 **Simulated** invents them, for looking around without buying anything, and is
 available only in demo mode so that a simulator can never be mistaken for
 hardware. With it an administrator can create sensors, name and assign them to
-zones, and set their open/closed, availability and battery state by hand — all
-of which a real sensor reports for itself and none of which can be set by hand.
+zones, and set their open/closed, availability, battery and signal state by
+hand — all of which a real sensor reports for itself and none of which can be
+set by hand.
 
 Settings stays compact as the installation grows: sensor status and management
 live inside each zone rather than in one unbounded list.
@@ -267,6 +268,12 @@ reports whether the *magnet* is in contact, not whether the opening is. And a
 sensor's **battery level cannot be asked for** — it is report-only on this
 model, arrives about an hour after pairing, and a blank reading in the meantime
 is normal rather than a fault.
+
+Each sensor also shows its **signal strength**, so you can tell whether a spot
+needs a repeater before you screw anything to a frame. It is Zigbee link
+quality, shown as good, fair or weak with the raw figure in the tooltip — and
+it is not the dBm number on the box, which is the device's transmit power and
+identical for every unit of that model.
 
 Still unproved: mesh range at distance, Aqara re-parenting onto a repeater, and
 behaviour over weeks rather than hours. `docs/SENSORS.md` marks those as

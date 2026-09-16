@@ -196,6 +196,11 @@ const Nobo = (() => {
              '<circle cx="13.1" cy="13.5" r=".7" fill="currentColor" stroke="none"/><path d="M3.5 21h16.8"/>',
     window:  '<rect x="3.5" y="4" width="17" height="16" rx="1.2"/>' +
              '<path d="M12 4v16M3.5 12h17"/><path d="m5.8 9.8 3.9-3.5M14.2 17.8l4-3.6"/>',
+    /* Radio waves rather than bars: the bars would have to mean something,
+       and the number behind them is a last-hop score, not a strength. */
+    signal:  '<path d="M12 19.2h.01" stroke-width="2.4"/>' +
+             '<path d="M8.6 15.4a4.8 4.8 0 0 1 6.8 0"/>' +
+             '<path d="M5.6 12.1a9.1 9.1 0 0 1 12.8 0"/>',
   };
 
   /** An inline SVG for `name`, sized in ems so it follows the button's text. */

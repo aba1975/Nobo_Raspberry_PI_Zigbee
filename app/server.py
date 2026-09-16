@@ -1121,6 +1121,8 @@ class SensorSimulationUpdate(BaseModel):
     available: Optional[bool] = None
     battery: Optional[int] = Field(default=None, ge=0, le=100)
     clear_battery: bool = False
+    link_quality: Optional[int] = Field(default=None, ge=0, le=255)
+    clear_link_quality: bool = False
 
 
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away', 'off'}
@@ -1926,6 +1928,7 @@ def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
         "state": snapshot.state.value,
         "available": snapshot.available,
         "battery": snapshot.battery,
+        "link_quality": snapshot.link_quality,
         "changed_at": snapshot.changed_at.isoformat(),
         "last_seen_at": snapshot.last_seen_at.isoformat(),
     }
@@ -2082,7 +2085,8 @@ def _sensor_view_signature() -> tuple:
     pairing = _sensor_pairing_response()
     return (
         tuple(
-            (item.sensor_id, item.state.value, item.available, item.battery)
+            (item.sensor_id, item.state.value, item.available, item.battery,
+             item.link_quality)
             for item in sensor_snapshots
         ),
         tuple(
@@ -2973,6 +2977,8 @@ async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulati
             available=body.available,
             battery=body.battery,
             clear_battery=body.clear_battery,
+            link_quality=body.link_quality,
+            clear_link_quality=body.clear_link_quality,
         )
         await _finish_sensor_mutation()
         return _sensor_snapshot_dict(sensor)

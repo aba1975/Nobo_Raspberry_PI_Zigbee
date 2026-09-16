@@ -227,6 +227,108 @@ async def test_battery_values(rig, events, reported, expected):
     assert (await provider.list())[0].battery == expected
 
 
+# -- signal strength -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "reported, expected",
+    [(156, 156), (0, 0), (255, 255), (300, 255), (-5, 0), (86.4, 86),
+     ("strong", None), (True, None), (None, None)],
+)
+@pytest.mark.asyncio
+async def test_link_quality_values(rig, events, reported, expected):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    await z2m.report(ADDRESS, contact=True, linkquality=reported)
+
+    assert (await provider.list())[0].link_quality == expected
+
+
+@pytest.mark.asyncio
+async def test_link_quality_arrives_with_the_first_report(rig, events):
+    """Unlike battery, which a sleeping sensor may withhold for most of a day,
+    link quality rides along with every message the coordinator hears."""
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    await z2m.report(ADDRESS, contact=True, linkquality=142)
+
+    sensor = (await provider.list())[0]
+    assert sensor.link_quality == 142
+    assert sensor.battery is None
+
+
+@pytest.mark.asyncio
+async def test_a_report_without_link_quality_keeps_the_last_one(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True, linkquality=120)
+
+    await z2m.report(ADDRESS, contact=False)
+
+    assert (await provider.list())[0].link_quality == 120
+
+
+@pytest.mark.asyncio
+async def test_readings_survive_a_restart(rig, events):
+    """Battery and signal are the last measurements taken, not live facts, and
+    a sleeping sensor may not speak again for hours.  Blanking them on every
+    restart left both empty for most of a day after each update.
+
+    The contact state is deliberately *not* treated this way: whether a window
+    is open now is a safety question, and it starts unknown until heard.
+    """
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(
+        ADDRESS, contact=True, battery=63, linkquality=140,
+        last_seen=clock().isoformat(),
+    )
+
+    await provider.stop()
+    await provider.start()
+    await z2m.publish_devices()
+
+    sensor = (await provider.list())[0]
+    assert (sensor.battery, sensor.link_quality) == (63, 140)
+
+
+@pytest.mark.asyncio
+async def test_a_reading_that_was_never_taken_stays_absent(rig, events):
+    provider, z2m, _transport, _clock, store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    assert store[ADDRESS]["battery"] is None
+    assert store[ADDRESS]["link_quality"] is None
+    sensor = (await provider.list())[0]
+    assert (sensor.battery, sensor.link_quality) == (None, None)
+
+
+@pytest.mark.parametrize("stored", [300, -1, "good", True])
+def test_an_implausible_stored_reading_is_refused(tmp_path, stored):
+    import json
+
+    from sensor_persistence import SCHEMA_VERSION, load_zigbee_metadata
+
+    path = tmp_path / "zigbee_sensor_metadata.json"
+    path.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "sensors": {
+            ADDRESS: {
+                "name": "x", "kind": "window", "zone_id": None,
+                "last_seen": None, "battery": None, "link_quality": stored,
+            },
+        },
+    }), encoding="utf-8")
+
+    # _load backs up and returns the default rather than raising, so the
+    # observable result is that nothing survives a corrupt file.
+    assert load_zigbee_metadata(path) == {}
+
+
 # -- identity and metadata -------------------------------------------------
 
 
@@ -625,7 +727,7 @@ def test_zigbee_metadata_round_trips(tmp_path):
     assert load_zigbee_metadata(path) == {
         ADDRESS: {
             "name": "Kitchen window", "kind": "window", "zone_id": "3",
-            "last_seen": None,
+            "last_seen": None, "battery": None, "link_quality": None,
         }
     }
 
@@ -1107,6 +1209,8 @@ def test_metadata_written_before_last_seen_existed_still_loads(tmp_path):
     assert loaded[ADDRESS]["name"] == "Kitchen window"
     assert loaded[ADDRESS]["zone_id"] == "3"
     assert loaded[ADDRESS]["last_seen"] is None
+    assert loaded[ADDRESS]["battery"] is None
+    assert loaded[ADDRESS]["link_quality"] is None
 
 
 def test_a_nonsense_last_seen_is_refused(tmp_path):

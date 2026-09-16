@@ -561,3 +561,66 @@ def test_status_reports_the_global_override_the_zones_cannot_show(client):
 
     assert client.post("/api/global/override/home").status_code == 200
     assert client.get("/api/status").json()["global_override_mode"] is None
+
+
+def test_a_sensor_reports_its_signal_strength(client):
+    """Shown beside the battery, because both answer "will this keep working
+    where it is?" — and the signal is the one that says whether the spot needs
+    a repeater."""
+    enable(client)
+    created = add_sensor(client)
+
+    assert created["link_quality"] is not None
+    listed = client.get("/api/sensors").json()["sensors"][0]
+    assert listed["link_quality"] == created["link_quality"]
+
+
+def test_signal_strength_can_be_simulated_and_cleared(client):
+    enable(client)
+    sensor_id = add_sensor(client)["sensor_id"]
+
+    updated = client.post(
+        f"/api/sensors/{sensor_id}/simulate", json={"link_quality": 42}
+    )
+    assert updated.json()["link_quality"] == 42
+
+    cleared = client.post(
+        f"/api/sensors/{sensor_id}/simulate", json={"clear_link_quality": True}
+    )
+    assert cleared.json()["link_quality"] is None
+
+
+@pytest.mark.parametrize("bad", [-1, 256])
+def test_an_impossible_signal_reading_is_refused(client, bad):
+    enable(client)
+    sensor_id = add_sensor(client)["sensor_id"]
+
+    response = client.post(
+        f"/api/sensors/{sensor_id}/simulate", json={"link_quality": bad}
+    )
+
+    assert response.status_code == 422
+
+
+def test_signal_and_its_absence_cannot_be_asked_for_together(client):
+    enable(client)
+    sensor_id = add_sensor(client)["sensor_id"]
+
+    response = client.post(
+        f"/api/sensors/{sensor_id}/simulate",
+        json={"link_quality": 90, "clear_link_quality": True},
+    )
+
+    assert response.status_code == 400
+
+
+def test_a_changed_signal_reaches_the_browser(client):
+    """The live-update loop only announces what it can see has changed, so a
+    reading missing from its signature would never reach an open page."""
+    enable(client)
+    sensor_id = add_sensor(client)["sensor_id"]
+    before = server._sensor_view_signature()
+
+    client.post(f"/api/sensors/{sensor_id}/simulate", json={"link_quality": 51})
+
+    assert server._sensor_view_signature() != before

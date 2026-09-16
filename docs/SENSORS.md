@@ -10,7 +10,8 @@ or vendor payloads. A provider supplies:
 - an opaque stable provider ID and application sensor ID;
 - a display name, door/window type, and assigned Nobø zone ID;
 - contact state (`open`, `closed`, or `unknown`);
-- availability, battery percentage, change time, and last-seen time;
+- availability, battery percentage, signal strength, change time, and
+  last-seen time;
 - async lifecycle and CRUD/pairing operations;
 - a callback whenever a snapshot changes.
 
@@ -56,6 +57,7 @@ have to be reimplemented against hardware, blind.
 | `zigbee2mqtt/<name>` → `contact` | `state` — **`contact: true` means CLOSED.** Inverting this is the single easiest way to make the whole feature backwards while looking plausible, so it is asserted by test |
 | `zigbee2mqtt/<name>/availability` → `state` | `available` |
 | `zigbee2mqtt/<name>` → `battery` | `battery` |
+| `zigbee2mqtt/<name>` → `linkquality` | `link_quality` — Zigbee LQI, 0 to 255 |
 | `zigbee2mqtt/bridge/devices` | the device list, and `ieee_address` as the identity |
 
 Identity is the **IEEE address**, not a generated UUID and not the friendly
@@ -129,6 +131,39 @@ invent a reading or cry wolf on every new sensor.
 **A re-pairing sensor emits `device_leave` immediately before `device_joined`.**
 Metadata is therefore kept when a device leaves, so it returns to its room and
 name rather than arriving anonymous.
+
+### Signal strength, and what it is not
+
+Every report carries `linkquality`, so unlike the battery it is known from the
+device's very first message. It is Zigbee **LQI**, an integer from 0 to 255
+scored by the receiver of the *last hop* — a sensor reporting through a
+repeater is being graded on the short leg to that repeater, not on its distance
+from the Pi.
+
+The raw number means nothing to a person, and its one practical use is
+answering "does this spot need a repeater?", so the interface shows a verdict
+and keeps the number in the tooltip: **100 or more good, 50 to 99 fair, under
+50 weak**, following the usual Zigbee2MQTT reading of the scale. Only *weak* is
+coloured as a problem; a fair link is a hint.
+
+**It is not the dBm figure on the box.** Aqara and Xiaomi publish numbers such
+as ≤ 9.99 dBm and ≤ 10.5 dBm; those are each device's maximum *transmit power*,
+a fixed hardware specification identical for every unit of that model. They say
+nothing about a particular sensor in a particular cupboard, and displaying one
+would be a constant dressed up as a measurement. LQI is the reading that
+actually varies with where the sensor is put.
+
+Neither LQI nor RSSI is available for a device the coordinator cannot currently
+hear, which is why the value is remembered rather than blanked — see below.
+
+**Readings are carried across a restart; the contact state is not.** Battery
+and signal are the last measurements taken, and a sleeping contact sensor may
+not speak again for hours, so discarding them left both blank for most of a day
+after every update. They are persisted in the Zigbee metadata file alongside
+`last_seen`, and the interface already says how long ago the sensor was heard
+from, so a stale reading is never presented as a live one. Whether a window is
+open *now* is a different kind of fact — a safety question — and it still
+starts `unknown` until the hardware says otherwise.
 
 Still unverified: mesh range and reliability over distance, Aqara re-parenting
 onto a repeater, battery-reporting accuracy, and behaviour over days rather than

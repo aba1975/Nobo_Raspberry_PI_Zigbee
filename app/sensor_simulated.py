@@ -71,6 +71,7 @@ class SimulatedContactSensorProvider:
             state=ContactState.CLOSED,
             available=True,
             battery=100,
+            link_quality=180,
             changed_at=stamp,
             last_seen_at=stamp,
         )
@@ -132,10 +133,16 @@ class SimulatedContactSensorProvider:
         available: Optional[bool] = None,
         battery: Optional[int] = None,
         clear_battery: bool = False,
+        link_quality: Optional[int] = None,
+        clear_link_quality: bool = False,
     ) -> ContactSnapshot:
         current = self._get(sensor_id)
         if battery is not None and clear_battery:
             raise ValueError("battery and clear_battery cannot both be supplied")
+        if link_quality is not None and clear_link_quality:
+            raise ValueError(
+                "link_quality and clear_link_quality cannot both be supplied"
+            )
         if state is not None:
             try:
                 state = ContactState(state)
@@ -145,6 +152,10 @@ class SimulatedContactSensorProvider:
             raise ValueError("available must be a boolean")
         if battery is not None and (type(battery) is not int or not 0 <= battery <= 100):
             raise ValueError("battery must be from 0 to 100")
+        if link_quality is not None and (
+            type(link_quality) is not int or not 0 <= link_quality <= 255
+        ):
+            raise ValueError("link_quality must be from 0 to 255")
         now = self._aware_now()
         changed = state is not None and state != current.state
         updated = self._replace(
@@ -153,6 +164,9 @@ class SimulatedContactSensorProvider:
             available=available if available is not None else current.available,
             battery=None if clear_battery else (
                 battery if battery is not None else current.battery
+            ),
+            link_quality=None if clear_link_quality else (
+                link_quality if link_quality is not None else current.link_quality
             ),
             changed_at=now if changed else current.changed_at,
             last_seen_at=now,

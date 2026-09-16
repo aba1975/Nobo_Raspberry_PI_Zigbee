@@ -786,3 +786,103 @@ def test_staleness_is_not_confused_with_offline():
     assert "last heard from" in row
     assert "nothing heard since" in row
     assert row.index("!sensor.available") < row.index("sensorIsStale(sensor)")
+
+
+# -- signal strength -------------------------------------------------------
+
+
+def _render_signal(link_quality):
+    """Run the real signal badge in node and return its markup."""
+    start = CABIN.index("function sensorSignal")
+    end = CABIN.index("\n  }\n", start) + len("\n  }\n")
+    script = """
+      const esc = (v) => String(v == null ? '' : v);
+      const Nobo = { icon: (n) => `<svg data-icon="${n}"/>` };
+      %s
+      console.log(sensorSignal(%s));
+    """ % (CABIN[start:end], json.dumps({"link_quality": link_quality}))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+@pytest.mark.parametrize(
+    "lqi, word, band",
+    [
+        (255, "Good signal", "is-good"),
+        (140, "Good signal", "is-good"),
+        (100, "Good signal", "is-good"),   # on the boundary, the better side
+        (99, "Fair signal", "is-fair"),
+        (50, "Fair signal", "is-fair"),
+        (49, "Weak signal", "is-weak"),
+        (0, "Weak signal", "is-weak"),
+    ],
+)
+def test_the_signal_is_reported_as_a_verdict_not_a_number(lqi, word, band):
+    """The raw LQI means nothing to anybody; "does this need a repeater?" does."""
+    markup = _render_signal(lqi)
+    assert word in markup, markup
+    assert band in markup
+    # The number is still there for anyone who wants it, in the tooltip.
+    assert f"Link quality {lqi} of 255" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_weak_signal_says_what_to_do_about_it():
+    markup = _render_signal(20)
+    assert "repeater" in markup
+    assert "mains-powered" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_good_signal_does_not_suggest_a_repeater():
+    assert "repeater" not in _render_signal(200)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_missing_reading_is_named_rather_than_left_blank():
+    """Rendering nothing for an unknown reading reads as a broken sensor —
+    the same mistake the battery label already had to fix."""
+    markup = _render_signal(None)
+    assert "Signal unknown" in markup
+    assert "is-unknown" in markup
+
+
+def test_the_signal_badge_is_styled_from_the_theme():
+    for selector in (".sensor-signal", ".sensor-signal.is-weak",
+                     ".sensor-signal.is-unknown"):
+        assert selector in CSS
+    assert "var(--danger)" in CSS
+
+
+def test_the_signal_sits_with_the_battery_and_the_row_may_wrap():
+    """Three facts do not fit one phone row, and the alternative to wrapping
+    is squeezing the sensor's name."""
+    start = CABIN.index("function sensorRow")
+    end = CABIN.index("\n  /* One line summarising the rule", start)
+    row = CABIN[start:end]
+    assert "sensorSignal(sensor)" in row
+    assert row.index("${battery}") < row.index("${sensorSignal(sensor)}")
+    facts = CSS[CSS.index(".sensor-facts"):CSS.index(".sensor-state")]
+    assert "flex-wrap: wrap" in facts
+
+
+def test_the_tooltip_admits_the_reading_is_only_the_last_hop():
+    """A sensor reporting through a repeater is scored on the short leg to
+    that repeater, so presenting it as distance from the Pi would mislead."""
+    assert "last hop" in CABIN
+    assert "measured on the last hop" in CABIN
+
+
+def test_link_quality_can_be_simulated_but_only_where_readings_are_simulated():
+    start = CABIN.index("function editSensorSheet")
+    end = CABIN.index("\n  function ", start + 10)
+    sheet = CABIN[start:end]
+    assert "editSensorLqi" in sheet
+    assert "clear_link_quality" in sheet
+    # Inside the same demo gate as the battery field, not beside it.
+    assert sheet.index("const demo =") < sheet.index("editSensorLqi")
+    assert "${demo ? `" in sheet

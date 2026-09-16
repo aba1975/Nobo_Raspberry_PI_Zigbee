@@ -254,7 +254,7 @@ def save_sensor_settings(settings: SensorSettings, path: Optional[Path] = None) 
 
 _SENSOR_FIELDS = {
     "sensor_id", "provider_id", "name", "zone_id", "state", "available",
-    "battery", "changed_at", "last_seen_at", "kind",
+    "battery", "changed_at", "last_seen_at", "kind", "link_quality",
 }
 
 
@@ -270,6 +270,10 @@ def _parse_sensors(payload: Any) -> list[dict]:
             # Existing deployments predominantly modelled windows.  Defaulting
             # those records to window preserves them without guessing by name.
             row = {**row, "kind": "window"}
+        if "link_quality" not in row:
+            # Written before signal strength was recorded.  Absent means "not
+            # measured", which is exactly what the live value means too.
+            row = {**row, "link_quality": None}
         if set(row) != _SENSOR_FIELDS:
             raise InvalidSensorData(f"sensors[{index}] has unexpected fields")
         for key in ("sensor_id", "provider_id", "name", "changed_at", "last_seen_at"):
@@ -296,6 +300,12 @@ def _parse_sensors(payload: Any) -> list[dict]:
             type(row["battery"]) is not int or not 0 <= row["battery"] <= 100
         ):
             raise InvalidSensorData("battery must be null or an integer from 0 to 100")
+        if row["link_quality"] is not None and (
+            type(row["link_quality"]) is not int or not 0 <= row["link_quality"] <= 255
+        ):
+            raise InvalidSensorData(
+                "link_quality must be null or an integer from 0 to 255"
+            )
         result.append(dict(row))
     return result
 
@@ -337,17 +347,17 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
     for address, raw in _require_dict(doc.get("sensors"), "sensors").items():
         if not isinstance(address, str) or not address:
             raise InvalidSensorData("sensor ids must be non-empty strings")
-        # Two shapes are accepted on purpose. Installations written before
-        # last_seen was kept have three fields, and refusing those would throw
-        # away every name and room assignment on the next start.
-        fields = set(_require_dict(raw, f"sensors.{address}"))
-        if fields == {"name", "kind", "zone_id"}:
-            row = dict(raw)
-            row["last_seen"] = None
-        else:
-            row = _exact_fields(
-                raw, ("name", "kind", "zone_id", "last_seen"), f"sensors.{address}"
-            )
+        # The shape has grown twice, so missing keys are filled rather than
+        # refused: an installation written before last_seen or the readings
+        # were kept would otherwise lose every name and room assignment on the
+        # next start. Unknown keys are still an error.
+        raw = _require_dict(raw, f"sensors.{address}")
+        row = {"last_seen": None, "battery": None, "link_quality": None, **raw}
+        row = _exact_fields(
+            row,
+            ("name", "kind", "zone_id", "last_seen", "battery", "link_quality"),
+            f"sensors.{address}",
+        )
         name = row["name"]
         if not isinstance(name, str) or not name.strip() or len(name) > 80:
             raise InvalidSensorData(f"sensors.{address}.name must be 1 to 80 characters")
@@ -379,8 +389,28 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
             "kind": row["kind"],
             "zone_id": zone_id,
             "last_seen": last_seen,
+            "battery": _reading(row["battery"], 100, f"sensors.{address}.battery"),
+            "link_quality": _reading(
+                row["link_quality"], 255, f"sensors.{address}.link_quality"
+            ),
         }
     return result
+
+
+def _reading(value: Any, ceiling: int, where: str) -> Optional[int]:
+    """A whole-number hardware reading carried across a restart, or nothing.
+
+    Battery and signal strength both arrive only when the device feels like
+    speaking, which for a sleeping contact sensor can be many hours.  Throwing
+    the last one away on every restart left both blank for most of a day after
+    each update, so they are kept — honestly, because the interface shows how
+    long ago the sensor was last heard from.
+    """
+    if value is None:
+        return None
+    if type(value) is not int or not 0 <= value <= ceiling:
+        raise InvalidSensorData(f"{where} must be null or an integer from 0 to {ceiling}")
+    return value
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:

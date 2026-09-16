@@ -55,6 +55,11 @@ class ContactSnapshot:
     changed_at: datetime
     last_seen_at: datetime
     kind: SensorKind = SensorKind.WINDOW
+    #: Zigbee link quality (LQI) from the most recent report, 0 to 255, or
+    #: None if the device has not been heard from since this started.  It is
+    #: the quality of the *last hop* — for a device reporting through a
+    #: repeater it describes that leg, not the distance to the coordinator.
+    link_quality: Optional[int] = None
 
 
 class SensorEventKind(str, Enum):
