@@ -285,6 +285,44 @@ Four rules, each learned from a bug:
 
 Also worth knowing:
 
+- **The hub keeps its own clock, and only this application sets it.** The
+  `HELLO` handshake carries `yyyyMMddHHmmss` and is sent **once, at connect**
+  (`pynobo` line 648); the keep-alive `HANDSHAKE` carries no time, and `H05`
+  reports serial, versions and production date but *no* clock — so the hub's
+  time cannot be read back, and drift cannot be observed from here.
+
+  The consequence is seasonal. The hub runs the week profile itself, in wall
+  clock. Norway is UTC+1 in winter and UTC+2 in summer, so at each transition a
+  connection that simply stays up leaves the hub an hour out until something
+  forces a fresh `HELLO` — in practice the hub's own ~18-hourly reboot. Spring
+  is the one that matters: Comfort would start an hour *late*, in a building
+  whose whole purpose is not being cold.
+
+  `resync_hub_clock_if_season_changed()` handles it: the offset in force when
+  `HELLO` was sent is recorded beside the connection, the reconnect loop
+  compares it with the offset now, and a change forces one reconnect so the hub
+  is told the new local time. The new offset is claimed *before* the attempt, so
+  a reconnect that fails does not retry every five seconds until the next
+  season — the hub's own reboot stays the backstop it always was.
+
+  This is the one thing in the codebase that displaces a *healthy* hub client on
+  purpose, which is otherwise precisely the mistake rule 4 exists to prevent. It
+  therefore goes through `connect_to_hub_sync(force=True)`, the same guarded
+  path a configuration change uses, which serialises the attempt and hands
+  whatever it replaces to `stop_hub_client()`. `tests/test_hub_clock_resync.py`
+  asserts that, and the existing leak tests still hold.
+
+  The premise is still unproved: it rests on the hub adopting the `HELLO`
+  timestamp, which is the usual understanding for a device with no RTC or NTP
+  but is not something this repository has demonstrated, and the hub reports no
+  clock so it cannot be checked. The mitigation costs one reconnect twice a
+  year, which is cheap enough to be worth it even if the premise is wrong.
+
+  Everything on *this* side of the wire is already correct and was checked:
+  `local_now()` is `datetime.now().astimezone()` and follows DST; the away
+  schedule stores absolute ISO-8601 instants and compares them in UTC; sensor
+  delays are durations in epoch seconds, which DST cannot move.
+
 - pynobo has no handling for `Y00`/`Y01`/`Y03`/`Y04`, so device search and
   pairing go entirely through `HubProtocolTap`.- Names travel with U+00A0 instead of spaces. pynobo encodes on write but does
   not decode on read; `decode_hub_name()` / `encode_hub_name()` handle both.

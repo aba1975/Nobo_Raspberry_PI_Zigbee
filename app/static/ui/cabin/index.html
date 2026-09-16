@@ -53,6 +53,13 @@
     <!-- The one thing a cabin owner does most: leave, and come back. -->
     <section class="trip" id="trip" aria-labelledby="tripHeading">
       <h1 class="trip-eyebrow" id="tripHeading">Cabin</h1>
+
+      <!-- Shown only when the house is away with something still open. It is
+           first in the card because that is the one thing worth turning the
+           car around for. -->
+      <div class="trip-alert" id="tripAlert" role="alert" hidden></div>
+      <div class="trip-alert is-security" id="passwordAlert" role="alert" hidden></div>
+
       <p class="trip-state" id="tripState">Loading…</p>
       <p class="trip-detail" id="tripDetail"></p>
 

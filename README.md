@@ -8,15 +8,25 @@ been commissioned against real hardware — a live Nobø Eco Hub running 7 zones
 what the protocol documentation implies. Where the two disagree, this README says
 so.
 
+## Installing on a Pi
+
+**→ [docs/INSTALL.md](docs/INSTALL.md)** walks through it from a blank SD card,
+for somebody who has not done this before. Four commands, about an hour, most of
+it waiting. It starts in demo mode so there is something to look at before the
+hub is involved, and it sets up the Zigbee sensors too if you have the stick.
+
+Everything below is reference: the how and the why, for when you want to know
+what a setting does or why something behaves the way it does.
+
 ## Try it first, without a hub
 
 You do not need a Nobø hub to see what this is. With no configuration at all the
-application starts in **demo mode**, against a simulated house of 8 zones and 11
+application starts in **demo mode**, against a simulated house of 12 zones and 11
 heaters:
 
 ```bash
-git clone https://github.com/aba1975/Nobo_Raspberry_PI.git
-cd Nobo_Raspberry_PI
+git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git
+cd Nobo_Raspberry_PI_Zigbee
 docker compose up -d          # no .env needed — the default serial means demo
 ```
 
@@ -46,7 +56,7 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 
 - [What This Project Does](#what-this-project-does) · [Features](#features)
 - **Installing:** [Prerequisites](#prerequisites) · [1 Prepare the Pi](#step-1-prepare-the-raspberry-pi) · [2 SSH](#step-2-enable-and-use-ssh) · [3 Docker](#step-3-install-docker-and-docker-compose) · [4 Clone](#step-4-clone-the-repository) · [5 Configure](#step-5-configure-environment-variables) · [6 Start](#step-6-start-the-system) · [7 Start on reboot](#step-7-make-it-start-on-reboot) · [8 Verify](#step-8-verify-it-is-working)
-- **Living with it:** [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
+- **Living with it:** [Contact sensors](#contact-sensors-simulated-provider) · [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
 - **Running it:** [HTTPS](#https-on-your-own-network) · [Updating](#updating-the-software) · [Backups](#backing-up-configuration-and-data) · [Ports](#ports) · [Timezone](#timezone) · [Security notes](#security-notes)
 - **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure) · [Reference documents](#reference-documents)
 
@@ -69,6 +79,16 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 
 Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 
+### Door and window sensors (optional)
+
+| Feature | What it does |
+| --- | --- |
+| **Zigbee contact sensors** | Pair door and window sensors to the Pi with a Zigbee USB stick. Off unless you ask for it: no dongle, no broker and no extra containers for a heating-only installation. |
+| **Left-open warnings** | A room says which of its openings is open, and how many. After a delay you choose — immediately, or up to an hour — it becomes a warning you cannot miss. Offline is shown as its own state, because "I cannot tell you" is not the same as "it is shut". |
+| **Heating when something is open** | Optionally put the room into Away, Eco or Comfort, or hand it back to its schedule, while a contact stays open. Only an override this feature applied is ever released, and Comfort is never sent to "put things back". |
+| **Leaving with something open** | If the house is on Away and anything is open, the front page says so and names the rooms, with no delay — being away is what changes the stakes. |
+| **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. |
+
 ### Heating control
 
 | Feature | What it does |
@@ -86,6 +106,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 | **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
+| **Contact sensors** | Optional and hidden until an administrator enables it. Demo mode provides persisted simulated door/window sensors, prominent left-open warnings and conservative delayed heating actions. See [Contact sensors](#contact-sensors-simulated-provider). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
 adjustable set point. Their temperature is set on the device itself, and the
@@ -107,7 +128,7 @@ interface says so rather than pretending the change worked.
 | --- | --- |
 | **Name your system** | Call it what you call the place — "The Lodge", "Main Street 12" — and the whole app follows, sign-in page included. See [Naming Your System](#naming-your-system). |
 | **Hub settings in the browser** | Switch between demo mode and your real hub, and set the hub serial and IP, without editing files or using SSH. See [Changing Hub Settings From the Web Interface](#changing-hub-settings-from-the-web-interface). |
-| **Demo mode** | A full simulated house with eight zones, so you can try everything before a hub is connected. |
+| **Demo mode** | A full simulated house with twelve zones, so you can try everything before a hub is connected. |
 | **Automatic start** | Starts on boot and restarts by itself if it stops. |
 | **Backup and restore** | A script that captures your settings and data. |
 
@@ -123,10 +144,12 @@ interface says so rather than pretending the change worked.
 | Scheduled away | ✅ | ✅ |
 | View weekly schedules | ✅ | ✅ |
 | Edit weekly schedules | ✅ | ✅ |
+| Add, rename, share and delete schedules | ✅ | ✅ |
 | Add or delete a zone | ✅ | ✅ |
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
+| **Contact sensors** | ✅ simulated provider | ❌ provider not implemented yet |
 
 **Everything on that list has now been run against a real hub**, on a house of
 7 zones and 11 heaters. The exceptions are the two marked above.
@@ -155,6 +178,77 @@ You do not have to remember this table. The application asks the server what it
 can do (`GET /api/capabilities`) and greys out anything the current mode cannot
 honour, with the reason as the tooltip. Nothing you can click will fail with a
 "not implemented" error.
+
+### Contact sensors (simulated provider)
+
+Contact sensors are off by default and completely hidden until an administrator
+enables them in Cabin under **Settings**. In demo mode an administrator can
+pair simulated door/window sensors, name and assign them to zones, and change
+their open/closed, availability and battery state. Settings stays compact as
+the installation grows: sensor status and management live inside each zone.
+No broker or dongle runs.
+
+Each room chooses a left-open warning delay and, separately, one thing to do
+while a contact of its own is open: set it to Away, Eco or Comfort, return it
+to its schedule, or do nothing. A warning stays until every assigned sensor
+explicitly reports closed; unknown and unavailable are shown as their own
+states and never guessed to mean closed.
+
+**While something is open, the room runs whichever is colder** — what the rule
+asks for, or what the house is doing. Off is colder than Away, Away than Eco,
+Eco than Comfort. So an Eco rule takes a Comfort room down to Eco, leaves an
+Away room on Away, and — if you choose Comfort for the house while the window
+is still open — puts the room straight back on Eco. Choose Away and Away wins.
+The per-room **Override colder modes** switch skips the comparison and lets the
+rule hold until the contact closes.
+
+On closure the automation cancels exactly the override it created and nothing
+else, so the room returns to whatever the current global mode or week profile
+says — it never sends Comfort to "put things back".
+
+**Leaving with something open gets its own warning**, at the top of the front
+page rather than on the room. If the house is on Away — by the button or by a
+scheduled away period — and any contact is open, the card about leaving says so
+and names the rooms. There is no delay on it: being away is what changes the
+stakes, not how long the window has been open. A sensor that has gone offline
+is listed too, because "I cannot tell you" matters just as much once you have
+driven off.
+
+A zone does not need a heater to be monitored. Add an empty zone and assign a
+sensor to it; warnings work normally and heating actions stay unavailable.
+
+### The hardware side
+
+Real sensors work. An Aqara MCCGQ11LM contact sensor is paired to a SONOFF
+ZBDongle-P and reporting through the whole chain — radio, Zigbee2MQTT, MQTT,
+the application, the interface — and the payloads it sent are recorded in
+[`docs/SENSORS.md`](docs/SENSORS.md) rather than paraphrased.
+
+Zigbee2MQTT and a broker run as **their own containers**, behind a Compose
+profile in the same way HTTPS is. A Nobø-only installation starts neither and
+needs no dongle:
+
+```bash
+# .env
+COMPOSE_PROFILES=zigbee
+NOBO_ZIGBEE_ADAPTER=/dev/serial/by-id/usb-...-if00-port0
+```
+
+The radio stack stays out of the process that owns the hub socket, deliberately.
+If Zigbee falls over, sensors report themselves unavailable — which the
+interface says plainly — and the heating carries on. That separation is the
+whole reason for the extra container, and it is argued out in `docs/SENSORS.md`.
+
+Two things that would otherwise waste an afternoon, both established on
+hardware. **Zigbee2MQTT's `contact: true` means closed**, because the device
+reports whether the *magnet* is in contact, not whether the opening is. And a
+sensor's **battery level cannot be asked for** — it is report-only on this
+model, arrives about an hour after pairing, and a blank reading in the meantime
+is normal rather than a fault.
+
+Still unproved: mesh range at distance, Aqara re-parenting onto a repeater, and
+behaviour over weeks rather than hours. `docs/SENSORS.md` marks those as
+untested rather than quietly implying otherwise.
 
 #### These used to be marked "does not work with a real hub"
 
@@ -277,6 +371,15 @@ Because they are shared, editing matters in two different places:
 The hub's own built-in schedules cannot be changed. It accepts the command and
 silently ignores it, so the app refuses up front rather than reporting a success
 that did not happen.
+
+**Demo mode keeps schedules the same way**, in `data/demo_week_profiles.json`:
+named profiles that zones point at, with the same sharing and copy-on-write
+rules. It used to keep one week per zone and answer every schedule request with
+a success it did not act on — adding a schedule in Settings appeared to work and
+changed nothing — which is exactly the sort of place demo mode being kinder than
+the hardware hides a real defect. An existing demo house migrates on first
+start: a room whose week had been edited gets a schedule of its own, named after
+the room, and the rest follow the built-in one.
 
 When you save a schedule, the whole week is sent at once and it must describe
 every minute of every day:
@@ -798,7 +901,7 @@ Both commands should print version information. If you instead see `permission d
 ## Step 4: Clone the Repository
 
 ```bash
-sudo git clone https://github.com/aba1975/Nobo_Raspberry_PI.git /opt/nobo-control
+sudo git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git /opt/nobo-control
 sudo chown -R $USER:$USER /opt/nobo-control
 cd /opt/nobo-control
 ```

@@ -103,6 +103,34 @@ if [ -n "$CADDY_VOLUME" ]; then
     fi
 fi
 
+# The Zigbee network key and device database.
+#
+# Losing this does not lose the heating, but it does mean walking round the
+# building with a paperclip re-pairing every sensor by hand — and Aqara devices
+# have to be put into pairing mode individually, at the door or window they are
+# stuck to.
+#
+# Optional for the same reason as Caddy's: most installations have no Zigbee at
+# all, and its absence must not fail a backup that has the heating data in it.
+ZIGBEE_VOLUME=$(docker inspect nobo-zigbee2mqtt \
+    --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' \
+    2>/dev/null || true)
+
+if [ -z "$ZIGBEE_VOLUME" ]; then
+    MATCHES=$(docker volume ls -q 2>/dev/null | grep -E '(^|_)zigbee2mqtt-data$' || true)
+    if [ "$(echo "$MATCHES" | grep -c .)" = "1" ]; then
+        ZIGBEE_VOLUME="$MATCHES"
+    fi
+fi
+
+if [ -n "$ZIGBEE_VOLUME" ]; then
+    MOUNT=$(docker volume inspect "$ZIGBEE_VOLUME" --format '{{.Mountpoint}}' 2>/dev/null || true)
+    if [ -n "$MOUNT" ] && [ -d "$MOUNT" ]; then
+        cp -r "$MOUNT" "$TMPDIR/backup/zigbee2mqtt-data"
+        echo "  Backed up: Zigbee network and paired devices ($ZIGBEE_VOLUME)"
+    fi
+fi
+
 # Create tarball
 tar -czf "$BACKUP_FILE" -C "$TMPDIR" backup
 rm -rf "$TMPDIR"

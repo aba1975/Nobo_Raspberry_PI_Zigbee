@@ -35,6 +35,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import config_persistence
 import server
+from sensor_automation import SensorAutomation
+from sensor_persistence import AutomationZoneState, SensorSettings, ZoneSensorPolicy
 
 TEST_SESSION_ID = "pytest-fixed-session-id"
 
@@ -273,6 +275,43 @@ async def test_one_failing_zone_does_not_strand_the_others(monkeypatch):
     released = await server._release_zone_overrides_for_global("home")
 
     assert released == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_global_change_preserves_sensor_ownership_for_independent_zone(monkeypatch):
+    original_settings = server.sensor_settings
+    original_automation = server.sensor_automation
+    original_overrides = set(server.DEMO_ZONE_OVERRIDES)
+    original_zones = copy.deepcopy(server.DEMO_ZONES)
+    try:
+        server.sensor_settings = SensorSettings(
+            enabled=True,
+            zones={"1": ZoneSensorPolicy(action_when_open="eco")},
+        )
+        server.sensor_automation = SensorAutomation(
+            states={
+                "1": AutomationZoneState(
+                    open_started_at=1,
+                    owned_action="eco",
+                )
+            }
+        )
+        target = next(zone for zone in server.DEMO_ZONES if zone["zone_id"] == "1")
+        target["override_allowed"] = "0"
+        target["mode"] = "eco"
+        server.DEMO_ZONE_OVERRIDES.add("1")
+
+        released = await server._release_zone_overrides_for_global("home")
+
+        assert "1" not in released
+        assert server.sensor_automation.states["1"].owned_action is not None
+        assert "1" in server.DEMO_ZONE_OVERRIDES
+    finally:
+        server.sensor_settings = original_settings
+        server.sensor_automation = original_automation
+        server.DEMO_ZONE_OVERRIDES.clear()
+        server.DEMO_ZONE_OVERRIDES.update(original_overrides)
+        server.DEMO_ZONES[:] = original_zones
 
 
 # ---------------------------------------------------------------------------

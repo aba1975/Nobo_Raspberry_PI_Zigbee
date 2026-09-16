@@ -327,3 +327,75 @@ class TestTheProxyDoesNotWeakenTheApplication:
     def test_the_gitignore_covers_the_env_file(self):
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         assert re.search(r"^\.env$", gitignore, re.M), ".env must not be committable"
+
+
+class TestTheClock:
+    """A timezone set to the empty string is read as UTC by the C library.
+
+    That is the shape of QA defect D-06, where a "07:00" schedule fired at the
+    wrong hour. The application must therefore keep following /etc/localtime
+    with no TZ at all, while Zigbee2MQTT — which stamps its own log in UTC
+    regardless — may have one, but never an empty one.
+    """
+
+    def test_the_application_still_sets_no_timezone(self, compose):
+        app = compose["services"]["nobo-web-control"]
+        env = app.get("environment") or []
+        assert not any(str(item).startswith("TZ=") for item in env)
+        mounts = [str(item) for item in app.get("volumes") or []]
+        assert any("/etc/localtime" in item for item in mounts)
+
+    def test_no_service_can_end_up_with_an_empty_timezone(self, compose):
+        for name, service in compose["services"].items():
+            for item in service.get("environment") or []:
+                if not str(item).startswith("TZ="):
+                    continue
+                value = str(item).split("=", 1)[1]
+                assert value, f"{name} sets an empty TZ, which means UTC"
+                if value.startswith("${"):
+                    assert ":-" in value and not value.endswith(":-}"), (
+                        f"{name} has a TZ that defaults to empty"
+                    )
+
+    def test_zigbee2mqtt_can_be_given_the_local_zone(self, compose, env_example):
+        env = compose["services"]["zigbee2mqtt"].get("environment") or []
+        assert any(str(item).startswith("TZ=") for item in env)
+        assert "NOBO_TZ" in env_example
+
+
+class TestTheClockFollowsTheSeason:
+    """Norway is UTC+1 in winter and UTC+2 in summer.
+
+    Every wall-clock decision this application makes has to move with that, and
+    the ways it could silently fail to are all cheap to pin down.
+    """
+
+    def test_local_now_follows_the_system_zone(self):
+        import inspect
+        import server
+
+        source = inspect.getsource(server.local_now)
+        # .astimezone() picks up the offset in force *now*, so a DST change
+        # needs no restart and no configuration.
+        assert "datetime.now().astimezone()" in source
+        assert "utcnow" not in source
+
+    def test_the_away_schedule_stores_instants_not_wall_clock(self):
+        import inspect
+        import away_schedule
+
+        source = inspect.getsource(away_schedule)
+        # "Away until 17:00 on Sunday" is stored as an absolute instant, so an
+        # hour appearing or vanishing overnight cannot move it.
+        assert "timezone.utc" in source
+        assert "fromisoformat" in source
+
+    def test_sensor_delays_are_durations(self):
+        import inspect
+        import sensor_automation
+
+        source = inspect.getsource(sensor_automation)
+        # Epoch seconds, which DST does not touch: only the local rendering of
+        # an instant changes, never the instant itself.
+        assert "clock: Callable[[], float] = time.time" in source
+        assert "strftime" not in source

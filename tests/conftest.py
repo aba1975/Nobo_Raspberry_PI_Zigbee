@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import auth
 import config_persistence
+import sensor_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +71,11 @@ def clean_zone_override_state(tmp_path, monkeypatch):
     )
     server.DEMO_ZONE_OVERRIDES.clear()
     server._away_exception_zones_applied.clear()
+    server.demo_global_mode = "normal"
     yield
     server.DEMO_ZONE_OVERRIDES.clear()
     server._away_exception_zones_applied.clear()
+    server.demo_global_mode = "normal"
 
 
 @pytest.fixture(autouse=True)
@@ -119,4 +122,23 @@ def redirect_persistence(tmp_path, monkeypatch):
     # DATA_DIR alone leaves them pointing at the real data directory. Each one
     # a test can write has to be redirected by name.
     monkeypatch.setattr(config_persistence, "SITE_FILE", tmp_path / "site.json")
+    monkeypatch.setattr(sensor_persistence, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sensor_persistence, "SENSOR_SETTINGS_FILE", tmp_path / "sensor_settings.json")
+    monkeypatch.setattr(
+        sensor_persistence,
+        "SIMULATED_SENSORS_FILE",
+        tmp_path / "simulated_contact_sensors.json",
+    )
+    monkeypatch.setattr(
+        sensor_persistence,
+        "SENSOR_AUTOMATION_STATE_FILE",
+        tmp_path / "sensor_automation_state.json",
+    )
+    # The account store too. It was left out, and a test that changed a
+    # password or a role therefore rewrote the real users.json and broke every
+    # test after it — the whole suite failing on an admin check because one
+    # test earlier had demoted the account the shared session belongs to.
+    monkeypatch.setattr(auth, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
+    auth.init_user_store()
     yield

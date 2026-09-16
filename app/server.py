@@ -14,8 +14,8 @@ import math
 import threading
 import time
 from collections import deque
-from typing import Dict, List, Optional, Any, Set
-from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any, Set, Mapping
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,15 +24,29 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import copy
 import pynobo
 import auth
 import away_schedule
 import config_persistence
+import demo_week
 import notifications
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
+import sensor_persistence
+from sensor_automation import (
+    AutomationResult as SensorAutomationResult,
+    ConditionEventKind as SensorConditionEventKind,
+    HeatingZone,
+    SensorAutomation,
+)
+from sensor_persistence import ActionWhenOpen, SensorSettings, ZoneSensorPolicy
+from sensor_provider import (
+    ContactSnapshot, ContactState, PairingStatus, ProviderUnavailable, SensorKind,
+    SensorNotFound, create_provider,
+)
+from sensor_zigbee2mqtt import SensorRemovalFailed
 
 # Configure logging
 logging.basicConfig(
@@ -58,7 +72,7 @@ DEMO_MODE = os.environ.get('NOBO_DEMO', '').lower() in ('true', '1', 'yes') or N
 HUB_CONFIG_SOURCE = "environment"
 DEMO_SOFTWARE_VERSION = "1.4.0 (Simulated)"  # Software version shown in demo mode
 
-# Demo mode zone data - 8 grouped zones with realistic Norwegian indoor temperatures
+# Demo mode zone data with realistic Norwegian indoor temperatures.
 # Hardcoded defaults (used on first run or if the persisted file is missing/corrupt).
 #
 # The temperatures here are deliberately sparse, because that is the truth about
@@ -113,11 +127,11 @@ _DEFAULT_DEMO_ZONES = [
     },
     {
         "zone_id": "4",
-        "name": "Upstairs Bedrooms",
+        "name": "Left Bedroom",
         "icon": "🛏️",
-        "rooms": ["North", "South"],
-        "components": ["160004028112", "160004028113"],  # R80 RDC 700 devices
-        "component_names": ["North Room Heater", "South Room Heater"],
+        "rooms": ["Left Bedroom"],
+        "components": ["160004028113"],  # South room R80, mapped to the left bedroom
+        "component_names": ["Left Bedroom Heater"],
         "current_temp": None,  # R80 has no built-in temperature sensor
         "comfort_temp": 21.0,
         "eco_temp": 18.0,
@@ -126,14 +140,12 @@ _DEFAULT_DEMO_ZONES = [
     },
     {
         "zone_id": "5",
-        "name": "Living Area",
-        "icon": "🍳🛋️",
-        "rooms": ["Kitchen", "Living Room"],
-        "components": ["160004028114", "160004028115", "234000012006"],  # 2x R80 RDC 700 + an SW4 panel
-        "component_names": ["Kitchen Heater", "Living Room Heater", "Living Room Panel"],
-        # The only measured room in the demo house, because the SW4 is the only
-        # model in the range that carries a thermometer.
-        "current_temp": 20.4,
+        "name": "Kitchen",
+        "icon": "🍳",
+        "rooms": ["Kitchen"],
+        "components": ["160004028114"],
+        "component_names": ["Kitchen Heater"],
+        "current_temp": None,
         "comfort_temp": 21.0,
         "eco_temp": 19.0,
         "mode": "normal",
@@ -154,11 +166,11 @@ _DEFAULT_DEMO_ZONES = [
     },
     {
         "zone_id": "7",
-        "name": "Downstairs Bedrooms",
+        "name": "Master Bedroom",
         "icon": "🛏️",
-        "rooms": ["Master", "North", "South"],
-        "components": ["160004028117", "160004028118", "160004028119"],  # R80 RDC 700 devices
-        "component_names": ["Master Heater", "North Heater", "South Heater"],
+        "rooms": ["Master Bedroom"],
+        "components": ["160004028117"],
+        "component_names": ["Master Bedroom Heater"],
         "current_temp": None,  # R80 has no built-in temperature sensor
         "comfort_temp": 20.5,
         "eco_temp": 18.0,
@@ -175,6 +187,60 @@ _DEFAULT_DEMO_ZONES = [
         "current_temp": None,  # neither model reports a temperature
         "comfort_temp": 22.0,
         "eco_temp": 18.0,
+        "mode": "normal",
+        "override_id": None
+    },
+    {
+        "zone_id": "9",
+        "name": "Bunk Room by Entrance",
+        "icon": "🛏️",
+        "rooms": ["Bunk Room by Entrance"],
+        "components": ["160004028118"],
+        "component_names": ["Bunk Room by Entrance Heater"],
+        "current_temp": None,
+        "comfort_temp": 20.5,
+        "eco_temp": 18.0,
+        "mode": "eco",
+        "override_id": None
+    },
+    {
+        "zone_id": "10",
+        "name": "Bunk Room by Large Bathroom",
+        "icon": "🛏️",
+        "rooms": ["Bunk Room by Large Bathroom"],
+        "components": ["160004028119"],
+        "component_names": ["Bunk Room by Large Bathroom Heater"],
+        "current_temp": None,
+        "comfort_temp": 20.5,
+        "eco_temp": 18.0,
+        "mode": "eco",
+        "override_id": None
+    },
+    {
+        "zone_id": "11",
+        "name": "Right Bedroom",
+        "icon": "🛏️",
+        "rooms": ["Right Bedroom"],
+        "components": ["160004028112"],
+        "component_names": ["Right Bedroom Heater"],
+        "current_temp": None,
+        "comfort_temp": 21.0,
+        "eco_temp": 18.0,
+        "mode": "eco",
+        "override_id": None
+    },
+    {
+        "zone_id": "12",
+        "name": "Living Room",
+        "icon": "🛋️",
+        "rooms": ["Living Room"],
+        "components": ["160004028115", "234000012006"],
+        "component_names": ["Living Room Heater", "Living Room Panel"],
+        # The only measured room in the demo house, because the SW4 is the only
+        # model in the range that carries a thermometer.
+        "current_temp": 20.4,
+        "comfort_temp": 21.0,
+        "eco_temp": 19.0,
         "mode": "normal",
         "override_id": None
     },
@@ -307,17 +373,69 @@ setpoint_guard = setpoint_guard_mod.SetpointGuard(
 command_log: deque = deque(maxlen=500)
 
 # In-memory store for demo-mode schedule changes (keyed by zone_id).
-# Populated from disk on startup; persisted to disk on every write.
+#
+# Loaded flat here because the grouped-room migration further down still works
+# in these terms. It is replaced by a view derived from the week profiles once
+# that migration has run and the house has settled into its final shape.
 demo_schedules: Dict[str, dict] = config_persistence.load_demo_schedules()
 
 # Zone icons are this app's own idea — the hub does not store them — so they are
 # kept locally and apply in both demo and real-hub mode. Keyed by zone id.
 zone_icons: Dict[str, str] = config_persistence.load_zone_icons()
 
-# Tracks whether the current global mode was set manually or by the away schedule.
-# Loaded from disk on startup; persisted to disk on every change.
+# Optional contact sensors. The provider is started only when the persisted
+# master switch is on; disabled installations pay no runtime or UI cost.
+sensor_settings: SensorSettings = sensor_persistence.load_sensor_settings()
+sensor_provider = None
+sensor_unsubscribe = None
+sensor_snapshots: List[ContactSnapshot] = []
+sensor_zone_aggregates: Dict[str, Any] = {}
+sensor_wakeup: Optional[asyncio.Event] = None
+sensor_evaluation_lock = asyncio.Lock()
+
+# ---------------------------------------------------------------------------
+# What the simulated hub is holding
+# ---------------------------------------------------------------------------
+# A real hub keeps two kinds of override — one global, one per zone — and ranks
+# the zone one above the global one. Demo mode has to keep the same two facts or
+# it cannot answer the question every release asks: "if this zone lets go, what
+# does it fall back to?"
+#
+# Both live in server_state.json rather than in the zone records, because they
+# describe the hub rather than the room. Getting this wrong is what made a
+# closing window drop a globally-Away house back to its Comfort week profile.
 _server_state = config_persistence.load_server_state()
 global_mode_source: str = _server_state.get("global_mode_source", "manual")  # "manual" | "schedule"
+demo_global_mode: str = (
+    _server_state.get("demo_global_mode")
+    if _server_state.get("demo_global_mode") in {"normal", "away", "eco", "comfort"}
+    else "normal"
+)
+
+
+def _save_demo_hub_state() -> None:
+    """Write down what the simulated hub is holding, so a restart still knows."""
+    config_persistence.save_server_state({
+        "global_mode_source": global_mode_source,
+        "demo_global_mode": demo_global_mode,
+        "demo_zone_overrides": sorted(DEMO_ZONE_OVERRIDES),
+    })
+
+
+
+class SensorHeatingCommands:
+    async def apply_override(self, zone_id: str, action: ActionWhenOpen) -> None:
+        await _sensor_override_command(zone_id, action.value)
+
+    async def release_override(self, zone_id: str) -> None:
+        await _sensor_override_command(zone_id, "normal")
+
+
+sensor_automation = SensorAutomation(
+    states=sensor_persistence.load_automation_state(),
+    save=sensor_persistence.save_automation_state,
+    commands=SensorHeatingCommands(),
+)
 
 
 def local_now() -> datetime:
@@ -405,6 +523,172 @@ def model_has_temp_sensor(serial: str) -> bool:
         return False
     model = pynobo.nobo.MODELS.get(serial_clean[:3])
     return bool(model and getattr(model, "has_temp_sensor", False))
+
+
+def _repair_split_demo_side_data(split_from: Mapping[str, str]) -> bool:
+    """Finish schedule and exception copies even after an interrupted migration."""
+    changed = False
+    for target_id, source_id in split_from.items():
+        if source_id in demo_schedules and target_id not in demo_schedules:
+            demo_schedules[target_id] = copy.deepcopy(demo_schedules[source_id])
+            changed = True
+    if changed:
+        config_persistence.save_demo_schedules(demo_schedules)
+
+    for load, save in (
+        (config_persistence.load_away_exceptions, config_persistence.save_away_exceptions),
+        (
+            config_persistence.load_away_exceptions_applied,
+            config_persistence.save_away_exceptions_applied,
+        ),
+    ):
+        configured = set(load())
+        expanded = set(configured)
+        for target_id, source_id in split_from.items():
+            if source_id in configured:
+                expanded.add(target_id)
+        if expanded != configured:
+            save(sorted(expanded))
+            changed = True
+    return changed
+
+
+def _migrate_grouped_demo_rooms() -> bool:
+    """Split the original bundled demo fixture without touching custom houses."""
+    by_id = {str(zone.get("zone_id")): zone for zone in DEMO_ZONES}
+    defaults = {str(zone["zone_id"]): zone for zone in _DEFAULT_DEMO_ZONES}
+    split_from = {"9": "7", "10": "7", "11": "4", "12": "5"}
+    split_components = {
+        zone_id: set(defaults[zone_id]["components"])
+        for zone_id in ("4", "5", "7", "9", "10", "11", "12")
+    }
+    if set(by_id) == {str(i) for i in range(1, 13)} and all(
+        (
+            set(by_id[zone_id].get("components", [])) == components
+            or (
+                zone_id == "12"
+                and set(by_id[zone_id].get("components", []))
+                == {"160004028115"}
+            )
+        )
+        for zone_id, components in split_components.items()
+    ):
+        return _repair_split_demo_side_data(split_from)
+
+    expected = {
+        "4": {"160004028112", "160004028113"},
+        "7": {"160004028117", "160004028118", "160004028119"},
+    }
+    if set(by_id) != {str(i) for i in range(1, 9)}:
+        return False
+    if any(set(by_id[zone_id].get("components", [])) != components
+           for zone_id, components in expected.items()):
+        return False
+    living_components = set(by_id["5"].get("components", []))
+    if living_components not in (
+        {"160004028114", "160004028115"},
+        {"160004028114", "160004028115", "234000012006"},
+    ):
+        return False
+
+    replacements: Dict[str, dict] = {}
+    for target_id, source_id in {
+        "4": "4", "5": "5", "7": "7", **split_from
+    }.items():
+        source = copy.deepcopy(by_id[source_id])
+        target = defaults[target_id]
+        source_names = dict(zip(
+            source.get("components", []),
+            source.get("component_names", []),
+        ))
+        default_names = dict(zip(target["components"], target["component_names"]))
+        target_components = [
+            component for component in target["components"]
+            if component in source.get("components", [])
+        ]
+        source.update({
+            "zone_id": target["zone_id"],
+            "name": target["name"],
+            "icon": target["icon"],
+            "rooms": copy.deepcopy(target["rooms"]),
+            # Some early canonical demo fixtures predate the optional Living
+            # Room panel. Split only components that actually exist.
+            "components": target_components,
+            "component_names": [
+                source_names.get(component, default_names[component])
+                for component in target_components
+            ],
+            # One grouped override cannot safely be claimed by several new
+            # zones. The mode remains visible, but ownership starts clean.
+            "override_id": None,
+            # Only the room containing the SW4 can retain the grouped zone's
+            # measured temperature.
+            "current_temp": (
+                by_id[source_id].get("current_temp")
+                if any(model_has_temp_sensor(c) for c in target["components"])
+                else None
+            ),
+        })
+        replacements[target_id] = source
+
+    DEMO_ZONES[:] = [
+        replacements.get(str(zone["zone_id"]), zone)
+        for zone in DEMO_ZONES
+    ] + [replacements[zone_id] for zone_id in ("9", "10", "11", "12")]
+
+    # Side stores go first. If saving zones is interrupted, the next run can
+    # safely repeat this work; if zones already landed, it repairs missing data.
+    _repair_split_demo_side_data(split_from)
+    config_persistence.save_demo_zones(DEMO_ZONES)
+    logger.info("Demo zones: migrated grouped bedrooms and living area into individual rooms")
+    return True
+
+
+_migrate_grouped_demo_rooms()
+
+
+# The simulated hub's week profiles, and which zone follows which.
+#
+# A hub does not store "this zone's week": it stores named week profiles, and
+# every zone points at one. Demo mode used to keep a flat per-zone map instead
+# and stub out every profile operation, so a schedule added in Settings
+# reported success and vanished. This is the source of truth now, and
+# ``demo_schedules`` becomes the flat view derived from it — kept under that
+# name because the schedule lookup, the away logic and several tests read it.
+#
+# Built after the migrations above, so it sees the house in its final shape,
+# and migrated from the per-zone map the first time: a room whose week had been
+# edited gets a profile of its own, which is what it would have had if profiles
+# had been modelled here from the start.
+_saved_week_profiles = config_persistence.load_demo_week_profiles()
+demo_week_profiles: demo_week.DemoWeekProfiles = (
+    demo_week.DemoWeekProfiles.from_dict(
+        _saved_week_profiles, default_schedule=DEFAULT_DEMO_SCHEDULE
+    )
+    if _saved_week_profiles is not None
+    else demo_week.DemoWeekProfiles.migrated(
+        demo_schedules,
+        default_schedule=DEFAULT_DEMO_SCHEDULE,
+        zone_name=lambda zone_id: next(
+            (z.get("name", f"Zone {zone_id}") for z in DEMO_ZONES
+             if str(z.get("zone_id")) == str(zone_id)),
+            f"Zone {zone_id}",
+        ),
+    )
+)
+demo_week_profiles.sync_zones([str(z.get("zone_id")) for z in DEMO_ZONES])
+
+# The flat per-zone view. Derived, never written to directly.
+demo_schedules = demo_week_profiles.as_per_zone_schedules()
+
+
+def save_demo_week_profiles() -> None:
+    """Persist the profiles and refresh everything derived from them."""
+    global demo_schedules
+    demo_week_profiles.sync_zones([str(z.get("zone_id")) for z in DEMO_ZONES])
+    demo_schedules = demo_week_profiles.as_per_zone_schedules()
+    config_persistence.save_demo_week_profiles(demo_week_profiles.to_dict())
+    config_persistence.save_demo_schedules(demo_schedules)
 
 
 # Repair any saved demo house that predates the discovery above. Done here
@@ -550,7 +834,7 @@ _load_persisted_hub_config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
-    global main_event_loop
+    global main_event_loop, sensor_wakeup
     # Startup
     mode_label = "demo" if DEMO_MODE else "production"
     logger.info("Starting Nobø Web Control Server — mode=%s", mode_label)
@@ -570,6 +854,7 @@ async def lifespan(app: FastAPI):
         local_timezone_name(),
     )
     main_event_loop = asyncio.get_running_loop()
+    sensor_wakeup = asyncio.Event()
 
     # Wire up notifications. Done here rather than at import time so that tests
     # importing the module do not pick up whatever is in the real data dir.
@@ -581,6 +866,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to connect to hub on startup: {e}")
         # Don't fail startup - allow server to run and show disconnected state
+
+    await start_sensor_service()
     
     # Start background reconnection task (no-op in demo mode)
     reconnect_task = asyncio.create_task(reconnect_loop())
@@ -590,6 +877,7 @@ async def lifespan(app: FastAPI):
     # because both are conditions that persist rather than events that arrive -
     # a room that stopped reporting sends nothing to react to.
     watch_task = asyncio.create_task(notification_watch_loop())
+    sensor_task = asyncio.create_task(sensor_automation_loop())
 
     yield
     
@@ -597,6 +885,8 @@ async def lifespan(app: FastAPI):
     reconnect_task.cancel()
     schedule_task.cancel()
     watch_task.cancel()
+    sensor_task.cancel()
+    await stop_sensor_service()
     logger.info("Shutting down server...")
     # Close all websocket connections
     for ws in connected_websockets:
@@ -725,6 +1015,11 @@ class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
             and path not in NO_BROADCAST_PATHS
             and response.status_code < 400
         ):
+            if sensor_settings.enabled:
+                try:
+                    await evaluate_sensor_automation()
+                except Exception as exc:
+                    logger.error("Contact sensor evaluation after API write failed: %s", exc)
             # Fire and forget so the caller is not kept waiting for every other
             # client to be written to.
             asyncio.create_task(broadcast_zone_update())
@@ -787,6 +1082,45 @@ class SiteUpdate(BaseModel):
     name: Optional[str] = None
     show_on_login: Optional[bool] = None
     locale: Optional[str] = None
+
+
+class SensorZonePolicyUpdate(BaseModel):
+    warning_delay_seconds: int = Field(default=300, ge=0, le=86400)
+    action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
+    action_delay_seconds: int = Field(default=300, ge=0, le=86400)
+    override_all_modes: bool = False
+
+
+class SensorSettingsUpdate(BaseModel):
+    enabled: bool
+    provider: Optional[str] = None
+    zones: Dict[str, SensorZonePolicyUpdate] = Field(default_factory=dict)
+
+
+class SensorPairingStart(BaseModel):
+    # Zigbee caps a join window at 254 seconds, so offering longer would be
+    # promising something the radio silently clamps.
+    seconds: int = Field(default=254, ge=1, le=254)
+
+
+class SensorCreate(BaseModel):
+    name: str
+    zone_id: Optional[str] = None
+    kind: SensorKind = SensorKind.WINDOW
+
+
+class SensorUpdate(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[SensorKind] = None
+    zone_id: Optional[str] = None
+    clear_zone: bool = False
+
+
+class SensorSimulationUpdate(BaseModel):
+    state: Optional[str] = None
+    available: Optional[bool] = None
+    battery: Optional[int] = Field(default=None, ge=0, le=100)
+    clear_battery: bool = False
 
 
 VALID_SCHEDULE_MODES = {'comfort', 'eco', 'away', 'off'}
@@ -1164,16 +1498,26 @@ class HubProtocolTap:
 
 hub_tap: Optional[HubProtocolTap] = None
 
+# The UTC offset in force when the current connection said HELLO, which is the
+# one and only time the hub is told what time it is. Compared against the
+# offset now to notice a daylight-saving change; None until first connected.
+hub_clock_offset: Optional[timedelta] = None
 
-def connect_to_hub_sync():
-    """Connect to the Nobø Hub (synchronous, runs in thread)"""
-    global hub, hub_connected, hub_tap
+
+def connect_to_hub_sync(force: bool = False):
+    """Connect to the Nobø Hub (synchronous, runs in thread).
+
+    ``force`` replaces a healthy client on purpose. The only caller that wants
+    that is the clock resync: the hub takes its time from ``HELLO`` and from
+    nothing else, so the only way to correct it is to say hello again.
+    """
+    global hub, hub_connected, hub_tap, hub_clock_offset
 
     # One attempt at a time. See hub_connect_lock for why this matters.
     with hub_connect_lock:
         with connection_lock:
             generation = hub_config_generation
-            if hub is not None and hub_connected:
+            if hub is not None and hub_connected and not force:
                 # Another attempt won the race while this one was queued.
                 # Connecting again would take a second slot on the hub for a
                 # client nobody would ever use.
@@ -1187,6 +1531,10 @@ def connect_to_hub_sync():
             # Attach before connecting, so the initial data dump is captured too.
             tap = HubProtocolTap()
             tap.attach(new_hub)
+            # Captured beside the connection, not before it: this is the
+            # offset that was in force when pynobo put the wall-clock time
+            # into HELLO, which is the only time the hub is ever told.
+            handshake_offset = local_now().utcoffset()
             hub_loop.run(new_hub.start(), timeout=30)
             with connection_lock:
                 if generation != hub_config_generation:
@@ -1200,6 +1548,7 @@ def connect_to_hub_sync():
                     hub = new_hub
                     hub_tap = tap
                     hub_connected = True
+                    hub_clock_offset = handshake_offset
 
             if stale:
                 # The user changed the configuration while we were connecting. This
@@ -1253,7 +1602,7 @@ def connect_to_hub_sync():
             raise
 
 
-async def connect_to_hub():
+async def connect_to_hub(force: bool = False):
     """Connect to the Nobø Hub (async wrapper)"""
     global hub_thread, hub_connected
     
@@ -1265,7 +1614,9 @@ async def connect_to_hub():
         return
     
     # Run the synchronous connection in a thread to avoid event loop conflicts
-    hub_thread = threading.Thread(target=connect_to_hub_sync, daemon=True)
+    hub_thread = threading.Thread(
+        target=connect_to_hub_sync, args=(force,), daemon=True
+    )
     hub_thread.start()
     
     # Wait a moment for connection to establish
@@ -1300,6 +1651,12 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
     Returns a dict describing the resulting state.
     """
     global NOBO_SERIAL, NOBO_IP, DEMO_MODE, HUB_CONFIG_SOURCE, hub_config_generation
+
+    if not demo_mode and sensor_settings.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Disable Zigbee sensors before switching to a real hub.",
+        )
 
     config = {"demo_mode": bool(demo_mode), "serial": serial, "ip": ip}
     config_persistence.save_hub_config(config)
@@ -1348,6 +1705,58 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
         "connected": connected,
         "source": HUB_CONFIG_SOURCE,
     }
+
+
+async def resync_hub_clock_if_season_changed() -> bool:
+    """Say hello again when the clocks go forward or back.
+
+    The hub keeps its own clock and takes it from ``HELLO`` alone — the
+    keep-alive carries no time, and ``H05`` reports versions but no clock, so
+    the hub's idea of the time cannot even be read back to check. It then runs
+    the week profile itself, in wall clock.
+
+    So a connection that simply stays up across a transition leaves the hub an
+    hour out until its own roughly eighteen-hourly reboot forces a fresh
+    handshake. In October that starts Comfort an hour early, which merely costs
+    electricity. In March it starts an hour late, in a building whose whole
+    purpose is not being cold.
+
+    Twice a year, therefore, this deliberately displaces a healthy client. That
+    is otherwise exactly what must not happen — see the connection rules — so
+    it goes through the same guarded path a configuration change uses, which
+    serialises the attempt and shuts down whatever it replaces.
+    """
+    global hub_clock_offset
+
+    if DEMO_MODE or hub_clock_offset is None:
+        return False
+    current = local_now().utcoffset()
+    if current is None or current == hub_clock_offset:
+        return False
+
+    was, now_ = _format_offset(hub_clock_offset), _format_offset(current)
+    logger.warning(
+        "Clock offset changed from %s to %s — reconnecting so the hub is told "
+        "the new local time", was, now_,
+    )
+    add_log_entry(
+        "sent",
+        f"Daylight saving changed ({was} to {now_}); resending the time to the hub",
+        source="hub",
+    )
+    # Claimed before the attempt, so a failure does not leave this retrying
+    # every five seconds for the rest of the season. The hub's own reboot
+    # remains the backstop, as it was before this existed.
+    hub_clock_offset = current
+    await connect_to_hub(force=True)
+    return True
+
+
+def _format_offset(offset: timedelta) -> str:
+    total = int(offset.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"UTC{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
 
 
 async def reconnect_loop():
@@ -1436,6 +1845,13 @@ async def reconnect_loop():
             if interval != MIN_INTERVAL:
                 interval = MIN_INTERVAL
                 attempt = 0
+            try:
+                await resync_hub_clock_if_season_changed()
+            except Exception as exc:
+                # Never fatal to the loop: a failed resync costs an hour of
+                # schedule twice a year, whereas a dead reconnect loop costs
+                # the heating entirely.
+                logger.error("Clock resync failed: %s", exc)
 
 
 def hub_update_callback(hub_instance):
@@ -1495,6 +1911,279 @@ async def broadcast_zone_update():
                 
     except Exception as e:
         logger.error(f"Error broadcasting zone update: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Contact sensors
+# ---------------------------------------------------------------------------
+
+def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
+    return {
+        "sensor_id": snapshot.sensor_id,
+        "name": snapshot.name,
+        "kind": snapshot.kind.value,
+        "zone_id": snapshot.zone_id,
+        "state": snapshot.state.value,
+        "available": snapshot.available,
+        "battery": snapshot.battery,
+        "changed_at": snapshot.changed_at.isoformat(),
+        "last_seen_at": snapshot.last_seen_at.isoformat(),
+    }
+
+
+def _global_override_mode() -> Optional[str]:
+    """The mode a global override is currently holding, or None if there is none.
+
+    A global override is what a zone falls back to when its own override is
+    cancelled — so this is half the answer to "what happens if we let go?".
+    """
+    if DEMO_MODE:
+        return demo_global_mode if demo_global_mode != "normal" else None
+    with connection_lock:
+        current_hub = hub
+    for override in (getattr(current_hub, "overrides", None) or {}).values():
+        if str(override.get("target_type")) != pynobo.nobo.API.OVERRIDE_TARGET_GLOBAL:
+            continue
+        mode = pynobo.nobo.API.DICT_OVERRIDE_MODE_TO_NAME.get(str(override.get("mode")))
+        if mode and mode != "normal":
+            return mode
+    return None
+
+
+def _sensor_heating_state() -> Dict[str, HeatingZone]:
+    """What each zone is doing, in the terms the contact automation reasons in.
+
+    Two modes are reported per zone and they are not the same thing.
+    ``effective_mode`` is what the room is running now. ``fallback_mode`` is
+    what it would run with its own override cancelled: the global override if
+    one is active and the zone follows it, otherwise the week profile. The
+    second is what makes "release this hold" a decision that can be checked
+    against the warmth ordering rather than a leap in the dark.
+
+    Nothing here consults the automation's own ledger. It used to, in demo
+    mode, which made "does the hub still agree with what we applied?"
+    unanswerable — the automation was being shown its own opinion as evidence.
+    """
+    global_override = _global_override_mode()
+    state: Dict[str, HeatingZone] = {}
+    for zone in _build_zones_data():
+        zone_id = str(zone["zone_id"])
+        fallback = (
+            global_override
+            if global_override and zone.get("follows_global_mode", True)
+            else get_current_schedule_mode(zone_id)
+        )
+        current = zone.get("current_mode") or "normal"
+        state[zone_id] = HeatingZone(
+            zone_id=zone_id,
+            has_equipment=bool(zone.get("components")),
+            connected=bool(hub_connected),
+            effective_mode=fallback if current == "normal" else current,
+            fallback_mode=fallback,
+            has_zone_override=bool(zone.get("has_zone_override")),
+        )
+    return state
+
+
+async def _sensor_override_command(zone_id: str, mode: str) -> None:
+    with connection_lock:
+        connected = hub_connected
+        current_hub = hub
+    if not connected:
+        raise RuntimeError("Hub not connected")
+
+    note_local_write(zone_id, "mode", mode)
+    if DEMO_MODE:
+        zone = next(
+            (item for item in DEMO_ZONES if str(item.get("zone_id")) == str(zone_id)),
+            None,
+        )
+        if zone is None:
+            raise RuntimeError("Zone not found")
+        if mode == "normal":
+            DEMO_ZONE_OVERRIDES.discard(str(zone_id))
+            zone["mode"] = _demo_mode_without_zone_override(zone)
+        else:
+            zone["mode"] = mode
+            DEMO_ZONE_OVERRIDES.add(str(zone_id))
+        config_persistence.save_demo_zones(DEMO_ZONES)
+        _save_demo_hub_state()
+    else:
+        if current_hub is None or zone_id not in current_hub.zones:
+            raise RuntimeError("Zone not found")
+        hub_modes = {
+            "away": pynobo.nobo.API.OVERRIDE_MODE_AWAY,
+            "eco": pynobo.nobo.API.OVERRIDE_MODE_ECO,
+            "comfort": pynobo.nobo.API.OVERRIDE_MODE_COMFORT,
+            "normal": pynobo.nobo.API.OVERRIDE_MODE_NORMAL,
+        }
+        try:
+            hub_mode = hub_modes[mode]
+        except KeyError as exc:
+            raise RuntimeError(f"Unsupported sensor heating action: {mode}") from exc
+        await hub_command(current_hub.async_create_override(
+            hub_mode,
+            OVERRIDE_UNTIL_CANCELLED,
+            pynobo.nobo.API.OVERRIDE_TARGET_ZONE,
+            zone_id,
+        ))
+    add_log_entry(
+        "sent",
+        f"Contact sensor automation requested {mode} for zone {zone_id}",
+        command=f"create_override {mode} CONSTANT ZONE {zone_id}",
+        source="sensor",
+    )
+
+
+def _sensor_provider_event(_event) -> None:
+    wake_sensor_automation()
+
+
+async def start_sensor_service() -> None:
+    global sensor_provider, sensor_unsubscribe, sensor_wakeup
+    if not sensor_settings.enabled or sensor_provider is not None:
+        return
+    if sensor_wakeup is None:
+        sensor_wakeup = asyncio.Event()
+    sensor_provider = create_provider(sensor_settings.provider, demo_mode=DEMO_MODE)
+    await sensor_provider.start()
+    sensor_unsubscribe = sensor_provider.subscribe(_sensor_provider_event)
+    for zone_id, state in sensor_automation.states.items():
+        notifier.restore_condition(
+            f"contact-left-open:{zone_id}", state.warning_raised
+        )
+    sensor_automation.reconcile_owned(_sensor_heating_state())
+    await evaluate_sensor_automation()
+
+
+async def stop_sensor_service() -> None:
+    global sensor_provider, sensor_unsubscribe, sensor_snapshots
+    global sensor_zone_aggregates
+    if sensor_unsubscribe is not None:
+        sensor_unsubscribe()
+        sensor_unsubscribe = None
+    if sensor_provider is not None:
+        await sensor_provider.stop()
+        sensor_provider = None
+    sensor_snapshots = []
+    sensor_zone_aggregates = {}
+    if sensor_wakeup is not None:
+        sensor_wakeup.set()
+
+
+def _sensor_view_signature() -> tuple:
+    """Everything about the sensors that a browser can currently see.
+
+    The loop uses this to decide whether it has anything to announce. Writes
+    that arrive over HTTP are already broadcast by ``ZoneBroadcastMiddleware``,
+    so an unconditional broadcast here would send every zone change twice — and
+    a client reading one update per change would then be one behind.
+    """
+    pairing = _sensor_pairing_response()
+    return (
+        tuple(
+            (item.sensor_id, item.state.value, item.available, item.battery)
+            for item in sensor_snapshots
+        ),
+        tuple(
+            (
+                zone_id,
+                aggregate.state.value,
+                aggregate.warning_raised,
+                aggregate.action_status.value,
+                aggregate.owned_action.value if aggregate.owned_action else None,
+            )
+            for zone_id, aggregate in sorted(sensor_zone_aggregates.items())
+        ),
+        # A person waiting at a sensor with a paperclip needs the window's
+        # progress pushed to them, not polled for. Only the transitions
+        # though — the countdown ticks every second and is already polled by
+        # the pairing sheet, so putting it here would broadcast the whole
+        # house once a second for four minutes.
+        (pairing["active"], pairing["outcome"], pairing["sensor_id"]),
+    )
+
+
+async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
+    global sensor_snapshots, sensor_zone_aggregates
+    if not sensor_settings.enabled or sensor_provider is None:
+        sensor_snapshots = []
+        sensor_zone_aggregates = {}
+        return None
+
+    async with sensor_evaluation_lock:
+        sensor_snapshots = list(await sensor_provider.list())
+        policies = {
+            str(zone["zone_id"]): sensor_settings.zones.get(
+                str(zone["zone_id"]), ZoneSensorPolicy()
+            )
+            for zone in _build_zones_data()
+        }
+        result = await sensor_automation.evaluate(
+            sensor_snapshots,
+            policies,
+            _sensor_heating_state(),
+        )
+        sensor_zone_aggregates = dict(result.zones)
+
+    zones_by_id = {
+        str(zone["zone_id"]): zone["name"] for zone in _build_zones_data()
+    }
+    for event in result.events:
+        name = zones_by_id.get(event.zone_id, f"Zone {event.zone_id}")
+        raised = event.kind is SensorConditionEventKind.WARNING
+        notifier.set_condition(
+            "contact_left_open",
+            f"contact-left-open:{event.zone_id}",
+            raised,
+            subject=f"{name} has been left open",
+            body=(
+                f"A contact sensor in {name} has remained open beyond its configured delay."
+            ),
+            severity="warning",
+            recovery_subject=f"{name} is closed again",
+            recovery_body=f"Every contact sensor assigned to {name} now reports closed.",
+            recovery_event_type="contact_closed",
+        )
+    for action in result.actions:
+        if not action.succeeded:
+            logger.error(
+                "Contact sensor automation could not %s for zone %s: %s",
+                action.kind.value, action.zone_id, action.error,
+            )
+    return result
+
+
+async def sensor_automation_loop() -> None:
+    """Evaluate on every wake-up, and again when the next deadline falls due.
+
+    One evaluation per pass, and a broadcast only when this pass changed
+    something a browser can see. Sleeping until the earliest deadline the last
+    pass reported is what keeps an idle house from polling;
+    ``wake_sensor_automation`` cuts the sleep short whenever a contact or the
+    heating changes underneath it.
+    """
+    while True:
+        try:
+            before = _sensor_view_signature()
+            result = await evaluate_sensor_automation()
+            if _sensor_view_signature() != before:
+                await broadcast_zone_update()
+            if sensor_wakeup is None:
+                await asyncio.sleep(1)
+                continue
+            deadline = result.next_deadline if result is not None else None
+            timeout = None if deadline is None else max(0.0, deadline - time.time())
+            try:
+                await asyncio.wait_for(sensor_wakeup.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+            sensor_wakeup.clear()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Contact sensor automation loop error: %s", exc)
+            await asyncio.sleep(5)
 
 
 # ---------------------------------------------------------------------------
@@ -1637,6 +2326,53 @@ def get_zones_data() -> List[Dict[str, Any]]:
         logger.error("Setpoint guard failed while annotating zones: %s", exc)
         for zone in zones:
             zone.setdefault("setpoint_changed_outside", None)
+
+    if sensor_settings.enabled:
+        sensors_by_zone: Dict[str, List[Dict[str, Any]]] = {}
+        for snapshot in sensor_snapshots:
+            if snapshot.zone_id is not None:
+                sensors_by_zone.setdefault(str(snapshot.zone_id), []).append(
+                    _sensor_snapshot_dict(snapshot)
+                )
+        for zone in zones:
+            zone_id = str(zone["zone_id"])
+            aggregate = sensor_zone_aggregates.get(zone_id)
+            policy = _sensor_policy_for(zone_id)
+            zone["sensors"] = sorted(
+                sensors_by_zone.get(zone_id, []), key=lambda item: item["name"].lower()
+            )
+            zone["sensor_summary"] = {
+                "state": aggregate.state.value if aggregate else "empty",
+                "sensor_count": aggregate.sensor_count if aggregate else len(zone["sensors"]),
+                "open_count": aggregate.open_count if aggregate else 0,
+                "unavailable_count": aggregate.unavailable_count if aggregate else 0,
+                "warning_raised": bool(aggregate and aggregate.warning_raised),
+                "open_started_at": aggregate.open_started_at if aggregate else None,
+                # What the zone's heating rule is doing and, when it has
+                # decided not to act, why. Saying "Away is colder, so the Eco
+                # rule is standing down" is the difference between a rule that
+                # looks broken and one that looks deliberate.
+                #
+                # The configured action travels with it so that reading the
+                # state does not need the admin-only settings endpoint: an
+                # ordinary user can see that a room is about to go to Eco
+                # without being able to change it.
+                "action_when_open": policy.action_when_open.value,
+                "action_status": (
+                    aggregate.action_status.value if aggregate else "idle"
+                ),
+                "block_reason": (
+                    aggregate.block_reason.value
+                    if aggregate and aggregate.block_reason is not None
+                    else None
+                ),
+                "owned_action": (
+                    aggregate.owned_action.value
+                    if aggregate and aggregate.owned_action is not None
+                    else None
+                ),
+                "action_available": bool(zone.get("components")),
+            }
     return zones
 
 
@@ -1933,7 +2669,314 @@ async def get_capabilities_endpoint():
     return 501, showing the reason instead of letting the user press a button
     that cannot work (QA defect D-04).
     """
-    return {"demo_mode": DEMO_MODE, "features": get_capabilities()}
+    return {
+        "demo_mode": DEMO_MODE,
+        "features": get_capabilities(),
+        "sensors": {
+            "enabled": sensor_settings.enabled,
+            "provider": sensor_settings.provider if sensor_settings.enabled else None,
+            "provider_supported": DEMO_MODE,
+            "reason": None if DEMO_MODE else (
+                "No real Zigbee provider is implemented yet. The simulated provider "
+                "is available only in demo mode."
+            ),
+        },
+    }
+
+
+def _require_sensor_enabled() -> None:
+    if not sensor_settings.enabled or sensor_provider is None:
+        raise HTTPException(status_code=409, detail="Contact sensors are disabled")
+
+
+def _sensor_provider_unavailable(detail: str) -> None:
+    # Published separately under capabilities.sensors because Classic's action
+    # capability map intentionally has no sensor controls.
+    raise HTTPException(status_code=501, detail=detail)  # capability: sensors
+
+
+def _require_sensor_zone(zone_id: Optional[str]) -> None:
+    if zone_id is None:
+        return
+    if not any(str(zone.get("zone_id")) == str(zone_id) for zone in _build_zones_data()):
+        raise HTTPException(status_code=400, detail=f"Zone {zone_id} does not exist")
+
+
+def _sensor_policy_for(zone_id: str) -> ZoneSensorPolicy:
+    """The saved rule for a zone, or the default one it would start from."""
+    return sensor_settings.zones.get(str(zone_id), ZoneSensorPolicy())
+
+
+def _sensor_settings_response() -> Dict[str, Any]:
+    zones = {}
+    for zone in _build_zones_data():
+        zone_id = str(zone["zone_id"])
+        policy = _sensor_policy_for(zone_id)
+        zones[zone_id] = {
+            "name": zone["name"],
+            # A room with no Nobo equipment can still be monitored; it simply
+            # has nothing to act on, and the interface disables the choice.
+            "has_equipment": bool(zone.get("components")),
+            "warning_delay_seconds": policy.warning_delay_seconds,
+            "action_when_open": policy.action_when_open.value,
+            "action_delay_seconds": policy.action_delay_seconds,
+            "override_all_modes": policy.override_all_modes,
+        }
+    return {
+        "enabled": sensor_settings.enabled,
+        "provider": sensor_settings.provider,
+        "providers": sorted(sensor_persistence.PROVIDERS),
+        "demo_mode": DEMO_MODE,
+        # Whether these sensors can be *made* to say things, which is a
+        # different question from whether the hub is simulated. Real Zigbee
+        # sensors beside a demo hub is a supported arrangement, and offering
+        # to type in their battery level would be offering to invent a
+        # hardware reading.
+        "simulated": _provider_can_simulate(),
+        "pairing": _sensor_pairing_response(),
+        "zones": zones,
+    }
+
+
+def _provider_can_simulate() -> bool:
+    return sensor_provider is not None and callable(
+        getattr(sensor_provider, "simulate", None)
+    )
+
+
+def _sensor_pairing_response() -> Dict[str, Any]:
+    """What the join window is doing, in the shape the interface needs.
+
+    Always answered, even with sensors off, so the interface never has to
+    decide between "no window" and "cannot tell".
+    """
+    status = PairingStatus()
+    if sensor_provider is not None:
+        getter = getattr(sensor_provider, "pairing_status", None)
+        if callable(getter):
+            status = getter()
+    return {
+        "supported": status.supported,
+        "active": status.active,
+        "seconds_remaining": status.seconds_remaining,
+        "outcome": status.outcome.value if status.outcome else None,
+        "sensor_id": status.sensor_id,
+        "detail": status.detail,
+    }
+
+
+@app.get("/api/sensors/settings")
+async def get_sensor_settings(request: Request):
+    _require_admin(_get_session_or_401(request))
+    return _sensor_settings_response()
+
+
+@app.put("/api/sensors/settings")
+async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
+    global sensor_settings
+    _require_admin(_get_session_or_401(request))
+    provider = body.provider or sensor_settings.provider
+    if provider not in sensor_persistence.PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail="provider must be one of: "
+                   + ", ".join(sorted(sensor_persistence.PROVIDERS)),
+        )
+    if body.enabled and provider == "simulated" and not DEMO_MODE:
+        _sensor_provider_unavailable(
+            "Simulated sensors are demo-only. Choose the Zigbee provider for real hardware."
+        )
+
+    known_zone_ids = {str(zone["zone_id"]) for zone in _build_zones_data()}
+    unknown = set(body.zones) - known_zone_ids
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown zone ids: {', '.join(sorted(unknown))}",
+        )
+    policies = {}
+    for zone_id in known_zone_ids:
+        # A zone the request left out keeps whatever it already had, so a
+        # client that only cares about one room does not have to send the
+        # whole house back to avoid resetting it.
+        sent = body.zones.get(zone_id)
+        policies[zone_id] = (
+            ZoneSensorPolicy(
+                warning_delay_seconds=sent.warning_delay_seconds,
+                action_when_open=sent.action_when_open,
+                action_delay_seconds=sent.action_delay_seconds,
+                override_all_modes=sent.override_all_modes,
+            )
+            if sent is not None
+            else _sensor_policy_for(zone_id)
+        )
+    if not body.enabled and sensor_settings.enabled:
+        if not await sensor_automation.disable(_sensor_heating_state()):
+            raise HTTPException(
+                status_code=503,
+                detail="Could not release every sensor-owned heating override; sensors remain enabled.",
+            )
+    previous = sensor_settings
+    updated = SensorSettings(enabled=body.enabled, provider=provider, zones=policies)
+    sensor_persistence.save_sensor_settings(updated)
+    sensor_settings = updated
+    try:
+        if body.enabled:
+            if previous.provider != provider:
+                # A different radio means a different set of sensors, so the
+                # running service cannot simply be left in place.
+                await stop_sensor_service()
+            await start_sensor_service()
+            await evaluate_sensor_automation()
+        else:
+            await stop_sensor_service()
+    except Exception:
+        sensor_settings = previous
+        sensor_persistence.save_sensor_settings(previous)
+        await stop_sensor_service()
+        raise
+    return _sensor_settings_response()
+
+
+@app.get("/api/sensors")
+async def get_sensors():
+    _require_sensor_enabled()
+    return {"sensors": [_sensor_snapshot_dict(item) for item in sensor_snapshots]}
+
+
+@app.get("/api/sensors/pairing")
+async def get_sensor_pairing(request: Request):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    return _sensor_pairing_response()
+
+
+@app.post("/api/sensors/pairing")
+async def start_sensor_pairing(request: Request, body: SensorPairingStart):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    opener = getattr(sensor_provider, "begin_pairing", None)
+    if not callable(opener):
+        _sensor_provider_unavailable(
+            "This provider has no pairing window; add a simulated sensor instead."
+        )
+    try:
+        await opener(body.seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    wake_sensor_automation()
+    return _sensor_pairing_response()
+
+
+@app.delete("/api/sensors/pairing")
+async def stop_sensor_pairing(request: Request):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    closer = getattr(sensor_provider, "cancel_pairing", None)
+    if not callable(closer):
+        _sensor_provider_unavailable("This provider has no pairing window.")
+    try:
+        await closer()
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    wake_sensor_automation()
+    return _sensor_pairing_response()
+
+
+async def _finish_sensor_mutation() -> None:
+    await evaluate_sensor_automation()
+    wake_sensor_automation()
+
+
+@app.post("/api/sensors")
+async def pair_sensor(request: Request, body: SensorCreate):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    _require_sensor_zone(body.zone_id)
+    try:
+        sensor = await sensor_provider.pair(body.name, body.zone_id, body.kind)
+        await _finish_sensor_mutation()
+        return _sensor_snapshot_dict(sensor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.put("/api/sensors/{sensor_id}")
+async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    _require_sensor_zone(body.zone_id)
+    try:
+        sensor = await sensor_provider.update(
+            sensor_id,
+            name=body.name,
+            kind=body.kind,
+            zone_id=body.zone_id,
+            clear_zone=body.clear_zone,
+        )
+        await _finish_sensor_mutation()
+        return _sensor_snapshot_dict(sensor)
+    except SensorNotFound:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/sensors/{sensor_id}")
+async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    try:
+        remover = sensor_provider.remove
+        if force:
+            await remover(sensor_id, force=True)
+        else:
+            await remover(sensor_id)
+        await _finish_sensor_mutation()
+        return {"status": "success"}
+    except SensorNotFound:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    except SensorRemovalFailed as exc:
+        # 409, not 500: nothing is broken. The device would not leave — almost
+        # always because it is a battery sensor and asleep — and the caller has
+        # a real choice to make about forcing it, so say so rather than
+        # deciding for them.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{exc} You can remove it anyway, but it may rejoin later.",
+        )
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/sensors/{sensor_id}/simulate")
+async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulationUpdate):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    if not _provider_can_simulate():
+        # Deliberately the provider and not DEMO_MODE: the hub can be
+        # simulated while the sensors are real, and a real sensor's battery
+        # and contact are readings, not settings.
+        _sensor_provider_unavailable(
+            "These sensors report their own state; it cannot be set by hand."
+        )
+    try:
+        state = ContactState(body.state) if body.state is not None else None
+        sensor = await sensor_provider.simulate(
+            sensor_id,
+            state=state,
+            available=body.available,
+            battery=body.battery,
+            clear_battery=body.clear_battery,
+        )
+        await _finish_sensor_mutation()
+        return _sensor_snapshot_dict(sensor)
+    except SensorNotFound:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/health")
@@ -1975,6 +3018,11 @@ async def get_status():
             "currently_active": currently_active,
         },
         "global_mode_source": global_mode_source,
+        # Which global override the hub is holding, or null for none. Reported
+        # because it cannot be inferred from the zones: a house on global Away
+        # with one room kept on Eco by an away exception reads as "mixed" if
+        # you only look at what each zone is running.
+        "global_override_mode": _global_override_mode() if connected else None,
     }
 
 
@@ -2235,12 +3283,21 @@ def _temperature_capability() -> Dict[str, Any]:
     }
 
 
+def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
+    if sensor_settings.enabled:
+        return out
+    for key in ("contact_left_open", "contact_closed"):
+        out.get("events", {}).pop(key, None)
+        out.get("event_types", {}).pop(key, None)
+    return out
+
+
 @app.get("/api/notifications")
 async def get_notifications(request: Request):
     """The current notification settings, with the password redacted."""
     session = _get_session_or_401(request)
     _require_admin(session)
-    out = notifications.public_settings()
+    out = _filter_sensor_notification_settings(notifications.public_settings())
     out["temperature"] = _temperature_capability()
     return out
 
@@ -2271,7 +3328,7 @@ async def update_notifications(request: Request, body: NotificationUpdate):
         command="notifications update",
         source="api",
     )
-    out = notifications.public_settings(saved)
+    out = _filter_sensor_notification_settings(notifications.public_settings(saved))
     out["temperature"] = _temperature_capability()
     return out
 
@@ -2512,6 +3569,8 @@ async def add_zone(zone: ZoneAdd):
                 f"A00 0 {name} {DEFAULT_WEEK_PROFILE_ID}",
             )
             config_persistence.save_demo_zones(DEMO_ZONES)
+            # A new room starts on the built-in schedule, as it does on the hub.
+            save_demo_week_profiles()
             return {"status": "success", "zone_id": new_id, "name": name}
 
         # Real hub mode
@@ -2663,6 +3722,26 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
 async def delete_zone(zone_id: str):
     """Delete a zone"""
     require_capability("delete_zone")
+    persisted_sensors = (
+        sensor_persistence.load_simulated_sensors()
+        if DEMO_MODE and not sensor_settings.enabled
+        else []
+    )
+    assigned_sensors = [
+        sensor
+        for sensor in sensor_snapshots
+        if str(sensor.zone_id) == str(zone_id)
+    ]
+    assigned_persisted_sensors = [
+        sensor
+        for sensor in persisted_sensors
+        if str(sensor.get("zone_id")) == str(zone_id)
+    ]
+    if assigned_sensors or assigned_persisted_sensors:
+        raise HTTPException(
+            status_code=409,
+            detail="This zone still has contact sensors assigned. Move or remove them first.",
+        )
 
     with connection_lock:
         connected = hub_connected
@@ -2686,6 +3765,9 @@ async def delete_zone(zone_id: str):
             )
             logger.info(f"Demo mode: Zone '{zone_name}' deleted")
             config_persistence.save_demo_zones(DEMO_ZONES)
+            # Stop counting it as following a schedule, so one it was the last
+            # user of becomes deletable again.
+            save_demo_week_profiles()
             return {"status": "success", "zone_id": zone_id}
 
         # Real hub mode
@@ -2758,6 +3840,11 @@ async def set_zone_override(zone_id: str, mode: str):
     if mode not in mode_map:
         raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
     
+    sensor_automation.manual_takeover(zone_id)
+    # What this zone is running decides whether its contact rule may act, so
+    # the automation is asked to look again once the write has landed.
+    wake_sensor_automation()
+
     # Written down before the command goes out, because the hub can push the
     # change back to us faster than this function returns. Without this, every
     # change we make would be reported as "changed from another app".
@@ -2770,10 +3857,13 @@ async def set_zone_override(zone_id: str, mode: str):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
             
-            demo_zone['mode'] = mode
             if mode == 'normal':
                 DEMO_ZONE_OVERRIDES.discard(zone_id)
+                # Cancelling a zone override lets the global one apply again,
+                # exactly as it does on the hub — it does not mean "normal".
+                demo_zone['mode'] = _demo_mode_without_zone_override(demo_zone)
             else:
+                demo_zone['mode'] = mode
                 DEMO_ZONE_OVERRIDES.add(zone_id)
             add_log_entry(
                 "sent",
@@ -2787,6 +3877,7 @@ async def set_zone_override(zone_id: str, mode: str):
                 source="api",
             )
             config_persistence.save_demo_zones(DEMO_ZONES)
+            _save_demo_hub_state()
             return {"status": "success", "zone_id": zone_id, "mode": mode}
         
         # Real hub mode
@@ -3145,7 +4236,7 @@ async def accept_zone_setpoints(zone_id: str):
 @app.post("/api/global/override/{mode}")
 async def set_global_override(mode: str):
     """Set global override mode for all zones"""
-    global global_mode_source
+    global global_mode_source, demo_global_mode
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -3176,6 +4267,7 @@ async def set_global_override(mode: str):
     try:
         # Demo mode - update all simulated zones
         if DEMO_MODE:
+            demo_global_mode = "normal" if mode in ("home", "normal") else mode
             for demo_zone in DEMO_ZONES:
                 # A zone override outranks the global one on the hub, so a zone
                 # that has its own override is left alone here — same as the
@@ -3199,9 +4291,10 @@ async def set_global_override(mode: str):
             )
             global_mode_source = "manual"
             config_persistence.save_demo_zones(DEMO_ZONES)
-            config_persistence.save_server_state({"global_mode_source": global_mode_source})
+            _save_demo_hub_state()
             released = await _release_zone_overrides_for_global(mode)
             exceptions = await _sync_away_exceptions(mode)
+            wake_sensor_automation()
             return {"status": "success", "mode": mode, "source": "manual",
                     "away_exceptions_applied": exceptions,
                     "zone_overrides_released": released,
@@ -3246,6 +4339,7 @@ async def set_global_override(mode: str):
         # its schedule for a moment on the way.
         released = await _release_zone_overrides_for_global(mode)
         exceptions = await _sync_away_exceptions(mode)
+        wake_sensor_automation()
         return {"status": "success", "mode": mode, "source": "manual",
                 "away_exceptions_applied": exceptions,
                 "zone_overrides_released": released,
@@ -3431,7 +4525,30 @@ async def delete_away_schedule():
 # real defect: an away-exception room that could never come home. Demo now
 # models the hub's actual ranking so that class of bug fails a test instead of
 # reaching a cabin.
-DEMO_ZONE_OVERRIDES: Set[str] = set()
+#
+# A real hub remembers its overrides across a power cut, so this is loaded back
+# from disk rather than starting empty. It used to start empty, which left a
+# restarted demo house with rooms whose mode said "eco" and whose override set
+# said nobody was holding them — and made the contact automation unable to tell
+# its own override from a room that had simply been left on Eco.
+DEMO_ZONE_OVERRIDES: Set[str] = {
+    str(zone_id) for zone_id in _server_state.get("demo_zone_overrides") or []
+}
+
+
+def _demo_mode_without_zone_override(zone: Dict[str, Any]) -> str:
+    """What a demo zone runs once its own override is cancelled.
+
+    Dropping a zone override does not mean "follow the week profile" — it means
+    the global override applies again, whatever that currently is. On the hub
+    that falls out of the ranking for free; here it has to be spelled out, and
+    it has to be spelled out in exactly one place. Three copies of this rule is
+    how a closing window ended up putting a globally-Away house on Comfort.
+    """
+    if demo_global_mode != "normal" and zone_follows_global_mode(zone):
+        return demo_global_mode
+    return "normal"
+
 
 # Zones we put on a zone-level Eco override when the house went Away. The hub
 # will not release these by itself: cancelling the global override cancels only
@@ -3447,7 +4564,25 @@ def _record_away_exceptions_applied() -> None:
     config_persistence.save_away_exceptions_applied(_away_exception_zones_applied)
 
 
-async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home") -> List[str]:
+def _sensor_manual_takeover(zone_ids) -> None:
+    for zone_id in zone_ids:
+        sensor_automation.manual_takeover(str(zone_id))
+
+
+def wake_sensor_automation() -> None:
+    """Ask the automation to look again as soon as it can.
+
+    Timers alone are not enough. Whether a rule may act depends on what the
+    room is doing, so a global mode change or a released zone override can make
+    an action that was refused a moment ago allowable — with a deadline already
+    in the past, and therefore no wake-up of its own to arrive. Every path that
+    changes what a zone is running rings this bell.
+    """
+    if sensor_wakeup is not None:
+        sensor_wakeup.set()
+
+
+async def _clear_away_exceptions(source: str = "api") -> List[str]:
     """
     Release the zone-level Eco overrides that ``_apply_away_exceptions`` created.
 
@@ -3468,25 +4603,21 @@ async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home
     zone_ids = set(_away_exception_zones_applied)
     if not zone_ids:
         return []
-
     with connection_lock:
         current_hub = hub
 
     released: List[str] = []
 
     if DEMO_MODE:
-        # Dropping the zone override does not mean "follow the schedule" -- it
-        # means the global override applies again, whatever that currently is.
-        # On the hub that falls out of the ranking for free; here it has to be
-        # spelled out, or a global Comfort would land the room on normal.
-        settled = 'normal' if fallback_mode in ('home', 'normal') else fallback_mode
         for demo_zone in DEMO_ZONES:
             if str(demo_zone.get('zone_id')) in zone_ids:
-                demo_zone['mode'] = settled
                 DEMO_ZONE_OVERRIDES.discard(str(demo_zone.get('zone_id')))
+                demo_zone['mode'] = _demo_mode_without_zone_override(demo_zone)
                 released.append(str(demo_zone.get('zone_id')))
+        _sensor_manual_takeover(released)
         if released:
             config_persistence.save_demo_zones(DEMO_ZONES)
+            _save_demo_hub_state()
             add_log_entry(
                 "sent",
                 f"[DEMO] Away exceptions released: {', '.join(released)}",
@@ -3513,6 +4644,7 @@ async def _clear_away_exceptions(source: str = "api", fallback_mode: str = "home
                 zone_id,
             ))
             released.append(zone_id)
+            _sensor_manual_takeover([zone_id])
             add_log_entry(
                 "sent",
                 f"create_override(NORMAL, CONSTANT, ZONE, zone_{zone_id}) — away exception released",
@@ -3547,7 +4679,6 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
     zone_ids = config_persistence.load_away_exceptions()
     if not zone_ids:
         return []
-
     with connection_lock:
         current_hub = hub
 
@@ -3559,8 +4690,10 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
                 demo_zone['mode'] = 'eco'
                 DEMO_ZONE_OVERRIDES.add(str(demo_zone.get('zone_id')))
                 applied.append(str(demo_zone.get('zone_id')))
+        _sensor_manual_takeover(applied)
         if applied:
             config_persistence.save_demo_zones(DEMO_ZONES)
+            _save_demo_hub_state()
             add_log_entry(
                 "sent",
                 f"[DEMO] Away exceptions kept on Eco: {', '.join(applied)}",
@@ -3588,6 +4721,7 @@ async def _apply_away_exceptions(source: str = "api") -> List[str]:
                 zone_id,
             ))
             applied.append(zone_id)
+            _sensor_manual_takeover([zone_id])
             add_log_entry(
                 "sent",
                 f"create_override(ECO, CONSTANT, ZONE, zone_{zone_id}) — away exception",
@@ -3632,9 +4766,13 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
         current_hub = hub
 
     released: List[str] = []
-
     if DEMO_MODE:
-        settled = 'normal' if mode in ('home', 'normal') else mode
+        following_zone_ids = {
+            str(zone.get("zone_id"))
+            for zone in DEMO_ZONES
+            if zone_follows_global_mode(zone)
+        }
+        prior_zone_overrides = set(DEMO_ZONE_OVERRIDES)
         for demo_zone in DEMO_ZONES:
             zone_id = str(demo_zone.get('zone_id'))
             if zone_id not in DEMO_ZONE_OVERRIDES:
@@ -3642,10 +4780,13 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
             if not zone_follows_global_mode(demo_zone):
                 continue
             DEMO_ZONE_OVERRIDES.discard(zone_id)
-            demo_zone['mode'] = settled
+            demo_zone['mode'] = _demo_mode_without_zone_override(demo_zone)
             released.append(zone_id)
+        _sensor_manual_takeover(released)
+        _sensor_manual_takeover(following_zone_ids - prior_zone_overrides)
         if released:
             config_persistence.save_demo_zones(DEMO_ZONES)
+            _save_demo_hub_state()
             add_log_entry(
                 "sent",
                 f"[DEMO] Zone overrides released so global {mode} applies: {', '.join(released)}",
@@ -3653,7 +4794,13 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
                 source=source,
             )
     elif current_hub:
-        for zone_id in sorted(_zones_with_own_override(current_hub)):
+        following_zone_ids = {
+            str(zone_id)
+            for zone_id, zone in current_hub.zones.items()
+            if zone_follows_global_mode(zone)
+        }
+        prior_zone_overrides = _zones_with_own_override(current_hub)
+        for zone_id in sorted(prior_zone_overrides):
             zone = current_hub.zones.get(zone_id)
             if zone is None or not zone_follows_global_mode(zone):
                 continue
@@ -3665,6 +4812,7 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
                     zone_id,
                 ))
                 released.append(zone_id)
+                _sensor_manual_takeover([zone_id])
                 add_log_entry(
                     "sent",
                     f"create_override(NORMAL, CONSTANT, ZONE, zone_{zone_id}) — "
@@ -3676,6 +4824,7 @@ async def _release_zone_overrides_for_global(mode: str, source: str = "api") -> 
                 # One stubborn zone must not stop the rest of the house from
                 # following the mode that was just asked for.
                 logger.error("Could not release zone override on zone %s: %s", zone_id, exc)
+        _sensor_manual_takeover(following_zone_ids - prior_zone_overrides)
 
     if released:
         # These are no longer held by us, whatever put them there.
@@ -3695,7 +4844,7 @@ async def _sync_away_exceptions(mode: str, source: str = "api") -> List[str]:
     """
     if mode == 'away':
         return await _apply_away_exceptions(source=source)
-    await _clear_away_exceptions(source=source, fallback_mode=mode)
+    await _clear_away_exceptions(source=source)
     return []
 
 
@@ -3721,7 +4870,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     Internal helper to apply a global mode without going through the HTTP endpoint.
     Used by the scheduler and schedule save/delete endpoints.
     """
-    global global_mode_source
+    global global_mode_source, demo_global_mode
     with connection_lock:
         connected = hub_connected
         current_hub = hub
@@ -3739,6 +4888,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     await _restore_before_global_mode(source=source)
 
     if DEMO_MODE:
+        demo_global_mode = "normal" if mode in ("home", "normal") else mode
         for demo_zone in DEMO_ZONES:
             # As on the hub, a zone-level override survives a global change.
             # The ones that are meant to follow it are released just below.
@@ -3753,9 +4903,10 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
         )
         global_mode_source = source
         config_persistence.save_demo_zones(DEMO_ZONES)
-        config_persistence.save_server_state({"global_mode_source": global_mode_source})
+        _save_demo_hub_state()
         await _release_zone_overrides_for_global(mode, source=source)
         await _sync_away_exceptions(mode, source=source)
+        wake_sensor_automation()
         return
 
     if not current_hub:
@@ -3785,6 +4936,7 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
     await asyncio.sleep(0.5)
     await _release_zone_overrides_for_global(mode, source=source)
     await _sync_away_exceptions(mode, source=source)
+    wake_sensor_automation()
 
 
 async def away_schedule_loop():
@@ -3910,30 +5062,8 @@ async def get_week_profiles():
         raise HTTPException(status_code=503, detail="Hub not connected")
     
     try:
-        # Demo mode — return the default schedule as a sample week profile
         if DEMO_MODE:
-            return {
-                "week_profiles": [
-                    {
-                        "profile_id": "1",
-                        "name": "Default",
-                        "profile": DEFAULT_DEMO_SCHEDULE,
-                        # Already in day-block form here, unlike the hub's flat
-                        # list of "HHMMS" stamps, so it needs no decoding.
-                        "schedule": DEFAULT_DEMO_SCHEDULE,
-                        "unreadable": None,
-                        "used_by": [
-                            {"zone_id": str(z.get("zone_id")),
-                             "name": z.get("name", "")}
-                            for z in DEMO_ZONES
-                        ],
-                        "can_delete": False,
-                        "why_not": "The built-in schedule cannot be deleted.",
-                        "can_edit": False,
-                        "why_not_edit": "The built-in schedule cannot be changed.",
-                    }
-                ]
-            }
+            return {"week_profiles": _demo_week_profile_list()}
 
         if not current_hub:
             raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4022,7 +5152,13 @@ async def create_week_profile(body: WeekProfileCreate):
         raise HTTPException(status_code=400, detail=str(exc))
 
     if DEMO_MODE:
-        return {"status": "success", "profile_id": "2", "name": name}
+        profile_id = demo_week_profiles.create(name, _plain_schedule(body.schedule))
+        save_demo_week_profiles()
+        created = demo_week_profiles.profiles[profile_id]["name"]
+        add_log_entry("sent", f"[DEMO] Schedule '{created}' created",
+                      command=f"A02 {created}", source="api")
+        await broadcast_zone_update()
+        return {"status": "success", "profile_id": profile_id, "name": created}
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4104,7 +5240,21 @@ async def rename_week_profile(profile_id: str, body: WeekProfileRename):
             raise HTTPException(status_code=400, detail=str(exc))
 
     if DEMO_MODE:
-        return {"status": "success", "profile_id": profile_id, "name": name}
+        try:
+            demo_week_profiles.update(
+                profile_id,
+                name=name if body.name is not None else None,
+                schedule=_plain_schedule(body.schedule) if body.schedule else None,
+            )
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
+        return {
+            "status": "success",
+            "profile_id": profile_id,
+            "name": demo_week_profiles.profiles[profile_id]["name"],
+        }
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4163,10 +5313,13 @@ async def delete_week_profile(profile_id: str):
         raise HTTPException(status_code=503, detail="Hub not connected")
 
     if DEMO_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail="The built-in schedule cannot be deleted.",
-        )
+        try:
+            demo_week_profiles.delete(profile_id)
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
+        return {"status": "success", "profile_id": profile_id}
 
     if not current_hub:
         raise HTTPException(status_code=503, detail="Hub not connected")
@@ -4208,6 +5361,14 @@ async def assign_week_profile(zone_id: str, body: ZoneWeekProfileAssign):
         raise HTTPException(status_code=503, detail="Hub not connected")
 
     if DEMO_MODE:
+        if not any(str(z.get("zone_id")) == str(zone_id) for z in DEMO_ZONES):
+            raise HTTPException(status_code=404, detail="Zone not found")
+        try:
+            demo_week_profiles.assign(zone_id, body.profile_id)
+        except demo_week.WeekProfileError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        save_demo_week_profiles()
+        await broadcast_zone_update()
         return {"status": "success", "zone_id": zone_id, "profile_id": body.profile_id}
 
     if not current_hub:
@@ -4236,6 +5397,50 @@ async def assign_week_profile(zone_id: str, body: ZoneWeekProfileAssign):
 # The hub's factory default week profile. It is shared by every zone out of the
 # box and users expect it to keep meaning "the default", so it is never edited
 # in place.
+def _plain_schedule(schedule) -> Dict[str, Any]:
+    """Pydantic blocks (or plain dicts) as the dicts the demo store keeps."""
+    return {
+        day: [b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in blocks]
+        for day, blocks in (schedule or {}).items()
+    }
+
+
+def _demo_week_profile_list() -> List[Dict[str, Any]]:
+    """Every simulated week profile, and which zones follow it."""
+    names = {str(z.get("zone_id")): z.get("name", "") for z in DEMO_ZONES}
+    listed = []
+    for profile_id, row in sorted(
+        demo_week_profiles.profiles.items(), key=lambda item: int(item[0])
+    ):
+        users = demo_week_profiles.users(profile_id)
+        built_in = profile_id == demo_week.DEFAULT_PROFILE_ID
+        listed.append({
+            "profile_id": profile_id,
+            "name": row["name"],
+            # Already in day-block form here, unlike the hub's flat list of
+            # "HHMMS" stamps, so it needs no decoding.
+            "profile": row["schedule"],
+            "schedule": row["schedule"],
+            "unreadable": None,
+            "used_by": [
+                {"zone_id": zone_id, "name": names.get(zone_id, "")}
+                for zone_id in users
+            ],
+            "can_delete": not built_in and not users,
+            "why_not": (
+                "The built-in schedule cannot be deleted." if built_in
+                else f"{len(users)} {'zone is' if len(users) == 1 else 'zones are'} "
+                     "still following this schedule." if users
+                else None
+            ),
+            "can_edit": not built_in,
+            "why_not_edit": (
+                "The built-in schedule cannot be changed." if built_in else None
+            ),
+        })
+    return listed
+
+
 DEFAULT_WEEK_PROFILE_ID = "1"
 
 # The hub ships with these and will not let them go. "0" is the factory default
@@ -4408,11 +5613,21 @@ async def get_zone_schedule(zone_id: str):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
             
-            saved = demo_schedules.get(zone_id, DEFAULT_DEMO_SCHEDULE)
+            profile_id = demo_week_profiles.profile_id_for(zone_id)
             return {
                 "zone_id": zone_id,
                 "zone_name": demo_zone['name'],
-                "schedule": saved,
+                "week_profile_id": profile_id,
+                "week_profile_name": demo_week_profiles.profiles[profile_id]["name"],
+                # Names, not ids: this is shown as "editing this will also
+                # change ...", and an id means nothing to the reader.
+                "shared_with_zones": [
+                    z.get("name", f"Zone {z.get('zone_id')}")
+                    for z in DEMO_ZONES
+                    if demo_week_profiles.profile_id_for(str(z.get("zone_id"))) == profile_id
+                    and str(z.get("zone_id")) != str(zone_id)
+                ],
+                "schedule": demo_week_profiles.schedule_for(zone_id),
             }
         
         # Real hub mode - get week profile from pynobo
@@ -4490,14 +5705,27 @@ async def update_zone_schedule(zone_id: str, schedule: ScheduleUpdate):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
             
-            # Serialise ScheduleBlock objects to plain dicts for storage
-            demo_schedules[zone_id] = {
-                day: [b.model_dump() for b in blocks]
-                for day, blocks in schedule.schedule.items()
+            # Same rule as the hub: a schedule this zone shares with others is
+            # copied rather than changed underneath them, unless the caller
+            # asked for the schedule itself with apply_to="profile".
+            profile_id = demo_week_profiles.apply_to_zone(
+                zone_id,
+                _plain_schedule(schedule.schedule),
+                zone_name=demo_zone['name'],
+                apply_to=schedule.apply_to,
+            )
+            save_demo_week_profiles()
+            logger.info(
+                "Demo mode: zone %s week saved on profile %s", zone_id, profile_id
+            )
+            await broadcast_zone_update()
+            return {
+                "status": "success",
+                "zone_id": zone_id,
+                "week_profile_id": profile_id,
+                "week_profile_name": demo_week_profiles.profiles[profile_id]["name"],
+                "message": "Schedule updated (demo mode)",
             }
-            logger.info(f"Demo mode: Schedule updated for zone {zone_id}")
-            config_persistence.save_demo_schedules(demo_schedules)
-            return {"status": "success", "zone_id": zone_id, "message": "Schedule updated (demo mode)"}
         
         # Real hub mode - update week profile using pynobo
         if not current_hub:
@@ -5770,7 +6998,16 @@ async def auth_me(request: Request):
     session = _get_session_or_401(request)
     users = auth.load_users()
     user = users.get(session["username"], {})
-    return {"username": session["username"], "role": user.get("role", "user")}
+    role = user.get("role", "user")
+    return {
+        "username": session["username"],
+        "role": role,
+        # Only ever told to an administrator, and only about their own login:
+        # it is a prompt to act, not a fact worth publishing to anyone else.
+        "using_default_password": (
+            role == "admin" and auth.is_using_default_password(session["username"])
+        ),
+    }
 
 
 @app.post("/auth/change-password")

@@ -52,6 +52,8 @@
     schedule: null,
     scheduleMeta: null,
     weekProfiles: [],
+    sensorSettings: null,
+    sensorDevices: [],
     /* The command log is only fetched when its view is opened - it is
        diagnostics, and there is no reason to poll for it on the home screen. */
     log: null,
@@ -171,6 +173,13 @@
     state.devices = devices || [];
     state.weekProfiles = weekProfiles || [];
     if (site) state.site = site;
+    if (!state.me) state.me = await Nobo.api.me().catch(() => null);
+    if (state.me && state.me.role === 'admin') {
+      state.sensorSettings = await Nobo.api.sensorSettings().catch(() => state.sensorSettings);
+      state.sensorDevices = state.sensorSettings && state.sensorSettings.enabled
+        ? await Nobo.api.sensors().catch(() => state.sensorDevices)
+        : [];
+    }
     applySiteName();
   }
 
@@ -255,6 +264,159 @@
    * The trip card
    * ---------------------------------------------------------------- */
 
+  /* Left the building with something still open.
+   *
+   * The zone cards already warn about an open contact, but they warn after
+   * that room's own delay and you have to be looking at them. This is the case
+   * where neither holds: the house has been put on Away, so somebody has gone,
+   * and a door or window is still open. There is no delay on purpose — being
+   * away is what changes the stakes, not how long it has been open — and it
+   * goes at the top of the card about leaving, because that is where somebody
+   * checking "did I lock up?" is already looking.
+   */
+  function awayNow() {
+    const status = state.status || {};
+    const trip = away();
+    // The global override is the truthful answer; a house on Away with one
+    // room held on Eco by an away exception does not read as "away" from the
+    // zones alone. The running away period is included as well, so a period
+    // the hub has stopped honouring still counts as "you are not here".
+    return status.global_override_mode === 'away'
+      || Boolean(trip.enabled && trip.currently_active);
+  }
+
+  function openWhileAway() {
+    if (!awayNow()) return null;
+    const rooms = state.zones
+      .map(zone => ({
+        zone,
+        open: (zone.sensors || []).filter(s => s.available && s.state === 'open'),
+        offline: (zone.sensors || []).filter(s => !s.available),
+      }))
+      .filter(entry => entry.open.length || entry.offline.length);
+    const open = rooms.flatMap(entry => entry.open);
+    const offline = rooms.flatMap(entry => entry.offline);
+    if (!open.length && !offline.length) return null;
+    return { rooms, open, offline };
+  }
+
+  /* Kept free of the DOM so the wording can be exercised directly. */
+  function tripAlertHtml() {
+    const found = openWhileAway();
+    if (!found) return '';
+
+    const { rooms, open, offline } = found;
+    const headline = open.length
+      ? (open.length === 1
+          ? `${sensorKindLabel(open[0])} still open`
+          : `${sensorCountLabel(open)} still open`)
+      : `${sensorCountLabel(offline)} cannot be checked`;
+
+    // The room list names whatever the headline is about, so an alert with
+    // nothing open lists the sensors that cannot be reached instead of saying
+    // the same thing twice.
+    const pick = open.length
+      ? (entry => entry.open)
+      : (entry => entry.offline);
+    const where = rooms
+      .map(entry => [entry, pick(entry)])
+      .filter(([, named]) => named.length)
+      .map(([entry, named]) => `<li><strong>${esc(entry.zone.name)}</strong>
+        <span>${esc(named.map(s => s.name).join(', '))}</span></li>`)
+      .join('');
+
+    const unchecked = open.length && offline.length
+      ? `<p class="trip-alert-also">${esc(sensorCountLabel(offline))} offline, so
+         ${offline.length === 1 ? 'it' : 'they'} cannot be checked:
+         ${esc(compactSensorNames(offline, 4))}.</p>`
+      : '';
+
+    return `
+      <span class="trip-alert-icon" aria-hidden="true">${Nobo.icon('alert')}</span>
+      <div class="trip-alert-body">
+        <strong>${esc(headline)}</strong>
+        <p>${esc(SITE_IN().charAt(0).toUpperCase() + SITE_IN().slice(1))} is on
+          Away — nobody is expected to be here.</p>
+        ${where ? `<ul class="trip-alert-rooms">${where}</ul>` : ''}
+        ${unchecked}
+      </div>`;
+  }
+
+  /* Changing your own password. The endpoint has existed since the beginning
+     and nothing ever called it, so the only way to stop using the password
+     this software ships with was to edit a file on the Pi. */
+  function changePasswordSheet() {
+    openSheet('Change password', `
+      <p class="zd-sub">This is the password for signing in to this page. It is
+        not the Raspberry Pi's own password.</p>
+      <label class="field"><span>Current password</span>
+        <input id="pwCurrent" type="password" autocomplete="current-password">
+      </label>
+      <label class="field"><span>New password</span>
+        <input id="pwNew" type="password" autocomplete="new-password"
+          placeholder="At least 8 characters">
+      </label>
+      <label class="field"><span>New password again</span>
+        <input id="pwConfirm" type="password" autocomplete="new-password">
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Change it</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const current = root.querySelector('#pwCurrent').value;
+        const next    = root.querySelector('#pwNew').value;
+        const confirm = root.querySelector('#pwConfirm').value;
+        if (next.length < 8) { Nobo.toast('Use at least 8 characters', 'error'); return; }
+        if (next !== confirm) { Nobo.toast('The new passwords do not match', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.changePassword(current, next);
+          closeSheet();
+          Nobo.toast('Password changed');
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* The password every installation ships with is written in the README, so it
+     is public knowledge and protects nothing. Anyone who reaches this page can
+     already be assumed to know it. Saying so where it cannot be missed is the
+     only honest thing to do, and it stops the moment it is changed. */
+  function renderPasswordAlert() {
+    const el = $('#passwordAlert');
+    if (!el) return;
+    const show = !!(state.me && state.me.using_default_password);
+    el.hidden = !show;
+    el.innerHTML = show ? `
+      <span class="trip-alert-icon" aria-hidden="true">${Nobo.icon('alert')}</span>
+      <div class="trip-alert-body">
+        <strong>Anyone can sign in to this</strong>
+        <p>This account still uses the password every copy of this software is
+          installed with, and that password is published in its documentation.
+          Until it is changed, anybody who can reach this page can control the
+          heating.</p>
+        <button class="btn btn-primary" type="button" data-act="fix-password">
+          Choose a password
+        </button>
+      </div>` : '';
+    if (show) {
+      el.querySelector('[data-act="fix-password"]').onclick = () => changePasswordSheet();
+    }
+  }
+
+  function renderTripAlert() {
+    const el = $('#tripAlert');
+    const html = tripAlertHtml();
+    el.hidden = !html;
+    el.innerHTML = html;
+  }
+
   function renderTrip() {
     const a = away();
     const card    = $('#trip');
@@ -265,6 +427,9 @@
 
     card.classList.remove('is-away', 'is-heat');
     tl.hidden = true;
+    // Before the branching below, since several of those return early.
+    renderTripAlert();
+    renderPasswordAlert();
 
     const mode = Nobo.houseMode(state.zones);
 
@@ -758,6 +923,902 @@
     return state.devices.filter(d => String(d.zone_id) === String(zoneId));
   }
 
+  function sensorStateLabel(value) {
+    return {
+      open: 'Open',
+      closed: 'Closed',
+      unknown: 'Unknown',
+      unavailable: 'Unavailable',
+      empty: 'No sensors',
+    }[value] || 'Unknown';
+  }
+
+  function sensorKindLabel(sensor) {
+    return sensor && sensor.kind === 'door' ? 'Door' : 'Window';
+  }
+
+  function sensorIcon(sensor, className = '') {
+    const kind = sensor && sensor.kind === 'door' ? 'door' : 'window';
+    return `<span class="sensor-visual ${className}" aria-hidden="true">${Nobo.icon(kind)}</span>`;
+  }
+
+  const SENSOR_ACTIONS = ['nothing', 'away', 'eco', 'comfort', 'schedule'];
+
+  function sensorActionLabel(value) {
+    return {
+      nothing: 'Do nothing',
+      away: 'Set to Away',
+      eco: 'Set to Eco',
+      comfort: 'Set to Comfort',
+      schedule: 'Return to schedule',
+    }[value] || 'Do nothing';
+  }
+
+  function sensorActionHint(value) {
+    return {
+      nothing: 'Warn only. The heating is left exactly as it is.',
+      away: 'Drop the room to the fixed 7 °C anti-frost temperature.',
+      eco: 'Drop the room to its eco temperature.',
+      comfort: 'Raise the room to its comfort temperature. Usually needs \u201COverride colder modes\u201D below.',
+      schedule: 'Let go of any hold on the room so its schedule decides.',
+    }[value] || '';
+  }
+
+  function compactSensorNames(sensors, limit = 2) {
+    const shown = sensors.slice(0, limit).map(sensor => sensor.name);
+    const remaining = sensors.length - shown.length;
+    return `${shown.join(', ')}${remaining > 0 ? ` and ${remaining} more` : ''}`;
+  }
+
+  /* A group of contacts reads better as "2 windows" than "2 sensors", but only
+     when they are all the same thing. Mixed doors and windows fall back to the
+     neutral word rather than picking one and being wrong about the other. */
+  function sensorGroupNoun(sensors) {
+    const kinds = new Set(sensors.map(item => item.kind === 'door' ? 'door' : 'window'));
+    const noun = kinds.size === 1 ? [...kinds][0] : 'sensor';
+    return sensors.length === 1 ? noun : `${noun}s`;
+  }
+
+  function sensorCountLabel(sensors) {
+    return `${sensors.length} ${sensorGroupNoun(sensors)}`;
+  }
+
+  function sensorPolicyFor(zoneId) {
+    const policy = state.sensorSettings && state.sensorSettings.zones
+      ? state.sensorSettings.zones[String(zoneId)] : null;
+    if (!policy) return null;
+    return {
+      has_equipment: policy.has_equipment !== false,
+      warning_delay_seconds: policy.warning_delay_seconds ?? 300,
+      action_when_open: policy.action_when_open || 'nothing',
+      action_delay_seconds: policy.action_delay_seconds ?? 300,
+      override_all_modes: policy.override_all_modes === true,
+    };
+  }
+
+  /* What the heating rule is doing, in words a person can act on. Both the
+     action and the reason it stood down come from the zone payload rather than
+     the admin-only settings, so an ordinary user can read what the room is
+     about to do without being able to change it. */
+  function sensorRuleLine(zone) {
+    const summary = zone.sensor_summary || {};
+    const action = summary.action_when_open || 'nothing';
+    if (summary.owned_action) {
+      return {
+        tone: 'active',
+        text: `Holding ${esc(sensorModeWord(summary.owned_action))} while this is open.`,
+      };
+    }
+    if (action === 'nothing') return null;
+    if (summary.action_status === 'blocked') {
+      return { tone: 'muted', text: esc(sensorBlockedText(summary, action)) };
+    }
+    if (summary.action_status === 'pending') {
+      return {
+        tone: 'muted',
+        text: `About to ${esc(sensorPendingWord(action))}.`,
+      };
+    }
+    return null;
+  }
+
+  function sensorModeWord(action) {
+    return { away: 'Away', eco: 'Eco', comfort: 'Comfort' }[action] || action;
+  }
+
+  function sensorPendingWord(action) {
+    return action === 'schedule'
+      ? 'return this room to its schedule'
+      : `set this room to ${sensorModeWord(action)}`;
+  }
+
+  function sensorBlockedText(summary, action) {
+    const target = action === 'schedule'
+      ? 'its schedule'
+      : sensorModeWord(action);
+    return {
+      colder_mode: `This room is already colder than ${target}, so it stays as it is.`,
+      no_equipment: 'Monitoring only — there is no heater in this room.',
+      disconnected: 'The hub cannot be reached, so the heating was not changed.',
+    }[summary.block_reason] || 'The heating was left as it is.';
+  }
+
+  /* The strip on the front-page zone card. It has one job: say what is open,
+     how many, and whether it has been open long enough to care about - close
+     enough to read at arm's length without opening the room. */
+  /* Whether the Pi is still hearing from a sensor is a different fact from
+     whether the window is open, and a room can have both at once. They used to
+     share one headline, so a single open contact hid the fact that another
+     sensor had gone quiet — exactly when knowing it matters most, because a
+     sensor nobody can hear from might be open too. */
+  function offlineNote(sensors) {
+    const oldest = sensors
+      .map(sensor => sensor.last_seen_at)
+      .filter(Boolean)
+      .sort()[0];
+    const since = oldest ? Nobo.fmtAgo(oldest) : '';
+    return `${sensorCountLabel(sensors)} offline${since ? ` · last heard ${since}` : ''}`;
+  }
+
+  function sensorZoneHeadline(zone) {
+    const summary = zone.sensor_summary;
+    const items = zone.sensors || [];
+    if (!summary || !summary.sensor_count) return '';
+
+    const open = items.filter(sensor => sensor.available && sensor.state === 'open');
+    const unavailable = items.filter(sensor => !sensor.available);
+    const total = `${summary.sensor_count} monitored`;
+
+    let tone = 'closed';
+    let icon = sensorIcon(items[0]);
+    let headline = 'All closed';
+    let detail = total;
+
+    // The headline can only say one thing, so it says the most urgent one.
+    if (open.length) {
+      tone = summary.warning_raised ? 'warning' : 'open';
+      icon = sensorIcon(open[0]);
+      const state = summary.warning_raised ? 'left open' : 'open';
+      headline = open.length === 1
+        ? `${sensorKindLabel(open[0])} ${state}`
+        : `${sensorCountLabel(open)} ${state}`;
+      detail = compactSensorNames(open);
+    } else if (unavailable.length) {
+      tone = 'unavailable';
+      icon = sensorIcon(unavailable[0]);
+      headline = `${sensorCountLabel(unavailable)} offline`;
+      detail = compactSensorNames(unavailable);
+    } else if (summary.state === 'unknown') {
+      tone = 'unavailable';
+      headline = 'State unknown';
+      detail = total;
+    }
+
+    // ...and anything the headline could not carry gets its own badge, so it
+    // stays on the card whatever else is going on in the room.
+    const alsoOffline = unavailable.length && open.length
+      ? `<span class="zsensor-offline" title="${esc(compactSensorNames(unavailable, 4))}">
+           ${Nobo.icon('alert')}${esc(offlineNote(unavailable))}</span>`
+      : '';
+
+    const rule = sensorRuleLine(zone);
+    // The offline band goes last so it sits along the foot of the strip.
+    return `<div class="zsensor zsensor-${tone}">
+      ${icon}
+      <span class="zsensor-copy">
+        <strong>${esc(headline)}</strong>
+        <small>${esc(detail)}</small>
+      </span>
+      ${open.length
+        ? `<span class="zsensor-tally">${open.length}<i>/${summary.sensor_count}</i></span>`
+        : ''}
+      ${rule ? `<small class="zsensor-rule">${rule.text}</small>` : ''}
+      ${alsoOffline}
+    </div>`;
+  }
+
+  function sensorRow(sensor, admin) {
+    const open = sensor.available && sensor.state === 'open';
+    const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
+    const low = sensor.battery != null && sensor.battery <= 20;
+    /* A battery sensor reports its level on its own schedule, and Aqara warns
+       that can take up to a day. Rendering nothing for a level we have not
+       been told reads as a broken sensor, so the gap is named instead. */
+    const battery = sensor.battery == null
+      ? `<span class="sensor-batt is-unknown"
+           title="This sensor has not reported its battery level yet. It cannot be asked for it — battery devices send it on their own schedule, usually within an hour of pairing.">Battery not reported yet</span>`
+      : `<span class="sensor-batt ${low ? 'is-low' : ''}"
+           title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%${
+             low ? ' low' : ''}</span>`;
+    /* Offline means the Pi is no longer hearing from the sensor, which is a
+       different worry from a window being open — so it says when it was last
+       heard from rather than leaving you to guess how stale the state is. */
+    const detail = sensor.available
+      ? sensorKindLabel(sensor)
+      : `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`;
+    return `
+      <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'}">
+        ${sensorIcon(sensor)}
+        <span class="sensor-copy">
+          <strong>${esc(sensor.name)}</strong>
+          <small>${esc(detail)}</small>
+        </span>
+        <span class="sensor-facts">
+          <span class="sensor-state sensor-${esc(sensor.available ? sensor.state : 'unavailable')}">${esc(label)}</span>
+          ${battery}
+        </span>
+        ${admin ? `<span class="dev-actions sensor-actions">
+          <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
+            title="Edit this sensor" aria-label="Edit ${esc(sensor.name)}">${Nobo.icon('rename')}</button>
+          <button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
+            title="Move to another room" aria-label="Move ${esc(sensor.name)}">${Nobo.icon('move')}</button>
+          <button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
+            title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>
+          <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
+            title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
+        </span>` : ''}
+      </li>`;
+  }
+
+  /* One line summarising the rule, with the editing behind a button. The rule
+     is read far more often than it is changed, and a form left open in the
+     card pushed the sensors themselves off the screen. */
+  function sensorRuleSummary(zone) {
+    const policy = sensorPolicyFor(zone.zone_id);
+    if (!policy) return '';
+    const admin = state.me && state.me.role === 'admin';
+    const when = seconds => Number(seconds) === 0
+      ? 'immediately' : `after ${Nobo.fmtDuration(seconds)}`;
+    const parts = [`Warns ${when(policy.warning_delay_seconds)}`];
+    if (!policy.has_equipment) {
+      parts.push('monitoring only');
+    } else if (policy.action_when_open === 'nothing') {
+      parts.push('heating unchanged');
+    } else {
+      parts.push(
+        `${sensorActionLabel(policy.action_when_open).toLowerCase()} ` +
+        when(policy.action_delay_seconds)
+      );
+      if (policy.override_all_modes) parts.push('overrides colder modes');
+    }
+    return `
+      <div class="sensor-rule">
+        <span class="sensor-rule-copy">
+          <strong>When one stays open</strong>
+          <small>${esc(parts.join(' · '))}</small>
+        </span>
+        ${admin ? `<button class="btn btn-small" type="button"
+          data-edit-sensor-policy="${esc(zone.zone_id)}">Change</button>` : ''}
+      </div>`;
+  }
+
+  function sensorStatus(zone, detailed = false) {
+    const summary = zone.sensor_summary;
+    if (!summary) return '';
+    if (!detailed) return sensorZoneHeadline(zone);
+
+    const items = zone.sensors || [];
+    const open = items.filter(sensor => sensor.available && sensor.state === 'open');
+    const admin = state.me && state.me.role === 'admin';
+    const rule = sensorRuleLine(zone);
+
+    /* The live region is the warning only. The card around it re-renders on
+       every zone update, so announcing the whole thing would read the sensor
+       list out again every few seconds; role="alert" would be worse still and
+       repeat the same open window for as long as it stayed open. */
+    const warning = summary.warning_raised
+      ? `<div class="sensor-warning">
+           <span class="sensor-warning-icon" aria-hidden="true">${Nobo.icon(
+             open[0] && open[0].kind === 'door' ? 'door' : 'window')}</span>
+           <span>
+             <strong>${esc(open.length === 1
+               ? `${sensorKindLabel(open[0])} left open`
+               : `${sensorCountLabel(open)} left open`)}</strong>
+             <small>${esc(open.length ? compactSensorNames(open, 4) : zone.name)}</small>
+           </span>
+         </div>`
+      : '';
+
+    const unreachable = items.filter(sensor => !sensor.available);
+    const offline = unreachable.length
+      ? `<div class="sensor-offline-note">
+           <strong>${esc(offlineNote(unreachable))}</strong>
+           <small>${esc(compactSensorNames(unreachable, 4))} — the state shown was
+             the last one reported, so ${unreachable.length === 1 ? 'it' : 'they'}
+             may have been opened since.</small>
+         </div>`
+      : '';
+
+    return `
+      <section class="card sensor-card">
+        <div class="card-head">
+          <h2>Doors and windows</h2>
+          <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+        </div>
+        <div aria-live="polite">${warning}${offline}</div>
+        ${rule && !summary.warning_raised
+          ? `<p class="sensor-rule-line is-${rule.tone}">${rule.text}</p>` : ''}
+        ${items.length
+          ? `<ul class="sensor-list">${items.map(item => sensorRow(item, admin)).join('')}</ul>`
+          : '<p class="zd-sub">No contact sensors are assigned to this room yet.</p>'}
+        ${sensorRuleSummary(zone)}
+        ${admin ? `<div class="sheet-actions">
+          <button class="btn" type="button" data-add-sensor="${esc(zone.zone_id)}">Add sensor</button>
+        </div>` : ''}
+      </section>`;
+  }
+
+  function configuredSensor(sensorId) {
+    return state.zones.flatMap(zone => zone.sensors || []).find(
+      sensor => String(sensor.sensor_id) === String(sensorId)
+    ) || (state.sensorDevices || []).find(
+      sensor => String(sensor.sensor_id) === String(sensorId)
+    );
+  }
+
+  function sensorZoneOptions(selected) {
+    return state.zones.map(zone => `<option value="${esc(zone.zone_id)}"
+      ${String(selected || '') === String(zone.zone_id) ? 'selected' : ''}>${esc(zone.name)}</option>`).join('');
+  }
+
+  /* What a pairing window is doing, said plainly.
+
+     Somebody is standing at a door holding a paperclip against a battery
+     device, so the two things they need are whether the window is still open
+     and whether anything happened. A silent window that has quietly expired is
+     the worst possible answer, which is why "expired" is a state of its own
+     rather than a return to the beginning. */
+  const PAIRING_REPORT = {
+    joined:    { tone: 'ok',    icon: 'check',  title: 'Sensor found' },
+    ignored:   { tone: 'warn',  icon: 'alert',  title: 'That is not a contact sensor' },
+    failed:    { tone: 'error', icon: 'alert',  title: 'Pairing failed' },
+    cancelled: { tone: 'idle',  icon: 'normal', title: 'Pairing stopped' },
+    expired:   { tone: 'warn',  icon: 'alert',  title: 'Nothing joined in time' },
+  };
+
+  function pairingReport(pairing) {
+    if (!pairing) return null;
+    if (pairing.active) {
+      const left = pairing.seconds_remaining;
+      return {
+        tone: 'busy', icon: 'listen', title: 'Listening for a sensor',
+        detail: left == null
+          ? 'Hold the sensor\u2019s button until it blinks.'
+          : `Hold the sensor\u2019s button until it blinks. ${left}s left.`,
+      };
+    }
+    const known = PAIRING_REPORT[pairing.outcome];
+    if (!known) return null;
+    const detail = pairing.detail || (
+      pairing.outcome === 'joined' ? 'Now give it a name and a room.'
+      : pairing.outcome === 'expired' ? 'The window closed before anything joined. Try again, closer to the hub if it keeps failing.'
+      : pairing.outcome === 'cancelled' ? 'No sensor was added.'
+      : '');
+    return { ...known, detail };
+  }
+
+  function pairingStatusHtml(pairing) {
+    const report = pairingReport(pairing);
+    if (!report) return '';
+    return `<div class="pair-status is-${report.tone}" role="status" aria-live="polite">
+        <span class="pair-status-icon" aria-hidden="true">${Nobo.icon(report.icon)}</span>
+        <span class="pair-status-text">
+          <strong>${esc(report.title)}</strong>
+          ${report.detail ? `<span>${esc(report.detail)}</span>` : ''}
+        </span>
+      </div>`;
+  }
+
+  function sensorDetailsFields(sensor, defaultZoneId) {
+    return `
+      <label class="field"><span>Sensor type</span>
+        <select id="pairSensorKind">
+          <option value="window" ${(sensor && sensor.kind === 'door') ? '' : 'selected'}>Window</option>
+          <option value="door" ${(sensor && sensor.kind === 'door') ? 'selected' : ''}>Door</option>
+        </select>
+      </label>
+      <label class="field"><span>Name</span>
+        <input id="pairSensorName" type="text" maxlength="80" autocomplete="off"
+          value="${esc(sensor ? sensor.name : '')}" placeholder="Kitchen window">
+      </label>
+      <label class="field"><span>Zone</span>
+        <select id="pairSensorZone">${sensorZoneOptions(
+          sensor && sensor.zone_id ? sensor.zone_id : defaultZoneId)}</select>
+      </label>`;
+  }
+
+  function pairSensorSheet(defaultZoneId = '', replacing = null) {
+    const settings = state.sensorSettings || {};
+    const hasWindow = !!(settings.pairing && settings.pairing.supported);
+    if (!hasWindow) { simulatedSensorSheet(defaultZoneId, replacing); return; }
+    zigbeePairSheet(defaultZoneId, replacing);
+  }
+
+  /* The simulator has no radio, so there is no window to wait at: the form is
+     the whole of it. */
+  function simulatedSensorSheet(defaultZoneId, replacing) {
+    openSheet(replacing ? 'Replace sensor' : 'Add a sensor', `
+      <p class="zd-sub">Demo mode creates a simulated contact immediately.</p>
+      ${sensorDetailsFields(replacing, defaultZoneId)}
+      ${replacing ? '<div class="note">The old sensor is removed only after its replacement exists.</div>' : ''}
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="pair">
+          ${replacing ? 'Replace simulated sensor' : 'Add simulated sensor'}
+        </button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="pair"]').onclick = async (event) => {
+        const name = root.querySelector('#pairSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.pairSensor({
+            name,
+            kind: root.querySelector('#pairSensorKind').value,
+            zone_id: root.querySelector('#pairSensorZone').value,
+          });
+          if (replacing) await Nobo.api.removeSensor(replacing.sensor_id);
+          closeSheet();
+          Nobo.toast(replacing ? `${name} replaced` : `${name} added`);
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* Real pairing is two steps because a radio join takes anywhere from seconds
+     to never. The sheet therefore has explicit phases, and opens in "ready" —
+     never showing the result of somebody's previous attempt, which read as
+     "Close / Try again" before the user had done anything at all.
+
+     Phases: ready -> listening -> found (name it) | finished (tell them why). */
+  function zigbeePairSheet(defaultZoneId, replacing) {
+    let pairing = {};
+    let timer = null;
+    let joined = null;
+    let closed = false;
+    let phase = 'ready';
+
+    const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+    function instructionsHtml() {
+      return `
+        <p class="zd-sub">Pairing puts the hub's radio into listening mode for a
+          few minutes. Have the sensor with you before you start.</p>
+        <ol class="pair-steps">
+          <li>Put the sensor <strong>where it will actually live</strong> — a
+            sensor that only joins next to the hub will drop out later.</li>
+          <li>Press <strong>Start pairing</strong> below.</li>
+          <li>Hold the small button on the sensor for about five seconds, until
+            its light blinks.</li>
+        </ol>`;
+    }
+
+    function render() {
+      /* The poll awaits before it renders, and clearInterval does not cancel a
+         callback already in flight. Without this a late render would write
+         into whichever sheet had since been opened over this one. */
+      if (closed) return;
+      $('#sheetTitle').textContent = replacing ? 'Replace sensor' : 'Add a sensor';
+
+      let body = '';
+      let actions = '';
+
+      if (phase === 'ready') {
+        body = instructionsHtml();
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-act="start">Start pairing</button>`;
+      } else if (phase === 'listening') {
+        body = `${pairingStatusHtml(pairing)}
+          <p class="zd-sub">Hold the button on the sensor <strong>now</strong>,
+            for about five seconds, until its light blinks.</p>`;
+        actions = `<button class="btn" type="button" data-act="cancel">Stop</button>`;
+      } else if (phase === 'found') {
+        body = `${pairingStatusHtml(pairing)}
+          ${sensorDetailsFields(joined, defaultZoneId)}
+          ${replacing ? '<div class="note">The old sensor is removed only after this one is saved.</div>' : ''}`;
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-act="save">Save sensor</button>`;
+      } else {
+        body = `${pairingStatusHtml(pairing)}${instructionsHtml()}`;
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Close</button>
+          <button class="btn btn-primary" type="button" data-act="start">Try again</button>`;
+      }
+
+      sheetBody.innerHTML = `${body}<div class="sheet-actions">${actions}</div>`;
+      wire();
+    }
+
+    function wire() {
+      sheetBody.querySelector('[data-act="cancel"]').onclick = () => closeSheet();
+
+      const startButton = sheetBody.querySelector('[data-act="start"]');
+      if (startButton) startButton.onclick = async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          pairing = await Nobo.api.startSensorPairing(254);
+          joined = null;
+          phase = 'listening';
+          render();
+          poll();
+        } catch (e) {
+          Nobo.toast(e.message, 'error');
+          event.currentTarget.disabled = false;
+        }
+      };
+
+      const saveButton = sheetBody.querySelector('[data-act="save"]');
+      if (saveButton) saveButton.onclick = async (event) => {
+        const name = sheetBody.querySelector('#pairSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.updateSensor(joined.sensor_id, {
+            name,
+            kind: sheetBody.querySelector('#pairSensorKind').value,
+            zone_id: sheetBody.querySelector('#pairSensorZone').value,
+          });
+          if (replacing) await removeSensorWithRetry(replacing);
+          closeSheet();
+          Nobo.toast(`${name} added`);
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    }
+
+    /* Polled rather than pushed, only while this sheet is open, because a
+       countdown has to tick every second and the WebSocket only speaks when
+       something changes. */
+    function poll() {
+      stop();
+      timer = setInterval(async () => {
+        let next;
+        try { next = await Nobo.api.sensorPairing(); } catch (e) { return; }
+        if (closed) return;
+        pairing = next;
+        if (next.active) { render(); return; }
+
+        stop();
+        if (next.outcome === 'joined' && next.sensor_id) {
+          await refresh(true);
+          if (closed) return;
+          joined = configuredSensor(next.sensor_id) || {
+            sensor_id: next.sensor_id, name: '', kind: 'window', zone_id: defaultZoneId,
+          };
+          phase = 'found';
+        } else {
+          phase = 'finished';
+        }
+        render();
+      }, 1000);
+    }
+
+    openSheet(replacing ? 'Replace sensor' : 'Add a sensor', '', () => {});
+    /* Dismissing the sheet by the scrim or Escape has to close the join window
+       too, exactly as the hub's device search does. Otherwise the radio stays
+       in permit-join for the rest of its four minutes with nothing on screen
+       saying so, and anything that joins in that time is accepted silently. */
+    onSheetClose(() => {
+      closed = true;
+      stop();
+      if (pairing.active) Nobo.api.cancelSensorPairing().catch(() => {});
+    });
+    render();
+  }
+
+  /* A battery contact sensor is asleep almost all of the time, so Zigbee2MQTT
+     often cannot tell it to leave. That is an ordinary outcome, not a fault,
+     and the choice to drop it from the database anyway belongs to the user:
+     the device can rejoin later, and then reappears as if by itself. */
+  async function removeSensorWithRetry(sensor) {
+    /* Unpairing talks to the device, and the radio waits ten seconds for an
+       answer that a sleeping sensor will not give. confirmSheet closes before
+       it runs its action, so without this there was nothing at all on screen
+       for those ten seconds — which is indistinguishable from the button not
+       working, and is exactly how this was reported. */
+    workingSheet('Removing sensor', `Asking the hub to unpair ${sensor.name}`);
+    try {
+      await Nobo.api.removeSensor(sensor.sensor_id);
+      closeSheet();
+      return true;
+    } catch (e) {
+      closeSheet();
+      if (!/rejoin later/i.test(e.message || '')) throw e;
+    }
+    return await new Promise((resolve) => {
+      confirmSheet(
+        `Remove ${sensor.name} anyway?`,
+        'The sensor did not answer, which usually just means it is asleep. '
+        + 'It can be removed from this hub now, but if it is still powered it '
+        + 'may rejoin by itself later.',
+        'Remove anyway',
+        async () => {
+          try {
+            await Nobo.api.removeSensor(sensor.sensor_id, true);
+            Nobo.toast(`${sensor.name} removed`);
+            await refresh(true);
+            resolve(true);
+          } catch (err) {
+            Nobo.toast(err.message, 'error');
+            resolve(false);
+          }
+        },
+        true,
+      );
+    });
+  }
+
+  function editSensorSheet(sensorId) {
+    const sensor = configuredSensor(sensorId);
+    if (!sensor) return;
+    /* Whether these sensors can be *made* to say things, which is not the
+       same question as whether the hub is simulated: real Zigbee sensors
+       beside a demo hub is a supported arrangement, and offering to type
+       in their battery level offers to invent a hardware reading. */
+    const demo = !!(state.sensorSettings && state.sensorSettings.simulated);
+    openSheet(`Edit ${sensor.name}`, `
+      <label class="field"><span>Name</span>
+        <input id="editSensorName" type="text" maxlength="80" value="${esc(sensor.name)}">
+      </label>
+      <label class="field"><span>Sensor type</span>
+        <select id="editSensorKind">
+          <option value="window" ${sensor.kind === 'door' ? '' : 'selected'}>Window</option>
+          <option value="door" ${sensor.kind === 'door' ? 'selected' : ''}>Door</option>
+        </select>
+      </label>
+      ${demo ? `
+        <h3>Simulated state</h3>
+        <label class="field"><span>Contact</span>
+          <select id="editSensorState">
+            ${['closed', 'open', 'unknown'].map(value => `<option value="${value}"
+              ${sensor.state === value ? 'selected' : ''}>${esc(sensorStateLabel(value))}</option>`).join('')}
+          </select>
+        </label>
+        <label class="switch"><span class="switch-text"><strong>Available</strong>
+          <span>Simulate whether the provider can currently reach it.</span></span>
+          <input id="editSensorAvailable" type="checkbox" ${sensor.available ? 'checked' : ''}>
+        </label>
+        <label class="field"><span>Battery percentage</span>
+          <input id="editSensorBattery" type="number" min="0" max="100"
+            value="${sensor.battery == null ? '' : esc(sensor.battery)}">
+        </label>` : ''}
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const name = root.querySelector('#editSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.updateSensor(sensor.sensor_id, {
+            name,
+            kind: root.querySelector('#editSensorKind').value,
+          });
+          if (demo) {
+            const battery = root.querySelector('#editSensorBattery').value;
+            await Nobo.api.simulateSensor(sensor.sensor_id, {
+              state: root.querySelector('#editSensorState').value,
+              available: root.querySelector('#editSensorAvailable').checked,
+              battery: battery === '' ? undefined : Number(battery),
+              clear_battery: battery === '',
+            });
+          }
+          closeSheet();
+          Nobo.toast('Sensor updated');
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  function moveSensorSheet(sensorId) {
+    const sensor = configuredSensor(sensorId);
+    if (!sensor) return;
+    openSheet(`Move ${sensor.name}`, `
+      <p class="zd-sub">Choose the zone that should monitor this ${sensorKindLabel(sensor).toLowerCase()}.</p>
+      <label class="field"><span>Zone</span>
+        <select id="moveSensorZone">${sensorZoneOptions(sensor.zone_id)}</select>
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="move">Move sensor</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="move"]').onclick = async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await Nobo.api.updateSensor(sensor.sensor_id, {
+            zone_id: root.querySelector('#moveSensorZone').value,
+          });
+          closeSheet();
+          Nobo.toast(`${sensor.name} moved`);
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* A sheet that says work is under way and offers nothing to press. Reuses
+     the pairing status band so "the hub is busy" looks the same everywhere. */
+  function workingSheet(title, message) {
+    openSheet(title, `
+      <div class="pair-status is-busy" role="status" aria-live="polite">
+        <span class="pair-status-icon" aria-hidden="true">${Nobo.icon('listen')}</span>
+        <span class="pair-status-text"><strong>${esc(message)}</strong>
+          <span>This can take up to ten seconds.</span></span>
+      </div>`, () => {});
+  }
+
+  function removeSensor(sensorId) {
+    const sensor = configuredSensor(sensorId);
+    if (!sensor) return;
+    const paired = !!(state.sensorSettings && state.sensorSettings.pairing
+      && state.sensorSettings.pairing.supported);
+    confirmSheet('Remove this sensor?',
+      paired
+        ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten. `
+          + 'Battery sensors are asleep most of the time, so if it does not answer '
+          + 'you will be asked whether to remove it anyway.'
+        : `${sensor.name} and its assignment are removed.`,
+      'Remove sensor', async () => {
+        try {
+          if (await removeSensorWithRetry(sensor)) {
+            Nobo.toast(`${sensor.name} removed`);
+            await refresh(true);
+          }
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      }, true);
+  }
+
+  /* Every zone's rule goes back in one request. The server keeps a zone it was
+     not sent, so only the edited one strictly has to be there, but sending the
+     lot keeps this a single obvious write rather than a partial update whose
+     result depends on what the server happened to remember. */
+  function sensorPolicyPayload(zoneId, edited) {
+    const zones = {};
+    Object.keys(state.sensorSettings.zones || {}).forEach(id => {
+      const policy = sensorPolicyFor(id);
+      zones[id] = {
+        warning_delay_seconds: policy.warning_delay_seconds,
+        action_when_open: policy.action_when_open,
+        action_delay_seconds: policy.action_delay_seconds,
+        override_all_modes: policy.override_all_modes,
+      };
+    });
+    zones[String(zoneId)] = edited;
+    return zones;
+  }
+
+  function editSensorPolicySheet(zoneId) {
+    const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
+    const policy = sensorPolicyFor(zoneId);
+    if (!zone || !policy) return;
+
+    openSheet(`Rules for ${zone.name}`, `
+      <p class="zd-sub">What should happen when a door or window in this room is
+      left open.</p>
+
+      <label class="field"><span>Warn me once it has been open for</span>
+        <select id="spWarn">${sensorDelayOptions(policy.warning_delay_seconds)}</select>
+        <small class="field-hint">The warning stays on the room until every
+        contact reports closed.</small>
+      </label>
+
+      <label class="field"><span>Then set the heating to</span>
+        <select id="spAction" ${policy.has_equipment ? '' : 'disabled'}>
+          ${SENSOR_ACTIONS.map(value => `<option value="${value}"
+            ${policy.action_when_open === value ? 'selected' : ''}
+            >${esc(sensorActionLabel(value))}</option>`).join('')}
+        </select>
+        <small class="field-hint" id="spActionHint"></small>
+      </label>
+
+      <label class="field" id="spDelayField">
+        <span>and change the heating after</span>
+        <select id="spDelay">${sensorDelayOptions(policy.action_delay_seconds)}</select>
+        <small class="field-hint">Both delays are counted from the moment it
+        opens, so they do not add up. While it is open the room runs whichever
+        is colder — this, or what the house is doing.</small>
+      </label>
+
+      <label class="switch" id="spOverrideField">
+        <span class="switch-text"><strong>Override colder modes</strong>
+          <span>Off, the room runs whichever is colder: this rule, or whatever
+          the house is doing. On, this rule wins until the contact closes —
+          whatever the house is set to in the meantime.</span>
+        </span>
+        <input id="spOverride" type="checkbox" ${policy.override_all_modes ? 'checked' : ''}>
+      </label>
+
+      ${policy.has_equipment ? '' : `<div class="note">This room has no Nobø
+        heater, so it can be watched but not heated. It will still warn.</div>`}
+
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save rules</button>
+      </div>`, (root) => {
+      const action = root.querySelector('#spAction');
+      const delayField = root.querySelector('#spDelayField');
+      const overrideField = root.querySelector('#spOverrideField');
+      const override = root.querySelector('#spOverride');
+      const hint = root.querySelector('#spActionHint');
+
+      const sync = () => {
+        const chosen = action.value;
+        delayField.hidden = chosen === 'nothing';
+        // "Follow schedule" can warm a room by letting go of a hold, so it is
+        // judged by the same ordering and keeps the same escape hatch.
+        overrideField.hidden = chosen === 'nothing';
+        if (chosen === 'nothing') override.checked = false;
+        hint.textContent = sensorActionHint(chosen);
+      };
+      sync();
+      action.onchange = sync;
+
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          const chosen = action.value;
+          state.sensorSettings = await Nobo.api.setSensorSettings({
+            enabled: true,
+            zones: sensorPolicyPayload(zoneId, {
+              warning_delay_seconds: Number(root.querySelector('#spWarn').value),
+              action_when_open: chosen,
+              action_delay_seconds: Number(root.querySelector('#spDelay').value),
+              override_all_modes: chosen !== 'nothing' && override.checked,
+            }),
+          });
+          closeSheet();
+          Nobo.toast('Rules saved');
+          await refresh(true);
+        } catch (e) {
+          event.currentTarget.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  function wireZoneSensors(root) {
+    root.querySelectorAll('[data-add-sensor]').forEach(button => {
+      button.onclick = () => pairSensorSheet(button.dataset.addSensor);
+    });
+    root.querySelectorAll('[data-edit-sensor]').forEach(button => {
+      button.onclick = () => editSensorSheet(button.dataset.editSensor);
+    });
+    root.querySelectorAll('[data-move-sensor]').forEach(button => {
+      button.onclick = () => moveSensorSheet(button.dataset.moveSensor);
+    });
+    root.querySelectorAll('[data-replace-sensor]').forEach(button => {
+      button.onclick = () => pairSensorSheet('', configuredSensor(button.dataset.replaceSensor));
+    });
+    root.querySelectorAll('[data-remove-sensor]').forEach(button => {
+      button.onclick = () => removeSensor(button.dataset.removeSensor);
+    });
+    root.querySelectorAll('[data-edit-sensor-policy]').forEach(button => {
+      button.onclick = () => editSensorPolicySheet(button.dataset.editSensorPolicy);
+    });
+  }
+
   function zoneRow(zone) {
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
@@ -806,11 +1867,12 @@
           : 'Away uses a fixed system temperature');
 
     return `
-      <li class="zone" data-zone="${esc(zone.zone_id)}">
+      <li class="zone ${zone.sensor_summary && zone.sensor_summary.warning_raised ? 'zone-sensor-warning' : ''}" data-zone="${esc(zone.zone_id)}">
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
         <div class="zone-meta">${modeBadge}${manualBadge}${zoneOverrideBadge(zone)}${renderSetpointDriftBadge(zone)}</div>
+        ${sensorStatus(zone)}
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -1134,6 +2196,8 @@
         ${renderFollowGlobal(zone)}
       </section>
 
+      ${sensorStatus(zone, true)}
+
       <section class="card">
         <h2>Heaters in this zone (${devices.length})</h2>
         ${devices.length ? `<ul class="dev-list">${devices.map(devRow).join('')}</ul>`
@@ -1198,6 +2262,7 @@
     root.querySelectorAll('[data-replace-device]').forEach(b => {
       b.onclick = () => replaceDevice(b.dataset.replaceDevice);
     });
+    wireZoneSensors(root);
     const addBtn = root.querySelector('[data-act="add-device"]');
     if (addBtn) addBtn.onclick = () => addDeviceSheet(zone);
     root.querySelector('[data-act="rename-zone"]').onclick = () => renameZone(zone);
@@ -2469,6 +3534,116 @@
    * Settings - ordered by what actually gets changed
    * ---------------------------------------------------------------- */
 
+  function sensorDelayOptions(value) {
+    const choices = [
+      [0, 'Immediately'],
+      [10, '10 seconds (demo)'],
+      [60, '1 minute'],
+      [120, '2 minutes'],
+      [300, '5 minutes'],
+      [600, '10 minutes'],
+      [1800, '30 minutes'],
+      [3600, '1 hour'],
+    ];
+    // A value saved by an older build, or through the API, still has to be
+    // selectable — otherwise opening the sheet would silently change it.
+    if (!choices.some(([seconds]) => seconds === Number(value))) {
+      choices.push([Number(value), Nobo.fmtDuration(value)]);
+      choices.sort((a, b) => a[0] - b[0]);
+    }
+    return choices.map(([seconds, label]) =>
+      `<option value="${seconds}" ${Number(value) === seconds ? 'selected' : ''}>${esc(label)}</option>`
+    ).join('');
+  }
+
+  function allConfiguredSensors() {
+    return state.sensorDevices || [];
+  }
+
+  function renderSensorSettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.sensorSettings) return '';
+    const settings = state.sensorSettings;
+    const sensors = allConfiguredSensors();
+    const knownZones = new Set(state.zones.map(zone => String(zone.zone_id)));
+    const unassigned = sensors.filter(sensor =>
+      sensor.zone_id == null || !knownZones.has(String(sensor.zone_id))
+    );
+    return `
+      <section class="card sensor-settings">
+        <div class="section-head">
+          <h2>Door and window sensors</h2>
+          ${settings.enabled
+            ? '<button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>'
+            : ''}
+        </div>
+        <p class="zd-sub">Optional contact monitoring.
+        ${settings.simulated
+          ? 'These sensors are <strong>simulated</strong>; no Zigbee hardware or broker is started, and their state is yours to set.'
+          : 'These are <strong>real Zigbee sensors</strong>, so their contact, battery and reachability are readings from the hardware.'}</p>
+        <div class="switch">
+          <div class="switch-text"><strong>Use contact sensors</strong>
+            <span>Show door and window state, left-open warnings and optional heating actions.</span>
+          </div>
+          <button class="btn" type="button" data-act="toggle-sensors"
+            aria-pressed="${settings.enabled ? 'true' : 'false'}">${settings.enabled ? 'On' : 'Off'}</button>
+        </div>
+        ${settings.enabled ? `
+          <div class="sensor-settings-summary">
+            <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
+            <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
+          </div>
+          ${unassigned.length ? `
+            <div class="note note-warn">
+              <strong>${unassigned.length} unassigned ${unassigned.length === 1 ? 'sensor needs' : 'sensors need'} a zone</strong>
+              <ul class="sensor-unassigned-list">${unassigned.map(sensor => `
+                <li><span>${sensorIcon(sensor)} <strong>${esc(sensor.name)}</strong></span>
+                  <span class="dev-actions sensor-actions">
+                    <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
+                      title="Edit this sensor" aria-label="Edit ${esc(sensor.name)}">${Nobo.icon('rename')}</button>
+                    <button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
+                      title="Assign to a zone" aria-label="Assign ${esc(sensor.name)} to a zone">${Nobo.icon('move')}</button>
+                    <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
+                      title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
+                  </span>
+                </li>`).join('')}</ul>
+            </div>` : ''}`
+          : '<div class="note">Nothing sensor-related is shown elsewhere while this is off.</div>'}
+      </section>`;
+  }
+
+  async function saveSensorSettings(enabled = state.sensorSettings.enabled) {
+    // Turning the feature on or off must not quietly rewrite anyone's rules,
+    // so every zone goes back exactly as it came.
+    const zones = {};
+    Object.keys(state.sensorSettings.zones || {}).forEach(id => {
+      const policy = sensorPolicyFor(id);
+      zones[id] = {
+        warning_delay_seconds: policy.warning_delay_seconds,
+        action_when_open: policy.action_when_open,
+        action_delay_seconds: policy.action_delay_seconds,
+        override_all_modes: policy.override_all_modes,
+      };
+    });
+    state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones });
+    state.sensorDevices = enabled ? await Nobo.api.sensors() : [];
+    await refresh(true);
+    renderSettings();
+  }
+
+  function wireSensorSettings(root) {
+    const toggle = root.querySelector('[data-act="toggle-sensors"]');
+    if (!toggle) return;
+    toggle.onclick = async () => {
+      try {
+        await saveSensorSettings(!state.sensorSettings.enabled);
+        Nobo.toast(state.sensorSettings.enabled ? 'Contact sensors enabled' : 'Contact sensors disabled');
+      } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    const pair = root.querySelector('[data-act="pair-sensor"]');
+    if (pair) pair.onclick = () => pairSensorSheet();
+    wireZoneSensors(root);
+  }
+
   async function showSettings() {
     state.view = 'settings';
     switchView();
@@ -2477,6 +3652,10 @@
       // Cached so later re-renders (after saving, say) keep the right identity
       // and do not flash an ordinary user's disabled controls back to enabled.
       state.me = await Nobo.api.me();
+      if (state.me && state.me.role === 'admin') {
+        state.sensorSettings = await Nobo.api.sensorSettings();
+        state.sensorDevices = state.sensorSettings.enabled ? await Nobo.api.sensors() : [];
+      }
       renderSettings();
     } catch (_) { /* the static render is already correct enough */ }
   }
@@ -2533,6 +3712,8 @@
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       </section>
+
+      ${renderSensorSettingsCard(isAdmin)}
 
       <section class="card">
         <h2>Where the data comes from</h2>
@@ -2620,6 +3801,7 @@
         <h2>Your account</h2>
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
+          <button class="btn" type="button" data-act="change-password">Change password</button>
           <button class="btn" type="button" data-act="signout">Sign out</button>
         </div>
         <div class="sheet-actions">
@@ -2653,6 +3835,7 @@
     root.querySelector('[data-act="save-site"]').onclick = saveSite;
     root.querySelector('[data-act="open-log"]').onclick = showLog;
     root.querySelector('[data-act="add-schedule"]').onclick = addWeekProfile;
+    root.querySelector('[data-act="change-password"]').onclick = changePasswordSheet;
     root.querySelector('[data-act="signout"]').onclick = async () => {
       try { await Nobo.api.logout(); } catch (_) {}
       window.location.href = '/login';
@@ -2686,6 +3869,7 @@
     const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
     loadNotifications(isAdmin);
+    wireSensorSettings(root);
   }
 
   function renderScheduleSettings() {

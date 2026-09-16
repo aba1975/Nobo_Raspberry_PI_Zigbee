@@ -49,6 +49,13 @@ const Nobo = (() => {
                                        method: 'POST', body: JSON.stringify(temps) }),
     logout:        ()              => req('/auth/logout', { method: 'POST' }),
     me:            ()              => req('/auth/me'),
+    changePassword: (current, next) => req('/auth/change-password', {
+                                       method: 'POST',
+                                       body: JSON.stringify({
+                                         current_password: current,
+                                         new_password: next,
+                                         confirm_password: next,
+                                       }) }),
 
     /* Added for concept D. All pre-existing endpoints - see docs/UI_REDESIGN.md. */
 
@@ -81,6 +88,25 @@ const Nobo = (() => {
                                  method: 'PUT', body: JSON.stringify(body) }),
     testNotification: (body) => req('/api/notifications/test', {
                                  method: 'POST', body: JSON.stringify(body || {}) }),
+
+    sensorSettings:    ()     => req('/api/sensors/settings'),
+    setSensorSettings: (body) => req('/api/sensors/settings', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    sensors:       ()         => req('/api/sensors').then(r => r.sensors || r),
+    pairSensor:    (body)     => req('/api/sensors', {
+                                  method: 'POST', body: JSON.stringify(body) }),
+    updateSensor:  (id, body) => req(`/api/sensors/${encodeURIComponent(id)}`, {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    removeSensor:  (id, force = false) =>
+                                req(`/api/sensors/${encodeURIComponent(id)}`
+                                    + (force ? '?force=true' : ''), {
+                                  method: 'DELETE' }),
+    simulateSensor: (id, body) => req(`/api/sensors/${encodeURIComponent(id)}/simulate`, {
+                                   method: 'POST', body: JSON.stringify(body) }),
+    sensorPairing:  ()        => req('/api/sensors/pairing'),
+    startSensorPairing: (seconds) => req('/api/sensors/pairing', {
+                                  method: 'POST', body: JSON.stringify({ seconds }) }),
+    cancelSensorPairing: ()   => req('/api/sensors/pairing', { method: 'DELETE' }),
 
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
@@ -140,7 +166,17 @@ const Nobo = (() => {
    * ------------------------------------------------------------- */
 
   const ICON_PATHS = {
+    /* A fault, not a state of the house: used where something has stopped
+       reporting rather than where a room is simply cold. */
+    alert:   '<path d="M12 4.2 2.9 19.8h18.2z"/><path d="M12 9.6v4.4"/>' +
+             '<circle cx="12" cy="17" r=".9" fill="currentColor" stroke="none"/>',
     home:    '<path d="M3.2 10.6 12 3.4l8.8 7.2"/><path d="M5.6 9.6V20h12.8V9.6"/>',
+    /* Something finished, as opposed to something being wrong. */
+    check:   '<path d="M4.6 12.4 9.6 17.4 19.4 6.8"/>',
+    /* A radio listening for a device that has not arrived yet. */
+    listen:  '<circle cx="12" cy="12" r="2.4"/><path d="M7.8 7.8a5.9 5.9 0 0 0 0 8.4"/>' +
+             '<path d="M16.2 16.2a5.9 5.9 0 0 0 0-8.4"/><path d="M5 5a9.9 9.9 0 0 0 0 14"/>' +
+             '<path d="M19 19a9.9 9.9 0 0 0 0-14"/>',
     comfort: '<circle cx="12" cy="12" r="3.9"/><path d="M12 2.4v2.2M12 19.4v2.2M4.9 4.9l1.6 1.6' +
              'M17.5 17.5l1.6 1.6M2.4 12h2.2M19.4 12h2.2M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/>',
     eco:     '<path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a7.7 7.7 0 1 0 11.1 11.1z"/>',
@@ -156,6 +192,10 @@ const Nobo = (() => {
     remove:  '<path d="M4.6 7h14.8"/><path d="M9.6 7V4.9h4.8V7"/>' +
              '<path d="M6.6 7l1 12.1a1.8 1.8 0 0 0 1.8 1.7h5.2a1.8 1.8 0 0 0 1.8-1.7L17.4 7"/>' +
              '<path d="M10.5 11v6.2M13.5 11v6.2"/>',
+    door:    '<path d="M5.2 21V3.5h12.4V21"/><path d="M7.8 21V6h7.2v15"/>' +
+             '<circle cx="13.1" cy="13.5" r=".7" fill="currentColor" stroke="none"/><path d="M3.5 21h16.8"/>',
+    window:  '<rect x="3.5" y="4" width="17" height="16" rx="1.2"/>' +
+             '<path d="M12 4v16M3.5 12h17"/><path d="m5.8 9.8 3.9-3.5M14.2 17.8l4-3.6"/>',
   };
 
   /** An inline SVG for `name`, sized in ems so it follows the button's text. */
@@ -646,6 +686,34 @@ const Nobo = (() => {
     return !dev.supports_comfort && !dev.supports_eco;
   }
 
+  /* How long ago something last happened, for "last heard from 20 minutes
+     ago" on a sensor that has gone quiet. Deliberately vague past a day: the
+     point is "this has been off for ages", not the exact moment. */
+  function fmtAgo(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (Number.isNaN(ms)) return '';
+    if (ms < 90000) return 'just now';
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 48) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    return `${Math.round(hours / 24)} days ago`;
+  }
+
+  /* A delay, written the way somebody would say it out loud. Used for the
+     contact-sensor rules, where "5 minutes" is a great deal easier to check at
+     a glance than "300 s". */
+  function fmtDuration(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    if (total === 0) return 'immediately';
+    if (total < 60) return `${total} second${total === 1 ? '' : 's'}`;
+    const minutes = Math.round(total / 60);
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const hours = Math.round(minutes / 60);
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+
   return {
     api, DEVICE_MODELS, deviceModel, deviceName, deviceImg, icon, ICON_PATHS,
     MODES, effectiveMode, targetTemp, heatState, HEAT_STATE,
@@ -653,6 +721,6 @@ const Nobo = (() => {
     subscribe, escapeHtml, fmtTemp, bigTemp, debounce, toast,
     TEMP_MIN, TEMP_MAX, clampTemp,
     toIsoInstant, fromIsoInstant, fmtWhen, fmtUntil, isManualDevice,
-    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth,
+    setLocale, dayNames, fmtTimeOfDay, fmtDayMonth, fmtDuration, fmtAgo,
   };
 })();

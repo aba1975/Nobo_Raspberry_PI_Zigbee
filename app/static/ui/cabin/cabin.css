@@ -157,6 +157,44 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .trip.is-away  { border-left-color: var(--frost); }
 .trip.is-heat  { border-left-color: var(--amber); }
+/* Away with something still open outranks whatever else the card was saying:
+   it is the one state worth turning the car around for. */
+.trip:has(.trip-alert:not([hidden])) { border-left-color: var(--danger); }
+
+.trip-alert {
+  display: flex; align-items: flex-start; gap: .8rem;
+  margin: 0 -1.35rem 1.1rem;
+  padding: 1rem 1.35rem 1.05rem;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  background: var(--danger-wash);
+  color: var(--ink);
+}
+.trip-alert-icon { display: inline-flex; flex: none; color: var(--danger); }
+.trip-alert-icon .icon { width: 30px; height: 30px; }
+.trip-alert-body { min-width: 0; }
+.trip-alert-body strong {
+  display: block; font-size: 1.32rem; line-height: 1.15; letter-spacing: -.01em;
+  color: var(--danger);
+}
+.trip-alert-body p { margin: .25rem 0 0; font-size: .88rem; color: var(--ink-soft); }
+.trip-alert-rooms {
+  list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .28rem;
+}
+.trip-alert-rooms li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem;
+  font-size: .92rem;
+}
+.trip-alert-rooms strong {
+  display: inline; font-size: .92rem; color: var(--ink); letter-spacing: 0;
+}
+.trip-alert-rooms span { color: var(--ink-soft); font-size: .84rem; }
+.trip-alert-also { margin-top: .5rem !important; }
+
+@media (max-width: 760px) {
+  .trip-alert { gap: .65rem; }
+  .trip-alert-body strong { font-size: 1.2rem; }
+}
 
 .trip-eyebrow {
   margin: 0 0 .3rem; font-size: .72rem; font-weight: 700;
@@ -275,10 +313,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   /* The name gets a row of its own so it is never squeezed by the temperature
      next to it, then the set temperature and its stepper share the row below. */
   grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto 1fr;
   grid-template-areas:
     "name name"
     "meta meta"
+    "sensor sensor"
     "set  step"
     "devs devs";
   align-items: center;
@@ -289,6 +328,191 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   padding: .95rem 1.05rem;
   box-shadow: var(--shadow);
 }
+
+/* ---------------------------------------------------------- sensors
+   The strip on a zone card. It sits between the mode badges and the set
+   temperature, so it has to carry at a glance and stay one or two lines even
+   in a room with a dozen contacts in it. */
+.zsensor {
+  grid-area: sensor;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .1rem .65rem;
+  margin-top: .55rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--rule);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.zsensor-copy { min-width: 0; }
+.zsensor-copy strong { display: block; font-size: .92rem; line-height: 1.25; }
+.zsensor-copy small {
+  display: block; margin-top: .05rem; font-size: .76rem; color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.zsensor-tally {
+  font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.zsensor-tally i { font-style: normal; font-size: .8rem; color: var(--ink-soft); }
+.zsensor-rule {
+  grid-column: 2 / -1; margin-top: .3rem;
+  font-size: .74rem; color: var(--ink-soft);
+}
+/* Said separately from the headline because a room can be both open and out of
+   touch with one of its sensors, and the second is easiest to miss. */
+/* A band across the foot of the strip rather than a lozenge beside the count.
+   A sensor that has stopped reporting is a fault with the equipment, not
+   another state of the window, so it reads as its own line instead of a badge
+   competing with the open tally. The only rounding is the strip's own, at the
+   bottom, so the band does not poke out of the card it sits in. */
+.zsensor-offline {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: .42rem;
+  margin: .5rem -.7rem -.55rem;
+  padding: .38rem .7rem;
+  border-top: 1px solid color-mix(in srgb, var(--amber) 40%, var(--rule));
+  /* Square across the top, and along the bottom it follows the inside of the
+     strip's own corners. The left one is tighter because that edge carries the
+     4px accent rule the right edge does not. */
+  border-radius: 0 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 4px);
+  background: var(--amber-wash);
+  /* Amber carries the meaning through the rule, the wash and the glyph; the
+     words themselves are ink, because amber on its own wash is about 2.3:1 and
+     this is the line that has to be read rather than noticed. */
+  color: var(--ink);
+  font-size: .74rem; font-weight: 650;
+}
+.zsensor-offline .icon {
+  width: 15px; height: 15px; flex: none;
+  /* Pulled towards the ink so the glyph clears 3:1 against its own wash; plain
+     amber sits at about 2.3:1, which is fine for decoration and not for a mark
+     that is carrying meaning. */
+  color: color-mix(in srgb, var(--amber) 62%, var(--ink));
+}
+
+.zsensor-closed { border-left-color: color-mix(in srgb, var(--pine) 55%, var(--rule)); }
+.zsensor-open {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--rule));
+  border-left-color: var(--amber);
+  background: var(--amber-wash);
+}
+.zsensor-open .zsensor-tally { color: var(--amber); }
+.zsensor-warning {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--rule));
+  border-left-color: var(--danger);
+  background: var(--danger-wash);
+}
+.zsensor-warning .zsensor-copy strong,
+.zsensor-warning .zsensor-tally { color: var(--danger); }
+.zsensor-unavailable {
+  border-left-color: var(--amber);
+  background: var(--amber-wash);
+}
+
+/* A room with something left open is worth spotting from across the list. */
+.zone-sensor-warning {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.sensor-visual {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 38px; height: 38px;
+  border-radius: 11px;
+  color: var(--pine);
+  background: var(--pine-wash);
+}
+.sensor-visual .icon { width: 22px; height: 22px; }
+.zsensor-open .sensor-visual,
+.zsensor-warning .sensor-visual { color: var(--danger); background: var(--danger-wash); }
+
+/* Zone detail --------------------------------------------------------- */
+.sensor-warning {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .8rem .9rem; margin: .6rem 0 .9rem;
+  border-radius: var(--radius-sm);
+  border-left: 5px solid var(--danger);
+  background: var(--danger-wash);
+}
+.sensor-warning strong { display: block; color: var(--danger); font-size: 1.02rem; }
+.sensor-warning small { display: block; margin-top: .1rem; color: var(--ink-soft); }
+.sensor-warning-icon { display: inline-flex; color: var(--danger); }
+.sensor-warning-icon .icon { width: 26px; height: 26px; }
+
+.sensor-offline-note {
+  display: grid; gap: .12rem;
+  padding: .7rem .85rem; margin: .6rem 0 .9rem;
+  border-radius: var(--radius-sm);
+  border-left: 5px solid var(--amber);
+  background: var(--amber-wash);
+}
+.sensor-offline-note strong { color: var(--ink); font-size: .95rem; }
+.sensor-offline-note small { color: var(--ink-soft); }
+
+.sensor-rule-line { margin: .2rem 0 .8rem; font-size: .85rem; color: var(--ink-soft); }
+.sensor-rule-line.is-active { color: var(--pine); font-weight: 600; }
+
+.sensor-count {
+  font-size: .78rem; font-weight: 650; color: var(--ink-soft);
+  padding: .2rem .55rem; border-radius: 99px; background: var(--paper);
+}
+
+.sensor-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .45rem; }
+.sensor-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: .5rem .8rem;
+  padding: .6rem .7rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+}
+.sensor-row.is-open {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--rule));
+  border-left-width: 4px;
+}
+/* A sensor the Pi has stopped hearing from is a fault, not a state of the
+   window, so it is greyed rather than coloured like an open contact. */
+.sensor-row.is-offline { border-style: dashed; }
+.sensor-row.is-offline .sensor-copy strong { color: var(--ink-soft); }
+.sensor-row.is-offline .sensor-visual { color: var(--ink-faint); background: var(--paper); }
+.sensor-copy { min-width: 0; }
+.sensor-copy strong { display: block; }
+.sensor-copy small { display: block; margin-top: .1rem; color: var(--ink-soft); font-size: .78rem; }
+.sensor-facts { display: flex; align-items: center; gap: .45rem; }
+.sensor-state {
+  display: inline-flex; width: max-content;
+  padding: .2rem .55rem; border-radius: 999px;
+  font-size: .78rem; font-weight: 700;
+  background: var(--paper);
+}
+.sensor-open { color: var(--danger); background: var(--danger-wash); }
+.sensor-closed { color: var(--pine); background: color-mix(in srgb, var(--pine) 13%, var(--card)); }
+.sensor-unknown, .sensor-unavailable { color: var(--amber); background: var(--amber-wash); }
+.sensor-batt {
+  display: inline-flex; align-items: center; gap: .25rem;
+  font-size: .76rem; font-variant-numeric: tabular-nums; color: var(--ink-soft);
+}
+.sensor-batt.is-low {
+  color: var(--danger); font-weight: 700;
+  padding: .1rem .4rem; border-radius: 999px; background: var(--danger-wash);
+}
+.sensor-actions { grid-template-columns: repeat(4, auto); }
+
+/* The rule, summarised. Read often, changed rarely, so it is one line with the
+   editing behind a button rather than a form sitting open in the card. */
+.sensor-rule {
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  margin-top: .9rem; padding-top: .85rem;
+  border-top: 1px solid var(--rule);
+}
+.sensor-rule-copy { min-width: 0; }
+.sensor-rule-copy strong { display: block; font-size: .9rem; }
+.sensor-rule-copy small { display: block; margin-top: .12rem; color: var(--ink-soft); font-size: .78rem; }
+.btn-small { padding: .35rem .75rem; font-size: .82rem; min-height: 36px; }
 
 .zone-open {
   grid-area: name;
@@ -699,6 +923,21 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .schedule-unreadable { margin: .45rem 0 0; color: var(--ink-soft); }
 
 /* ------------------------------------------------------------ settings */
+.sensor-settings-summary {
+  display: grid; gap: .18rem; margin-top: .75rem; padding: .75rem .85rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper);
+}
+.sensor-settings-summary span { color: var(--ink-soft); font-size: .82rem; line-height: 1.4; }
+.sensor-unassigned-list { list-style: none; margin: .55rem 0 0; padding: 0; display: grid; gap: .35rem; }
+.sensor-unassigned-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.sensor-unassigned-list li > span:first-child { display: flex; align-items: center; gap: .45rem; min-width: 0; }
+
+@media (max-width: 760px) {
+  .btn-small { min-height: 44px; }
+  .sensor-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .sensor-actions { grid-column: 2 / -1; justify-self: end; }
+  .sensor-rule { flex-wrap: wrap; }
+}
 
 .field { display: block; margin-bottom: .95rem; }
 /* `hidden` loses to any component rule that sets display, and .field sets it. */
@@ -858,3 +1097,96 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   margin-left: .4rem; font-size: .66rem;
 }
 .notify-head .badge-need { text-transform: none; letter-spacing: 0; }
+
+/* ---------------------------------------------------------------------------
+   Pairing status
+
+   Somebody is at a door with a battery device in one hand and a phone in the
+   other, so this has to be readable at arm's length and has to say which of
+   four things is true: listening, found, went wrong, or nothing came. Tone
+   carries the meaning and the wording repeats it, because a colour alone is
+   not an answer and roughly one man in twelve cannot use it.
+   --------------------------------------------------------------------------- */
+.d .pair-status {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  margin: 4px 0 18px;
+  border-radius: 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  /* A 3px rule down the leading edge, the same device the zone cards use, so
+     the state reads before any of the words do. */
+  border-left: 3px solid var(--ink-faint);
+}
+.d .pair-status-icon { display: flex; flex: 0 0 auto; padding-top: 1px; color: var(--ink-faint); }
+.d .pair-status-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.d .pair-status-text strong { font-size: 1rem; line-height: 1.25; color: var(--ink); }
+.d .pair-status-text span { font-size: .875rem; line-height: 1.4; color: var(--ink-soft); }
+
+.d .pair-status.is-busy  { border-left-color: var(--frost);  background: var(--frost-wash); }
+.d .pair-status.is-busy  .pair-status-icon { color: var(--frost); }
+.d .pair-status.is-ok    { border-left-color: var(--pine);   background: var(--pine-wash); }
+.d .pair-status.is-ok    .pair-status-icon { color: var(--pine); }
+.d .pair-status.is-warn  { border-left-color: var(--amber);  background: var(--amber-wash); }
+.d .pair-status.is-warn  .pair-status-icon { color: var(--amber); }
+.d .pair-status.is-error { border-left-color: var(--danger); background: var(--danger-wash); }
+.d .pair-status.is-error .pair-status-icon { color: var(--danger); }
+.d .pair-status.is-idle  { border-left-color: var(--ink-faint); }
+
+/* Listening is the only state that is still going, so it is the only one that
+   moves. Everything else is a settled answer and should sit still. */
+.d .pair-status.is-busy .pair-status-icon { animation: pair-listen 1.6s ease-in-out infinite; }
+@keyframes pair-listen {
+  0%, 100% { opacity: .45; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .d .pair-status.is-busy .pair-status-icon { animation: none; opacity: 1; }
+}
+
+/* Numbered steps in the pairing sheet.
+
+   Pairing is the one place in this app where the user has to do something
+   physical, in a specific order, while holding a small device. Telling them
+   the order before they start is the difference between a sensor that joins
+   and one that quietly does not — and the order matters: the sensor has to be
+   where it will live before the radio starts listening. */
+.d .pair-steps {
+  margin: 0 0 18px;
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: .9375rem;
+  line-height: 1.45;
+}
+.d .pair-steps li { padding-left: 2px; }
+.d .pair-steps strong { color: var(--ink); }
+
+/* A battery level nobody has reported yet.
+
+   Quieter than a real reading and quieter still than the low-battery warning,
+   because it is the absence of news rather than bad news. Naming it beats
+   rendering nothing, which reads as a sensor that is not working. */
+.d .sensor-batt.is-unknown {
+  color: var(--ink-faint);
+  background: none;
+  border: 1px dashed var(--rule);
+  font-style: normal;
+}
+
+/* The security banner.
+
+   Deliberately not the amber of a left-open window, nor the red of a heating
+   fault. This is neither: the house is fine, the software is not being used
+   safely. Distinct enough that it cannot be read as a heating problem, loud
+   enough that it cannot be read as advice. */
+.d .trip-alert.is-security {
+  border-color: var(--m-sched);
+  background: var(--m-sched-wash);
+}
+.d .trip-alert.is-security .trip-alert-icon { color: var(--m-sched); }
+.d .trip-alert.is-security .btn { margin-top: 12px; }

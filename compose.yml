@@ -21,6 +21,9 @@ services:
       # the unencrypted port stops answering the network entirely.
       - NOBO_BIND=${NOBO_BIND:-0.0.0.0}
       - NOBO_PORT=${NOBO_PORT:-8000}
+      # Only read when the contact-sensor provider is set to
+      # zigbee2mqtt; harmless otherwise.
+      - NOBO_MQTT_URL=${NOBO_MQTT_URL:-mqtt://127.0.0.1:1883}
     volumes:
       - nobo-data:/app/data
       # Containers default to UTC, but week schedules are wall-clock times, so
@@ -86,10 +89,69 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
+  # Zigbee contact sensors, for people who want to know a window was left open.
+  # Off unless you ask for it, the same way HTTPS is:
+  #
+  #   COMPOSE_PROFILES=zigbee   in .env
+  #
+  # A Nobø-only installation starts neither of these and needs no dongle, no
+  # broker and no extra memory. See docs/SENSORS.md.
+  #
+  # The application talks to Zigbee2MQTT only through MQTT, deliberately: the
+  # radio stack stays out of the process that owns the hub socket, so a Zigbee
+  # fault cannot take the heating with it.
+  mosquitto:
+    profiles: ["zigbee"]
+    image: eclipse-mosquitto:2
+    container_name: nobo-mosquitto
+    # Host networking so the application, which also uses it, can reach the
+    # broker on the loopback address. The listener is bound to 127.0.0.1 in
+    # mosquitto.conf, so the broker never answers the network.
+    network_mode: host
+    restart: always
+    volumes:
+      - ./zigbee/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+
+  zigbee2mqtt:
+    profiles: ["zigbee"]
+    image: koenkk/zigbee2mqtt:${ZIGBEE2MQTT_TAG:-2.14.1}
+    container_name: nobo-zigbee2mqtt
+    network_mode: host
+    restart: always
+    depends_on:
+      - mosquitto
+    devices:
+      # The by-id path, never /dev/ttyUSB0: USB device numbering is not stable
+      # across reboots, and pointing a coordinator at the wrong adapter is not
+      # a failure that announces itself.
+      - ${NOBO_ZIGBEE_ADAPTER:-/dev/null}:/dev/ttyUSB0
+    volumes:
+      # Holds the network key and the device database. Losing it means
+      # re-pairing every sensor by hand, so it belongs in scripts/backup.sh.
+      - zigbee2mqtt-data:/app/data
+      - /run/udev:/run/udev:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      # Zigbee2MQTT stamps its own log lines in UTC regardless of
+      # /etc/localtime, which the container otherwise honours - `date` inside
+      # it is already correct. Two hours of offset between its log and the
+      # application's is a nuisance exactly when you are correlating them to
+      # work out why a sensor did something.
+      #
+      # Defaulted to UTC rather than left empty on purpose: an empty TZ is
+      # read as UTC by the C library anyway, and would look like it had been
+      # configured when it had not. Set NOBO_TZ to your own zone.
+      - TZ=${NOBO_TZ:-UTC}
+
 volumes:
   nobo-data:
     driver: local
   caddy-data:
     driver: local
   caddy-config:
+    driver: local
+  mosquitto-data:
+    driver: local
+  zigbee2mqtt-data:
     driver: local
