@@ -123,7 +123,21 @@ elif [ -f "$(dirname "$0")/../compose.yml" ] && [ "$(cd "$(dirname "$0")/.." && 
     say "  Using the copy already in $INSTALL_DIR"
 else
     say "  Downloading to $INSTALL_DIR"
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    # Never prompt. A private repository would otherwise stop here waiting for
+    # a username that whoever is following the instructions does not know they
+    # need, with no clue as to why.
+    if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
+        say ""
+        die "Could not download the software.
+
+  If the repository is private, GitHub needs a token. Make one at
+  https://github.com/settings/tokens with 'repo' (read) access, then:
+
+      sudo git clone https://YOUR_TOKEN@github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git $INSTALL_DIR
+      sudo bash $INSTALL_DIR/scripts/install.sh
+
+  Otherwise check this Pi can reach the internet:  ping -c1 github.com"
+    fi
 fi
 cd "$INSTALL_DIR"
 
