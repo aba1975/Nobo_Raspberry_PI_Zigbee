@@ -96,11 +96,45 @@ Skip this step entirely if you are not using sensors. You can add them later.
 
 ## Step 4 — Install
 
+> **This repository is currently private**, so GitHub will ask who you are.
+> Follow **4b**. If it has since been made public, **4a** is all you need.
+
+### 4a — If the repository is public
+
 Copy this line, paste it, press Enter:
 
 ```
 sudo apt update && sudo apt install -y git && sudo git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git /opt/nobo-control && sudo bash /opt/nobo-control/scripts/install.sh
 ```
+
+### 4b — If the repository is private
+
+You need a **token** — a long password GitHub generates, that lets this Pi read
+the code and nothing else.
+
+1. On your computer, go to
+   <https://github.com/settings/personal-access-tokens>
+2. **Generate new token** → *Fine-grained*
+3. Set:
+   - **Repository access:** *Only select repositories* → `Nobo_Raspberry_PI_Zigbee`
+   - **Permissions:** *Repository permissions* → **Contents: Read-only**
+   - **Expiration:** whatever you like; you only need it to install and update
+4. Generate it and **copy the token** — it is shown once
+
+Then on the Pi, with `YOUR_TOKEN` replaced by what you copied:
+
+```
+sudo apt update && sudo apt install -y git
+sudo git clone https://YOUR_TOKEN@github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git /opt/nobo-control
+sudo bash /opt/nobo-control/scripts/install.sh
+```
+
+> The token is stored on the Pi so that `update.sh` keeps working. It is
+> read-only and limited to this one repository, so the worst it can do is let
+> somebody read code you were willing to run. If that bothers you, delete the
+> token at GitHub after installing — updates will then ask for a new one.
+
+---
 
 It will ask for your password, then ask you a few questions.
 

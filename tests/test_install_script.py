@@ -221,3 +221,18 @@ def test_the_guide_does_not_ask_anyone_to_edit_a_file():
     """The old installer ended at "now edit .env with nano", which is exactly
     the step a first-time installer gets wrong."""
     assert "nano" not in GUIDE
+
+
+def test_a_private_repository_fails_with_an_explanation_not_a_prompt():
+    """`git clone` of a private repo sits waiting for a username that whoever
+    is following the instructions does not know they need."""
+    assert "GIT_TERMINAL_PROMPT=0" in SOURCE
+    assert "settings/tokens" in SOURCE
+    assert "Could not download the software" in SOURCE
+
+
+def test_the_guide_covers_the_private_repository_case():
+    assert "personal-access-tokens" in GUIDE
+    assert "Contents: Read-only" in GUIDE
+    # And says what the token can do, rather than just telling them to paste it.
+    assert "read-only and limited to this one repository" in GUIDE
