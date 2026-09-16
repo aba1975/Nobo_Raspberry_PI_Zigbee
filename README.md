@@ -149,10 +149,16 @@ interface says so rather than pretending the change worked.
 | Add, remove, move, rename or replace a device | ✅ | ✅ |
 | **Discover and pair a new device** | ❌ | ⚠️ implemented, never tested |
 | **Measured room temperature** | Only the SW4 room | Only if you own an SW4 |
-| **Contact sensors** | ✅ simulated provider | ❌ provider not implemented yet |
+| **Contact sensors** | ✅ simulated, or real Zigbee | ✅ simulated, or real Zigbee |
 
 **Everything on that list has now been run against a real hub**, on a house of
-7 zones and 11 heaters. The exceptions are the two marked above.
+7 zones and 11 heaters. The one exception is the row marked above.
+
+Contact sensors are the odd row out, because they do not depend on the hub at
+all: they arrive over a separate radio. Simulated sensors need demo mode; real
+Zigbee ones work either way, and running real sensors beside a simulated hub is
+a supported arrangement — it is how they were developed, so that a bug in the
+sensor code could not reach a real heater.
 
 **Discovery only finds devices that support it, and has never been tested.**
 Autosearch hears devices in pairing mode, and not every model has one — Nobø's
@@ -179,14 +185,22 @@ can do (`GET /api/capabilities`) and greys out anything the current mode cannot
 honour, with the reason as the tooltip. Nothing you can click will fail with a
 "not implemented" error.
 
-### Contact sensors (simulated provider)
+### Contact sensors
 
 Contact sensors are off by default and completely hidden until an administrator
-enables them in Cabin under **Settings**. In demo mode an administrator can
-pair simulated door/window sensors, name and assign them to zones, and change
-their open/closed, availability and battery state. Settings stays compact as
-the installation grows: sensor status and management live inside each zone.
-No broker or dongle runs.
+enables them in Cabin under **Settings**. Nothing extra runs until then — no
+broker, no dongle, no additional containers.
+
+There are two providers. **Zigbee** talks to real door and window sensors
+through a USB stick; see [the hardware side](#the-hardware-side) below.
+**Simulated** invents them, for looking around without buying anything, and is
+available only in demo mode so that a simulator can never be mistaken for
+hardware. With it an administrator can create sensors, name and assign them to
+zones, and set their open/closed, availability and battery state by hand — all
+of which a real sensor reports for itself and none of which can be set by hand.
+
+Settings stays compact as the installation grows: sensor status and management
+live inside each zone rather than in one unbounded list.
 
 Each room chooses a left-open warning delay and, separately, one thing to do
 while a contact of its own is open: set it to Away, Eco or Comfort, return it

@@ -2675,11 +2675,14 @@ async def get_capabilities_endpoint():
         "sensors": {
             "enabled": sensor_settings.enabled,
             "provider": sensor_settings.provider if sensor_settings.enabled else None,
-            "provider_supported": DEMO_MODE,
-            "reason": None if DEMO_MODE else (
-                "No real Zigbee provider is implemented yet. The simulated provider "
-                "is available only in demo mode."
-            ),
+            # Sensors do not depend on the hub: they arrive over a separate
+            # radio. The Zigbee provider works whether the hub is real or
+            # simulated, so the only thing demo mode decides is whether the
+            # *simulator* is also on offer.
+            "provider_supported": True,
+            "providers": sorted(sensor_persistence.PROVIDERS),
+            "simulation_supported": DEMO_MODE,
+            "reason": None,
         },
     }
 

@@ -318,3 +318,34 @@ def test_a_forced_removal_gets_rid_of_it(client, zigbee):
 
     assert response.status_code == 200
     assert client.get("/api/sensors").json()["sensors"] == []
+
+
+# -- what the capability map claims -----------------------------------------
+
+
+def test_sensors_are_not_advertised_as_hub_dependent(client, monkeypatch):
+    """They arrive over a separate radio, so a real hub changes nothing.
+
+    This said `provider_supported: DEMO_MODE` with "No real Zigbee provider is
+    implemented yet" long after one was paired and reporting — so on a real
+    hub the interface would have greyed the whole feature out and quoted that
+    as the reason. Nothing asserted it, and nothing read it, so it went
+    unnoticed until somebody read the README and asked.
+    """
+    monkeypatch.setattr(server, "DEMO_MODE", False)
+
+    body = client.get("/api/capabilities").json()["sensors"]
+
+    assert body["provider_supported"] is True
+    assert body["reason"] is None
+    assert "zigbee2mqtt" in body["providers"]
+    # The simulator is the part demo mode actually gates.
+    assert body["simulation_supported"] is False
+
+
+def test_the_simulator_is_offered_in_demo_mode(client):
+    body = client.get("/api/capabilities").json()["sensors"]
+
+    assert body["provider_supported"] is True
+    assert body["simulation_supported"] is True
+    assert "simulated" in body["providers"]
