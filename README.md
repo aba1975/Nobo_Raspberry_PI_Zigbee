@@ -8,6 +8,16 @@ been commissioned against real hardware — a live Nobø Eco Hub running 7 zones
 what the protocol documentation implies. Where the two disagree, this README says
 so.
 
+## Installing on a Pi
+
+**→ [docs/INSTALL.md](docs/INSTALL.md)** walks through it from a blank SD card,
+for somebody who has not done this before. Four commands, about an hour, most of
+it waiting. It starts in demo mode so there is something to look at before the
+hub is involved, and it sets up the Zigbee sensors too if you have the stick.
+
+Everything below is reference: the how and the why, for when you want to know
+what a setting does or why something behaves the way it does.
+
 ## Try it first, without a hub
 
 You do not need a Nobø hub to see what this is. With no configuration at all the
@@ -15,8 +25,8 @@ application starts in **demo mode**, against a simulated house of 12 zones and 1
 heaters:
 
 ```bash
-git clone https://github.com/aba1975/Nobo_Raspberry_PI.git
-cd Nobo_Raspberry_PI
+git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git
+cd Nobo_Raspberry_PI_Zigbee
 docker compose up -d          # no .env needed — the default serial means demo
 ```
 
@@ -852,7 +862,7 @@ Both commands should print version information. If you instead see `permission d
 ## Step 4: Clone the Repository
 
 ```bash
-sudo git clone https://github.com/aba1975/Nobo_Raspberry_PI.git /opt/nobo-control
+sudo git clone https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee.git /opt/nobo-control
 sudo chown -R $USER:$USER /opt/nobo-control
 cd /opt/nobo-control
 ```
