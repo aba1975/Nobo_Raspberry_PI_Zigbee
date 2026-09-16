@@ -41,13 +41,33 @@ LOCKOUT_SECONDS = 60
 # User store helpers
 # ---------------------------------------------------------------------------
 
+# The password a fresh install starts with, so that `docker compose up` gives
+# somebody a system they can actually log into. It is documented in the README,
+# which means it is public knowledge and protects nothing — the interface says
+# so, loudly, until it is changed.
+DEFAULT_PASSWORD = "nobohub"
+
+
+def is_using_default_password(username: str = "admin") -> bool:
+    """Whether this account still has the password every installation ships."""
+    entry = load_users().get(username) or {}
+    stored = entry.get("password_hash")
+    if not stored:
+        return False
+    try:
+        return verify_password(DEFAULT_PASSWORD, stored)
+    except (ValueError, TypeError):
+        # An unreadable hash is a different problem, and not this one.
+        return False
+
+
 def init_user_store() -> None:
     """Create data/ directory and users.json with default admin if missing."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not USERS_FILE.exists():
         default_users = {
             "admin": {
-                "password_hash": hash_password("nobohub"),
+                "password_hash": hash_password(DEFAULT_PASSWORD),
                 "role": "admin",
             }
         }
