@@ -327,3 +327,37 @@ class TestTheProxyDoesNotWeakenTheApplication:
     def test_the_gitignore_covers_the_env_file(self):
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         assert re.search(r"^\.env$", gitignore, re.M), ".env must not be committable"
+
+
+class TestTheClock:
+    """A timezone set to the empty string is read as UTC by the C library.
+
+    That is the shape of QA defect D-06, where a "07:00" schedule fired at the
+    wrong hour. The application must therefore keep following /etc/localtime
+    with no TZ at all, while Zigbee2MQTT — which stamps its own log in UTC
+    regardless — may have one, but never an empty one.
+    """
+
+    def test_the_application_still_sets_no_timezone(self, compose):
+        app = compose["services"]["nobo-web-control"]
+        env = app.get("environment") or []
+        assert not any(str(item).startswith("TZ=") for item in env)
+        mounts = [str(item) for item in app.get("volumes") or []]
+        assert any("/etc/localtime" in item for item in mounts)
+
+    def test_no_service_can_end_up_with_an_empty_timezone(self, compose):
+        for name, service in compose["services"].items():
+            for item in service.get("environment") or []:
+                if not str(item).startswith("TZ="):
+                    continue
+                value = str(item).split("=", 1)[1]
+                assert value, f"{name} sets an empty TZ, which means UTC"
+                if value.startswith("${"):
+                    assert ":-" in value and not value.endswith(":-}"), (
+                        f"{name} has a TZ that defaults to empty"
+                    )
+
+    def test_zigbee2mqtt_can_be_given_the_local_zone(self, compose, env_example):
+        env = compose["services"]["zigbee2mqtt"].get("environment") or []
+        assert any(str(item).startswith("TZ=") for item in env)
+        assert "NOBO_TZ" in env_example
