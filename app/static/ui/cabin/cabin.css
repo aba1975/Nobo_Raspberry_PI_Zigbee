@@ -1145,3 +1145,23 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 @media (prefers-reduced-motion: reduce) {
   .d .pair-status.is-busy .pair-status-icon { animation: none; opacity: 1; }
 }
+
+/* Numbered steps in the pairing sheet.
+
+   Pairing is the one place in this app where the user has to do something
+   physical, in a specific order, while holding a small device. Telling them
+   the order before they start is the difference between a sensor that joins
+   and one that quietly does not — and the order matters: the sensor has to be
+   where it will live before the radio starts listening. */
+.d .pair-steps {
+  margin: 0 0 18px;
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: .9375rem;
+  line-height: 1.45;
+}
+.d .pair-steps li { padding-left: 2px; }
+.d .pair-steps strong { color: var(--ink); }

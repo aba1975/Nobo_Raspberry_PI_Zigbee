@@ -1298,48 +1298,81 @@
   }
 
   /* Real pairing is two steps because a radio join takes anywhere from seconds
-     to never. Open the window, wait, and only then ask what the thing is
-     called — until it has joined there is nothing to name. */
+     to never. The sheet therefore has explicit phases, and opens in "ready" —
+     never showing the result of somebody's previous attempt, which read as
+     "Close / Try again" before the user had done anything at all.
+
+     Phases: ready -> listening -> found (name it) | finished (tell them why). */
   function zigbeePairSheet(defaultZoneId, replacing) {
-    let pairing = (state.sensorSettings && state.sensorSettings.pairing) || {};
+    let pairing = {};
     let timer = null;
     let joined = null;
     let closed = false;
+    let phase = 'ready';
 
     const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+    function instructionsHtml() {
+      return `
+        <p class="zd-sub">Pairing puts the hub's radio into listening mode for a
+          few minutes. Have the sensor with you before you start.</p>
+        <ol class="pair-steps">
+          <li>Put the sensor <strong>where it will actually live</strong> — a
+            sensor that only joins next to the hub will drop out later.</li>
+          <li>Press <strong>Start pairing</strong> below.</li>
+          <li>Hold the small button on the sensor for about five seconds, until
+            its light blinks.</li>
+        </ol>`;
+    }
 
     function render() {
       /* The poll awaits before it renders, and clearInterval does not cancel a
          callback already in flight. Without this a late render would write
          into whichever sheet had since been opened over this one. */
       if (closed) return;
-      const waiting = pairing.active;
-      const found = !!joined;
       $('#sheetTitle').textContent = replacing ? 'Replace sensor' : 'Add a sensor';
-      sheetBody.innerHTML = `
-        ${found ? '' : `<p class="zd-sub">Press <strong>Start pairing</strong>, then hold the button on the sensor until its light blinks. Do this where the sensor will live, not next to the hub.</p>`}
-        ${pairingStatusHtml(pairing)}
-        ${found ? sensorDetailsFields(joined, defaultZoneId) : ''}
-        ${found && replacing ? '<div class="note">The old sensor is removed only after its replacement has paired.</div>' : ''}
-        <div class="sheet-actions">
-          <button class="btn" type="button" data-act="cancel">${waiting ? 'Stop' : 'Close'}</button>
-          ${found
-            ? '<button class="btn btn-primary" type="button" data-act="save">Save sensor</button>'
-            : `<button class="btn btn-primary" type="button" data-act="start" ${waiting ? 'disabled' : ''}>
-                 ${waiting ? 'Listening\u2026' : (pairing.outcome ? 'Try again' : 'Start pairing')}
-               </button>`}
-        </div>`;
+
+      let body = '';
+      let actions = '';
+
+      if (phase === 'ready') {
+        body = instructionsHtml();
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-act="start">Start pairing</button>`;
+      } else if (phase === 'listening') {
+        body = `${pairingStatusHtml(pairing)}
+          <p class="zd-sub">Hold the button on the sensor <strong>now</strong>,
+            for about five seconds, until its light blinks.</p>`;
+        actions = `<button class="btn" type="button" data-act="cancel">Stop</button>`;
+      } else if (phase === 'found') {
+        body = `${pairingStatusHtml(pairing)}
+          ${sensorDetailsFields(joined, defaultZoneId)}
+          ${replacing ? '<div class="note">The old sensor is removed only after this one is saved.</div>' : ''}`;
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-act="save">Save sensor</button>`;
+      } else {
+        body = `${pairingStatusHtml(pairing)}${instructionsHtml()}`;
+        actions = `
+          <button class="btn" type="button" data-act="cancel">Close</button>
+          <button class="btn btn-primary" type="button" data-act="start">Try again</button>`;
+      }
+
+      sheetBody.innerHTML = `${body}<div class="sheet-actions">${actions}</div>`;
       wire();
     }
 
     function wire() {
       sheetBody.querySelector('[data-act="cancel"]').onclick = () => closeSheet();
+
       const startButton = sheetBody.querySelector('[data-act="start"]');
       if (startButton) startButton.onclick = async (event) => {
         event.currentTarget.disabled = true;
         try {
           pairing = await Nobo.api.startSensorPairing(254);
           joined = null;
+          phase = 'listening';
           render();
           poll();
         } catch (e) {
@@ -1347,6 +1380,7 @@
           event.currentTarget.disabled = false;
         }
       };
+
       const saveButton = sheetBody.querySelector('[data-act="save"]');
       if (saveButton) saveButton.onclick = async (event) => {
         const name = sheetBody.querySelector('#pairSensorName').value.trim();
@@ -1358,7 +1392,7 @@
             kind: sheetBody.querySelector('#pairSensorKind').value,
             zone_id: sheetBody.querySelector('#pairSensorZone').value,
           });
-          if (replacing) await Nobo.api.removeSensor(replacing.sensor_id);
+          if (replacing) await removeSensorWithRetry(replacing);
           closeSheet();
           Nobo.toast(`${name} added`);
           await refresh(true);
@@ -1378,15 +1412,19 @@
         let next;
         try { next = await Nobo.api.sensorPairing(); } catch (e) { return; }
         if (closed) return;
-        const settled = !next.active && next.outcome;
         pairing = next;
-        if (settled) stop();
-        if (settled && next.outcome === 'joined' && next.sensor_id) {
+        if (next.active) { render(); return; }
+
+        stop();
+        if (next.outcome === 'joined' && next.sensor_id) {
           await refresh(true);
           if (closed) return;
           joined = configuredSensor(next.sensor_id) || {
             sensor_id: next.sensor_id, name: '', kind: 'window', zone_id: defaultZoneId,
           };
+          phase = 'found';
+        } else {
+          phase = 'finished';
         }
         render();
       }, 1000);
@@ -1403,13 +1441,50 @@
       if (pairing.active) Nobo.api.cancelSensorPairing().catch(() => {});
     });
     render();
-    if (pairing.active) poll();
+  }
+
+  /* A battery contact sensor is asleep almost all of the time, so Zigbee2MQTT
+     often cannot tell it to leave. That is an ordinary outcome, not a fault,
+     and the choice to drop it from the database anyway belongs to the user:
+     the device can rejoin later, and then reappears as if by itself. */
+  async function removeSensorWithRetry(sensor) {
+    try {
+      await Nobo.api.removeSensor(sensor.sensor_id);
+      return true;
+    } catch (e) {
+      if (!/rejoin later/i.test(e.message || '')) throw e;
+    }
+    return await new Promise((resolve) => {
+      confirmSheet(
+        `Remove ${sensor.name} anyway?`,
+        'The sensor did not answer, which usually just means it is asleep. '
+        + 'It can be removed from this hub now, but if it is still powered it '
+        + 'may rejoin by itself later.',
+        'Remove anyway',
+        async () => {
+          try {
+            await Nobo.api.removeSensor(sensor.sensor_id, true);
+            Nobo.toast(`${sensor.name} removed`);
+            await refresh(true);
+            resolve(true);
+          } catch (err) {
+            Nobo.toast(err.message, 'error');
+            resolve(false);
+          }
+        },
+        true,
+      );
+    });
   }
 
   function editSensorSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
-    const demo = state.sensorSettings && state.sensorSettings.demo_mode;
+    /* Whether these sensors can be *made* to say things, which is not the
+       same question as whether the hub is simulated: real Zigbee sensors
+       beside a demo hub is a supported arrangement, and offering to type
+       in their battery level offers to invent a hardware reading. */
+    const demo = !!(state.sensorSettings && state.sensorSettings.simulated);
     openSheet(`Edit ${sensor.name}`, `
       <label class="field"><span>Name</span>
         <input id="editSensorName" type="text" maxlength="80" value="${esc(sensor.name)}">
@@ -1503,12 +1578,18 @@
   function removeSensor(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
+    const paired = !!(state.sensorSettings && state.sensorSettings.pairing
+      && state.sensorSettings.pairing.supported);
     confirmSheet('Remove this sensor?',
-      `${sensor.name} and its assignment are removed.`, 'Remove sensor', async () => {
+      paired
+        ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten.`
+        : `${sensor.name} and its assignment are removed.`,
+      'Remove sensor', async () => {
         try {
-          await Nobo.api.removeSensor(sensor.sensor_id);
-          Nobo.toast('Sensor removed');
-          await refresh(true);
+          if (await removeSensorWithRetry(sensor)) {
+            Nobo.toast(`${sensor.name} removed`);
+            await refresh(true);
+          }
         } catch (e) { Nobo.toast(e.message, 'error'); }
       }, true);
   }
@@ -3401,9 +3482,10 @@
             ? '<button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>'
             : ''}
         </div>
-        <p class="zd-sub">Optional contact monitoring. This installation uses the
-        <strong>${settings.demo_mode ? 'simulated demo' : esc(settings.provider)}</strong>
-        provider${settings.demo_mode ? '; no Zigbee hardware or broker is started' : ''}.</p>
+        <p class="zd-sub">Optional contact monitoring.
+        ${settings.simulated
+          ? 'These sensors are <strong>simulated</strong>; no Zigbee hardware or broker is started, and their state is yours to set.'
+          : 'These are <strong>real Zigbee sensors</strong>, so their contact, battery and reachability are readings from the hardware.'}</p>
         <div class="switch">
           <div class="switch-text"><strong>Use contact sensors</strong>
             <span>Show door and window state, left-open warnings and optional heating actions.</span>

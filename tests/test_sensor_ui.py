@@ -35,6 +35,62 @@ def test_nothing_sensor_shaped_is_rendered_for_an_ordinary_user():
     assert "const admin = state.me && state.me.role === 'admin';" in CABIN
 
 
+def test_the_pairing_sheet_opens_ready_not_showing_the_last_attempt():
+    """What the user hit: it opened saying "Close / Try again".
+
+    The sheet rendered whatever outcome the server still remembered from
+    somebody's previous attempt, so it looked finished before anything had
+    been done — and the obvious next action, Start pairing, was not offered.
+    """
+    start = CABIN.index("function zigbeePairSheet")
+    end = CABIN.index("\n  /* A battery contact sensor", start)
+    sheet = CABIN[start:end]
+    assert "let phase = 'ready';" in sheet
+    # The initial render must not consult a stale outcome at all.
+    assert "pairing = {};" in sheet
+    # Ready offers the one thing the user came to do.
+    assert "Start pairing</button>" in sheet
+
+
+def test_the_sheet_says_what_to_do_before_the_radio_starts_listening():
+    assert "pair-steps" in CABIN
+    assert "pair-steps" in CSS
+    # The order matters: the sensor has to be in place before the window opens.
+    assert "where it will actually live" in CABIN
+    assert "until its light blinks" in CABIN
+
+
+def test_listening_tells_the_user_to_press_the_button_now():
+    start = CABIN.index("function zigbeePairSheet")
+    end = CABIN.index("\n  /* A battery contact sensor", start)
+    sheet = CABIN[start:end]
+    assert "phase === 'listening'" in sheet
+    assert "<strong>now</strong>" in sheet
+
+
+def test_a_sensor_that_will_not_unpair_offers_to_force_it():
+    """A battery sensor is asleep, so Zigbee2MQTT often cannot evict it."""
+    assert "removeSensorWithRetry" in CABIN
+    assert "Remove anyway" in CABIN
+    assert "may rejoin by itself later" in CABIN
+    # Both the delete button and a replacement go through the same path.
+    assert CABIN.count("removeSensorWithRetry(") >= 3
+    assert "removeSensor: " in CORE.replace("removeSensor:  ", "removeSensor: ")
+    assert "force ? '?force=true' : ''" in CORE
+
+
+def test_a_real_sensors_readings_are_not_offered_as_fields():
+    """Gating the simulator's controls on demo mode conflated two questions.
+
+    The hub can be simulated while the sensors are real, and that is the
+    arrangement this was tested in — so a real Aqara offered an editable
+    battery percentage, a number the hardware never reported.
+    """
+    assert "state.sensorSettings.simulated" in CABIN
+    assert "state.sensorSettings.demo_mode" not in CABIN
+    assert "real Zigbee sensors" in CABIN
+
+
 def test_pairing_asks_for_the_type_the_name_and_the_room():
     for hook in ("pair-sensor", "pairSensorSheet", "pairSensorKind",
                  "pairSensorName", "pairSensorZone"):

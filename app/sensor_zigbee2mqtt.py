@@ -24,6 +24,7 @@ a rename round-trip that can fail halfway.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import math
@@ -42,7 +43,23 @@ DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 # silently clamping rather than the value being honoured.
 MAX_PERMIT_JOIN_SECONDS = 254
 
+# How long to wait for Zigbee2MQTT to answer a removal. It talks to the device
+# first, and a battery contact sensor sleeps between reports, so the honest
+# answer for one that is not listening is "that failed", not silence.
+REMOVE_TIMEOUT_SECONDS = 20.0
+
 _IEEE = re.compile(r"^0x[0-9a-f]{16}$")
+
+
+class SensorRemovalFailed(ProviderUnavailable):
+    """Zigbee2MQTT could not take the device off the mesh.
+
+    Almost always a sleeping battery device: Zigbee2MQTT asks it to leave
+    first, and a contact sensor that reports twice a day is not listening.
+    Removing it from the database anyway is what ``force`` is for — a
+    different decision, with the consequence that the device can rejoin, so
+    it is the user's to make rather than one to take quietly on their behalf.
+    """
 
 
 class MqttTransport(Protocol):
@@ -95,6 +112,7 @@ class Zigbee2MqttContactSensorProvider:
         self._pairing_outcome: Optional[PairingOutcome] = None
         self._pairing_sensor_id: Optional[str] = None
         self._pairing_detail: Optional[str] = None
+        self._remove_waiters: dict[str, asyncio.Future] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -271,13 +289,32 @@ class Zigbee2MqttContactSensorProvider:
         await self._emit(SensorEventKind.UPDATED, updated)
         return updated
 
-    async def remove(self, sensor_id: str) -> None:
+    async def remove(self, sensor_id: str, *, force: bool = False) -> None:
+        """Take a device off the mesh, and report whether that actually worked.
+
+        The request is not the outcome. Firing it and returning made "Delete"
+        appear to succeed while the sensor stayed exactly where it was —
+        because Zigbee2MQTT asks the device to leave first, and a battery
+        contact sensor is asleep almost all of the time.
+        """
         current = self._get(sensor_id)
         self._require_bridge()
-        await self._request("device/remove", {"id": current.sensor_id})
-        # The registry is not edited here.  Zigbee2MQTT confirms the removal
-        # with a bridge event, and treating the request as the outcome would
-        # lose a sensor from the UI that is still on the mesh.
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future = loop.create_future()
+        self._remove_waiters[current.sensor_id] = waiter
+        try:
+            await self._request(
+                "device/remove", {"id": current.sensor_id, "force": bool(force)}
+            )
+            try:
+                await asyncio.wait_for(waiter, timeout=REMOVE_TIMEOUT_SECONDS)
+            except asyncio.TimeoutError:
+                raise SensorRemovalFailed(
+                    "Zigbee2MQTT did not answer. The sensor may be asleep or "
+                    "out of range."
+                ) from None
+        finally:
+            self._remove_waiters.pop(current.sensor_id, None)
 
     def subscribe(self, callback: EventCallback):
         self._callbacks.append(callback)
@@ -295,7 +332,8 @@ class Zigbee2MqttContactSensorProvider:
             return
         rest = topic[len(self._base) + 1:]
         if rest.startswith("bridge/") and rest not in (
-            "bridge/state", "bridge/devices", "bridge/event"
+            "bridge/state", "bridge/devices", "bridge/event",
+            "bridge/response/device/remove",
         ):
             return
         try:
@@ -309,6 +347,8 @@ class Zigbee2MqttContactSensorProvider:
             await self._on_devices(document)
         elif rest == "bridge/event":
             await self._on_event(document)
+        elif rest == "bridge/response/device/remove":
+            await self._on_remove_response(document)
         elif rest.endswith("/availability") and (
             address := self._address_for(rest[: -len("/availability")])
         ):
@@ -368,6 +408,27 @@ class Zigbee2MqttContactSensorProvider:
         for address in list(self._sensors):
             if address not in seen:
                 await self._forget(address)
+
+    async def _on_remove_response(self, document) -> None:
+        if not isinstance(document, dict):
+            return
+        data = document.get("data")
+        identifier = data.get("id") if isinstance(data, dict) else None
+        waiter = self._remove_waiters.get(identifier)
+        if waiter is None or waiter.done():
+            return
+        if document.get("status") == "ok":
+            # A removal the user asked for really is a removal: the metadata
+            # goes too. It is only kept when a device *leaves*, where it may
+            # well be coming back.
+            await self._forget(identifier, keep_metadata=False)
+            waiter.set_result(None)
+        else:
+            waiter.set_exception(
+                SensorRemovalFailed(
+                    str(document.get("error") or "Zigbee2MQTT refused the removal")
+                )
+            )
 
     async def _on_event(self, document) -> None:
         if not isinstance(document, dict):
@@ -469,12 +530,16 @@ class Zigbee2MqttContactSensorProvider:
         )
         return snapshot
 
-    async def _forget(self, address: str) -> None:
+    async def _forget(self, address: str, *, keep_metadata: bool = True) -> None:
         if self._sensors.pop(address, None) is None:
             return
-        # The metadata is kept deliberately.  A sensor that is re-paired, or
-        # that drops off while its battery is changed, comes back to the room
-        # and name it already had rather than arriving anonymous.
+        if keep_metadata:
+            # A sensor that leaves may well be coming back — a flat battery, a
+            # re-pair — so it returns to the room and name it already had
+            # rather than arriving anonymous.
+            pass
+        elif self._metadata.pop(address, None) is not None:
+            self._save_metadata(self._metadata)
         await self._emit_removed(address)
 
     def _remember(self, snapshot: ContactSnapshot) -> None:
