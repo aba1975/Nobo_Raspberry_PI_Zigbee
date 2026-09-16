@@ -1165,3 +1165,15 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .d .pair-steps li { padding-left: 2px; }
 .d .pair-steps strong { color: var(--ink); }
+
+/* A battery level nobody has reported yet.
+
+   Quieter than a real reading and quieter still than the low-battery warning,
+   because it is the absence of news rather than bad news. Naming it beats
+   rendering nothing, which reads as a sensor that is not working. */
+.d .sensor-batt.is-unknown {
+  color: var(--ink-faint);
+  background: none;
+  border: 1px dashed var(--rule);
+  font-style: normal;
+}

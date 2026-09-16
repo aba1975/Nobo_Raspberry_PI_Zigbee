@@ -265,12 +265,21 @@ class FakeZigbee2Mqtt:
         elif action == "device/remove":
             self.remove_requests.append(dict(body))
             if self.refuse_removal and not body.get("force"):
+                # Verbatim from a real Zigbee2MQTT refusing to evict a
+                # sleeping Aqara. Note "data" is EMPTY: the id is only in the
+                # error text, which is why correlating on data.id silently
+                # dropped every failure.
                 await self._broker.publish(
                     f"{self._base}/bridge/response/device/remove",
                     json.dumps({
-                        "data": {"id": body["id"]},
+                        "data": {},
                         "status": "error",
-                        "error": "Device did not leave the network",
+                        "error": (
+                            f"Failed to remove device '{body['id']}' (block: "
+                            "false, force: false, keep config: false, clear "
+                            "cache: false) (Error: AREQ - ZDO - mgmtLeaveRsp "
+                            "after 10000ms)"
+                        ),
                     }),
                 )
                 return

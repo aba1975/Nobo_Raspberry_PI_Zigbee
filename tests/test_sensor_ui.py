@@ -722,3 +722,39 @@ def test_classic_gains_no_sensor_pairing_surface():
     for hook in ("/api/sensors/pairing", "pair-status", "startSensorPairing",
                  "Listening for a sensor"):
         assert hook not in CLASSIC
+
+
+def test_a_battery_nobody_has_reported_is_named_not_left_blank():
+    """Rendering nothing read as a broken sensor.
+
+    A battery device sends its level on its own schedule — Aqara's own
+    definition warns it can take a day — so one sensor showing a percentage
+    and another showing an empty space looks like a fault when it is not.
+    """
+    assert "Battery not reported yet" in CABIN
+    assert "sensor-batt.is-unknown" in CSS
+    # Quieter than a real reading, and quieter than the low warning: this is
+    # the absence of news, not bad news.
+    assert "absence of news" in CSS
+
+
+def test_unpairing_shows_that_something_is_happening():
+    """confirmSheet closes before it runs its action.
+
+    Unpairing waits ten seconds for a sleeping sensor to answer, so without a
+    progress sheet there was nothing on screen at all for those ten seconds —
+    indistinguishable from the button not working, which is how it was
+    reported.
+    """
+    assert "function workingSheet" in CABIN
+    assert "Asking the hub to unpair" in CABIN
+    start = CABIN.index("async function removeSensorWithRetry")
+    end = CABIN.index("\n  function workingSheet", start)
+    body = CABIN[start:end]
+    assert "workingSheet(" in body
+    assert body.index("workingSheet(") < body.index("Nobo.api.removeSensor(")
+
+
+def test_the_first_dialog_warns_that_a_second_may_follow():
+    # So the "Remove anyway" step reads as a continuation, not a failure.
+    assert "asleep most of the time" in CABIN

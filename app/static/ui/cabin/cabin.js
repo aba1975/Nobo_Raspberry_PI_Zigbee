@@ -1052,8 +1052,12 @@
     const open = sensor.available && sensor.state === 'open';
     const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
     const low = sensor.battery != null && sensor.battery <= 20;
+    /* A battery sensor reports its level on its own schedule, and Aqara warns
+       that can take up to a day. Rendering nothing for a level we have not
+       been told reads as a broken sensor, so the gap is named instead. */
     const battery = sensor.battery == null
-      ? ''
+      ? `<span class="sensor-batt is-unknown"
+           title="This sensor has not reported its battery level yet. Battery devices send it on their own schedule, which can take a day.">Battery not reported yet</span>`
       : `<span class="sensor-batt ${low ? 'is-low' : ''}"
            title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%${
              low ? ' low' : ''}</span>`;
@@ -1448,10 +1452,18 @@
      and the choice to drop it from the database anyway belongs to the user:
      the device can rejoin later, and then reappears as if by itself. */
   async function removeSensorWithRetry(sensor) {
+    /* Unpairing talks to the device, and the radio waits ten seconds for an
+       answer that a sleeping sensor will not give. confirmSheet closes before
+       it runs its action, so without this there was nothing at all on screen
+       for those ten seconds — which is indistinguishable from the button not
+       working, and is exactly how this was reported. */
+    workingSheet('Removing sensor', `Asking the hub to unpair ${sensor.name}`);
     try {
       await Nobo.api.removeSensor(sensor.sensor_id);
+      closeSheet();
       return true;
     } catch (e) {
+      closeSheet();
       if (!/rejoin later/i.test(e.message || '')) throw e;
     }
     return await new Promise((resolve) => {
@@ -1575,6 +1587,17 @@
     });
   }
 
+  /* A sheet that says work is under way and offers nothing to press. Reuses
+     the pairing status band so "the hub is busy" looks the same everywhere. */
+  function workingSheet(title, message) {
+    openSheet(title, `
+      <div class="pair-status is-busy" role="status" aria-live="polite">
+        <span class="pair-status-icon" aria-hidden="true">${Nobo.icon('listen')}</span>
+        <span class="pair-status-text"><strong>${esc(message)}</strong>
+          <span>This can take up to ten seconds.</span></span>
+      </div>`, () => {});
+  }
+
   function removeSensor(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
@@ -1582,7 +1605,9 @@
       && state.sensorSettings.pairing.supported);
     confirmSheet('Remove this sensor?',
       paired
-        ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten.`
+        ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten. `
+          + 'Battery sensors are asleep most of the time, so if it does not answer '
+          + 'you will be asked whether to remove it anyway.'
         : `${sensor.name} and its assignment are removed.`,
       'Remove sensor', async () => {
         try {

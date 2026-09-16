@@ -381,8 +381,52 @@ async def test_a_removal_that_fails_says_so_and_keeps_the_sensor(rig, events):
     with pytest.raises(SensorRemovalFailed) as caught:
         await provider.remove(ADDRESS)
 
-    assert "did not leave" in str(caught.value)
+    # Zigbee2MQTT's own words, not a timeout message invented twenty seconds
+    # later because the reply was dropped for want of an id.
+    assert "mgmtLeaveRsp" in str(caught.value)
     assert [item.sensor_id for item in await provider.list()] == [ADDRESS]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_is_matched_even_though_it_carries_no_id(rig, events):
+    """The reply that actually comes back has an empty "data".
+
+    Correlating on data.id alone meant every failure was ignored and the
+    request sat until it timed out, so a sleeping sensor — the one case this
+    exists for — reported "Zigbee2MQTT did not answer" instead of why.
+    """
+    import sensor_zigbee2mqtt
+
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.add_device(contact_device(SECOND))
+    z2m.refuse_removal = True
+
+    with pytest.raises(SensorRemovalFailed):
+        await provider.remove(SECOND)
+
+    # Matched by the address in the error text, with two candidates pending,
+    # so it cannot have been a lucky guess at "the only one".
+    assert {item.sensor_id for item in await provider.list()} == {ADDRESS, SECOND}
+
+
+@pytest.mark.asyncio
+async def test_a_failure_arrives_promptly_rather_than_timing_out(rig, events, monkeypatch):
+    import sensor_zigbee2mqtt
+
+    monkeypatch.setattr(sensor_zigbee2mqtt, "REMOVE_TIMEOUT_SECONDS", 30.0)
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    z2m.refuse_removal = True
+
+    import time
+    began = time.monotonic()
+    with pytest.raises(SensorRemovalFailed):
+        await provider.remove(ADDRESS)
+
+    # If this ever waits for the backstop again, somebody has broken the
+    # correlation and the user is back to staring at a frozen dialog.
+    assert time.monotonic() - began < 2.0
 
 
 @pytest.mark.asyncio
