@@ -194,11 +194,22 @@ parent each sensor actually chose. Link quality in the interface cannot: it
 grades the last hop, so a sensor reporting through a repeater looks healthy no
 matter how far it is from the Pi.
 
-Run against the demo Pi's real bridge on 17 September 2026: both the `raw` and
-`graphviz` requests were answered, and an empty network — every sensor having
-just been unpaired — was reported as such. What it has *not* yet seen is a real
-mesh with a router in it, so the parent-and-quality half of its output is still
-only proved against constructed payloads.
+Run against the demo Pi's real bridge on 17 September 2026, twice. First on an
+empty network — every sensor having just been unpaired — which it reported as
+such. Then with two Aqara sensors paired, where it named both as children of
+the coordinator and scored them 82 and 121.
+
+That second run is what proves the parent-and-quality half, and the cross-check
+is worth recording: the interface, reading the LQI stamped on each *report*,
+independently gave 65 and 116 for the same two devices. Same ordering, same
+bands, from two sources that share no code — the map reads each router's
+neighbour table, the interface reads what arrives over MQTT. The neighbour
+table runs a little high and a little stale, so treat the two as agreeing
+rather than as one contradicting the other.
+
+What it still has not seen is **a network with a router in it**. Every device
+here is a battery end device, so "which parent did it choose" has so far only
+ever been answered "the coordinator".
 
 **Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
 ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
