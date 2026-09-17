@@ -254,6 +254,12 @@ the bootloader, so it is worth reading the row rather than guessing.
 
 Reversible: write the coordinator image back and it is a coordinator again.
 
+Worth knowing if the spares are also earmarked for building more installations:
+a dongle **ships as a coordinator**, so one straight out of the bag needs no
+flashing at all to run a Pi. Only a stick that has already been converted to a
+router has to be put back, and that is the same procedure with the
+`_coordinator_` image.
+
 Two caveats. **A router's transmit power is whatever its firmware was built
 with** — `NOBO_ZIGBEE_TRANSMIT_POWER` configures the coordinator and nothing
 else, and there is no equivalent knob for a router. And **use a decent USB
