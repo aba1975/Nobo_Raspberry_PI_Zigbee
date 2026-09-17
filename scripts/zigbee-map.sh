@@ -32,6 +32,13 @@ OUT_DIR="${ZIGBEE_MAP_DIR:-$PWD}"
 STAMP=$(date +%Y%m%d-%H%M%S)
 DOT_FILE="$OUT_DIR/zigbee-map-$STAMP.dot"
 
+if ! docker info >/dev/null 2>&1; then
+    echo "Cannot talk to Docker." >&2
+    echo "Either the daemon is not running, or your user is not in the docker group." >&2
+    echo "Try:  sudo bash scripts/zigbee-map.sh" >&2
+    exit 1
+fi
+
 if ! docker inspect "$BROKER_CONTAINER" >/dev/null 2>&1; then
     echo "The broker container '$BROKER_CONTAINER' is not there." >&2
     echo "The Zigbee stack is behind a Compose profile; set COMPOSE_PROFILES=zigbee in .env." >&2
@@ -117,10 +124,15 @@ print(f"  End devices : {len(enddevices)}")
 print()
 
 if not routers:
-    print("  No routers. Every sensor is talking straight to the dongle, so the")
-    print("  mesh cannot extend past the dongle's own radius. One mains-powered")
-    print("  plug or relay between the dongle and the weak end of the building")
-    print("  is the single change that will help most.")
+    if enddevices:
+        print("  No routers. Every sensor is talking straight to the dongle, so the")
+        print("  mesh cannot extend past the dongle's own radius. One mains-powered")
+        print("  plug or relay between the dongle and the weak end of the building")
+        print("  is the single change that will help most.")
+    else:
+        print("  No routers, and nothing paired yet. Pair a mains-powered plug or")
+        print("  relay first: it joins as a router, and every sensor paired")
+        print("  afterwards can then choose it as a parent.")
     print()
 else:
     print("  Routers in the mesh:")
@@ -146,18 +158,37 @@ for link in links:
 
 if enddevices:
     print("  End devices, and what they report through:")
+    unheard = 0
     for node in sorted(enddevices, key=label):
         chosen = parents.get(node["ieeeAddr"])
         if chosen is None:
+            unheard += 1
             print(f"    {label(node):<28} not heard during the scan")
             continue
         parent = by_addr.get(chosen[0])
         via = label(parent) if parent else chosen[0]
         kind = parent.get("type") if parent else "?"
         quality = chosen[1]
-        verdict = "weak" if 0 <= quality < 50 else "fair" if quality < 100 else "good"
+        # A link can be reported with no score at all. Calling that "fair"
+        # would invent a measurement, which is the one thing this must not do.
+        if quality < 0:
+            verdict, shown = "quality not reported", ""
+        else:
+            verdict = "weak" if quality < 50 else "fair" if quality < 100 else "good"
+            shown = f"LQI {quality} "
         direct = " (direct to coordinator)" if kind == "Coordinator" else ""
-        print(f"    {label(node):<28} via {via}  LQI {quality} {verdict}{direct}")
+        print(f"    {label(node):<28} via {via}  {shown}{verdict}{direct}")
+    print()
+    if unheard:
+        # Expected, not a fault. A scan reads each router's neighbour table,
+        # and a sleeping contact sensor is often absent from every one of them
+        # until it next wakes and speaks.
+        print(f"  {unheard} of {len(enddevices)} were in no neighbour table at scan time.")
+        print("  Sleeping sensors frequently are not; it is not a fault, and it is")
+        print("  not evidence of a weak link either way.")
+        print()
+else:
+    print("  No end devices are paired, so there is nothing to route yet.")
     print()
 PY
 
