@@ -178,6 +178,30 @@ def other_device(address: str, *, friendly_name: Optional[str] = None) -> dict:
     }
 
 
+def unhelpful_device(address: str, *, friendly_name: Optional[str] = None) -> dict:
+    """A battery device that is neither a contact sensor nor a router.
+
+    A remote or a button: it joins, it is not a sensor, and being an end device
+    it will not relay for anything either. The one case where "that is not a
+    contact sensor" really is the whole story.
+    """
+    return {
+        "ieee_address": address,
+        "friendly_name": friendly_name or address,
+        "type": "EndDevice",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "E1524",
+            "vendor": "IKEA",
+            "description": "TRADFRI remote control",
+            "exposes": [
+                {"type": "enum", "name": "action", "property": "action", "access": 1},
+            ],
+        },
+    }
+
+
 class FakeZigbee2Mqtt:
     """Publishes what Zigbee2MQTT publishes and answers what it answers."""
 

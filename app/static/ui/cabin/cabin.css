@@ -1000,6 +1000,12 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   font-size: .84rem; color: var(--ink-soft); margin: .8rem 0;
 }
 .note-warn { border-left-color: var(--amber); background: var(--amber-wash); }
+/* A settled, good state rather than a caution. Used where the absence of a
+   warning is itself worth saying — a mesh that has repeaters in it. */
+.note-ok {
+  border-left-color: var(--pine);
+  background: color-mix(in srgb, var(--pine) 8%, var(--card));
+}
 
 .user-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 .user-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
@@ -1211,3 +1217,13 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .d .trip-alert.is-security .trip-alert-icon { color: var(--m-sched); }
 .d .trip-alert.is-security .btn { margin-top: 12px; }
+
+/* Repeaters in the mesh. Listed rather than counted, because "which one" is
+   the question you have when deciding where the next one goes. */
+.sensor-router-list {
+  list-style: none; margin: .5rem 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.sensor-router-list li { display: flex; align-items: center; gap: .45rem; }
+.sensor-router-list li > span { display: flex; flex-direction: column; }
+.sensor-router-list small { color: var(--ink-soft); font-size: .76rem; }

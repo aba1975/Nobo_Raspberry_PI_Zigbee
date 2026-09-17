@@ -44,6 +44,22 @@ class SensorKind(str, Enum):
 
 
 @dataclass(frozen=True)
+class RouterInfo:
+    """A mains-powered device that relays for others.
+
+    Not a sensor and never treated as one, but worth surfacing: a network of a
+    coordinator and nothing but battery sensors has no mesh in it, and the only
+    way to see that from the interface is to be told what is repeating.
+    """
+
+    router_id: str
+    name: str
+    description: Optional[str] = None
+    vendor: Optional[str] = None
+    model: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ContactSnapshot:
     sensor_id: str
     provider_id: str
@@ -74,6 +90,7 @@ class PairingOutcome(str, Enum):
 
     JOINED = "joined"
     IGNORED = "ignored"      # something joined, but it is not a contact sensor
+    ROUTER = "router"        # a mains device joined: no sensor, but it repeats
     FAILED = "failed"        # it tried to join and the interview did not finish
     CANCELLED = "cancelled"  # a person closed the window
     EXPIRED = "expired"      # the window closed with nothing having joined
@@ -114,6 +131,11 @@ class ContactSensorProvider(Protocol):
     async def stop(self) -> None: ...
 
     async def list(self) -> Sequence[ContactSnapshot]: ...
+
+    async def routers(self) -> Sequence[RouterInfo]:
+        """Mains-powered devices relaying for others.  Empty is a valid answer,
+        and an important one: it means there is no mesh, only spokes."""
+        return ()
 
     async def create(
         self,

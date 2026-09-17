@@ -886,3 +886,63 @@ def test_link_quality_can_be_simulated_but_only_where_readings_are_simulated():
     # Inside the same demo gate as the battery field, not beside it.
     assert sheet.index("const demo =") < sheet.index("editSensorLqi")
     assert "${demo ? `" in sheet
+
+
+# -- repeaters -------------------------------------------------------------
+
+
+def test_a_plug_that_joins_reads_as_a_success():
+    """It joined and it will relay. "That is not a contact sensor" reads as a
+    rejection and invites somebody to take it back to the shop."""
+    assert "router:" in CABIN
+    report = CABIN[CABIN.index("const PAIRING_REPORT"):CABIN.index("function pairingReport")]
+    assert "Repeater added" in report
+    assert "'ok'" in report.split("router:")[1].split("\n")[0]
+
+
+def test_the_repeater_message_says_to_pair_sensors_after_it():
+    """A sensor picks its route when it joins and Aqara devices are poor at
+    changing their minds, so the order matters and the moment it matters is
+    the moment the plug has just joined."""
+    assert "it will relay for sensors near it" in CABIN
+    assert "Pair those after it" in CABIN
+
+
+def test_having_no_repeater_is_stated_rather_than_left_to_be_inferred():
+    """The diagnosis nothing else surfaces. Per-sensor signal grades the last
+    hop, so every sensor can look healthy while the network cannot reach past
+    the one radio."""
+    assert "function sensorMeshNote" in CABIN
+    assert "No repeaters" in CABIN
+    assert "talks straight to the USB stick" in CABIN
+
+
+def test_the_mesh_note_stays_quiet_when_there_is_nothing_to_say():
+    """On a simulated provider there is no radio, and on an empty installation
+    it would be advice to go shopping for nothing."""
+    start = CABIN.index("function sensorMeshNote")
+    end = CABIN.index("\n  }\n", start)
+    body = CABIN[start:end]
+    assert "state.sensorSettings.simulated" in body
+    assert "if (!sensors.length && !routers.length) return ''" in body
+
+
+def test_repeaters_are_listed_not_merely_counted():
+    # "Which one" is the question you have when deciding where the next goes.
+    assert "sensor-router-list" in CABIN
+    assert ".sensor-router-list" in CSS
+    assert "router.description" in CABIN
+
+
+def test_a_repeater_is_not_presented_as_something_this_app_controls():
+    """It is a range extender here and nothing else. Implying otherwise would
+    promise a switch that does not exist."""
+    assert "are not controlled from here" in CABIN
+
+
+def test_sensors_and_repeaters_arrive_in_one_request():
+    """They are one answer — how much of the network is there — and a second
+    request on every refresh would be paid on every WebSocket update."""
+    assert "sensorNetwork" in CORE
+    assert CORE.count("req('/api/sensors')") <= 2
+    assert "sensorNetwork()" in CABIN

@@ -54,6 +54,7 @@
     weekProfiles: [],
     sensorSettings: null,
     sensorDevices: [],
+    sensorRouters: [],
     /* The command log is only fetched when its view is opened - it is
        diagnostics, and there is no reason to poll for it on the home screen. */
     log: null,
@@ -176,9 +177,13 @@
     if (!state.me) state.me = await Nobo.api.me().catch(() => null);
     if (state.me && state.me.role === 'admin') {
       state.sensorSettings = await Nobo.api.sensorSettings().catch(() => state.sensorSettings);
-      state.sensorDevices = state.sensorSettings && state.sensorSettings.enabled
-        ? await Nobo.api.sensors().catch(() => state.sensorDevices)
-        : [];
+      const network = state.sensorSettings && state.sensorSettings.enabled
+        ? await Nobo.api.sensorNetwork().catch(() => null)
+        : { sensors: [], routers: [] };
+      if (network) {
+        state.sensorDevices = network.sensors;
+        state.sensorRouters = network.routers;
+      }
     }
     applySiteName();
   }
@@ -1319,6 +1324,7 @@
      rather than a return to the beginning. */
   const PAIRING_REPORT = {
     joined:    { tone: 'ok',    icon: 'check',  title: 'Sensor found' },
+    router:    { tone: 'ok',    icon: 'signal', title: 'Repeater added' },
     ignored:   { tone: 'warn',  icon: 'alert',  title: 'That is not a contact sensor' },
     failed:    { tone: 'error', icon: 'alert',  title: 'Pairing failed' },
     cancelled: { tone: 'idle',  icon: 'normal', title: 'Pairing stopped' },
@@ -1338,6 +1344,17 @@
     }
     const known = PAIRING_REPORT[pairing.outcome];
     if (!known) return null;
+    /* A repeater is not a sensor, but joining one is a success — so it says
+       what was gained rather than what was not found. The device description
+       alone ("IKEA TRETAKT smart plug") reads like a complaint. */
+    if (pairing.outcome === 'router') {
+      const what = pairing.detail ? `${pairing.detail}. ` : '';
+      return {
+        ...known,
+        detail: `${what}It is not a contact sensor, but it will relay for sensors near it. `
+          + 'Pair those after it, so they can choose it.',
+      };
+    }
     const detail = pairing.detail || (
       pairing.outcome === 'joined' ? 'Now give it a name and a room.'
       : pairing.outcome === 'expired' ? 'The window closed before anything joined. Try again, closer to the hub if it keeps failing.'
@@ -3617,6 +3634,40 @@
     return state.sensorDevices || [];
   }
 
+  /* Whether the network has a mesh in it, or only spokes.
+
+     Deliberately shown even — especially — when the answer is "no repeaters",
+     because that is the diagnosis nothing else surfaces: the per-sensor signal
+     reading grades the last hop, so every sensor can look healthy while the
+     network has no way to reach past the dongle's own radius. Only ever
+     mentioned once sensors exist; on an empty installation it would be advice
+     to go shopping for nothing. */
+  function sensorMeshNote() {
+    if (state.sensorSettings && state.sensorSettings.simulated) return '';
+    const routers = state.sensorRouters || [];
+    const sensors = state.sensorDevices || [];
+    if (!sensors.length && !routers.length) return '';
+    if (!routers.length) {
+      return `<div class="note">
+          <strong>No repeaters</strong>
+          <span>Every sensor talks straight to the USB stick, so the network cannot
+          reach further than that one radio does. A mains-powered Zigbee device —
+          a smart plug or relay — placed between the stick and the far end of the
+          building relays for everything near it. Pair it before the sensors that
+          need it, because a sensor picks its route when it joins.</span>
+        </div>`;
+    }
+    return `<div class="note note-ok">
+        <strong>${routers.length} ${routers.length === 1 ? 'repeater' : 'repeaters'}</strong>
+        <ul class="sensor-router-list">${routers.map(router => `
+          <li>${Nobo.icon('signal')}<span><strong>${esc(router.name)}</strong>${
+            router.description ? `<small>${esc(router.description)}</small>` : ''
+          }</span></li>`).join('')}</ul>
+        <span>These relay for sensors near them. They are not contact sensors and
+        are not controlled from here.</span>
+      </div>`;
+  }
+
   function renderSensorSettingsCard(isAdmin) {
     if (!isAdmin || !state.me || !state.sensorSettings) return '';
     const settings = state.sensorSettings;
@@ -3649,6 +3700,7 @@
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
             <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
           </div>
+          ${sensorMeshNote()}
           ${unassigned.length ? `
             <div class="note note-warn">
               <strong>${unassigned.length} unassigned ${unassigned.length === 1 ? 'sensor needs' : 'sensors need'} a zone</strong>
@@ -3682,7 +3734,11 @@
       };
     });
     state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones });
-    state.sensorDevices = enabled ? await Nobo.api.sensors() : [];
+    const network = enabled
+      ? await Nobo.api.sensorNetwork()
+      : { sensors: [], routers: [] };
+    state.sensorDevices = network.sensors;
+    state.sensorRouters = network.routers;
     await refresh(true);
     renderSettings();
   }
@@ -3711,7 +3767,11 @@
       state.me = await Nobo.api.me();
       if (state.me && state.me.role === 'admin') {
         state.sensorSettings = await Nobo.api.sensorSettings();
-        state.sensorDevices = state.sensorSettings.enabled ? await Nobo.api.sensors() : [];
+        const network = state.sensorSettings.enabled
+          ? await Nobo.api.sensorNetwork()
+          : { sensors: [], routers: [] };
+        state.sensorDevices = network.sensors;
+        state.sensorRouters = network.routers;
       }
       renderSettings();
     } catch (_) { /* the static render is already correct enough */ }

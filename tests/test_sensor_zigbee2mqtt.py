@@ -8,7 +8,7 @@ import pytest
 
 from tests.fake_zigbee2mqtt import (
     FakeBroker, FakeTransport, FakeZigbee2Mqtt, contact_device, other_device,
-    topic_matches,
+    topic_matches, unhelpful_device,
 )
 from sensor_provider import (
     ContactState, PairingOutcome, SensorEventKind, SensorKind,
@@ -876,16 +876,35 @@ async def test_a_failed_interview_is_reported(rig, events):
 
 @pytest.mark.asyncio
 async def test_something_that_is_not_a_contact_sensor_says_so(rig, events):
+    """A remote joins, is not a sensor, and being an end device relays nothing
+    either — so there is genuinely nothing to celebrate."""
     provider, z2m = await started(rig, events)
     await provider.begin_pairing(254)
 
-    # A repeater is a fine thing to have joined; it is just not a sensor.
     await _interview(z2m, "0x0017880100abcdef", "successful",
-                     other_device("0x0017880100abcdef"))
+                     unhelpful_device("0x0017880100abcdef"))
 
     status = provider.pairing_status()
     assert status.outcome is PairingOutcome.IGNORED
     assert "IKEA" in (status.detail or "")
+    assert await provider.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_plug_that_joins_is_a_success_not_a_rejection(rig, events):
+    """Somebody who buys a plug to extend the mesh has done exactly what they
+    set out to do. Telling them "that is not a contact sensor" reads as a
+    failure and invites them to try again, or take it back to the shop."""
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+
+    await _interview(z2m, "0x0017880100abcdef", "successful",
+                     other_device("0x0017880100abcdef"))
+
+    status = provider.pairing_status()
+    assert status.outcome is PairingOutcome.ROUTER
+    assert "IKEA" in (status.detail or "")
+    # It is still not a sensor, and must never be counted as one.
     assert await provider.list() == []
 
 
@@ -1231,3 +1250,65 @@ def test_a_nonsense_last_seen_is_refused(tmp_path):
         # _load backs up and returns the default rather than raising, so the
         # observable result is that nothing survives a corrupt file.
         assert load_zigbee_metadata(path) == {}
+
+
+# -- routers ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_mains_device_is_reported_as_a_router_not_as_a_sensor(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(other_device("0x0017880100abcdef"))
+
+    routers = await provider.routers()
+
+    assert [r.router_id for r in routers] == ["0x0017880100abcdef"]
+    assert routers[0].vendor == "IKEA"
+    assert "TRETAKT" in (routers[0].description or "")
+    # The thing that must never happen: a plug counted as a window.
+    assert await provider.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_network_of_only_battery_sensors_reports_no_routers(rig, events):
+    """The finding worth surfacing. A coordinator and nothing but sleeping
+    sensors is a hub and spokes, and every distant sensor is weak for the same
+    reason — which no per-sensor reading reveals."""
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+
+    assert await provider.routers() == []
+    assert len(await provider.list()) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_end_device_that_is_not_a_sensor_is_not_called_a_router(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(unhelpful_device("0x0017880100abcdef"))
+
+    assert await provider.routers() == []
+    assert await provider.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_router_that_goes_away_stops_being_listed(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(other_device("0x0017880100abcdef"))
+    assert len(await provider.routers()) == 1
+
+    z2m.devices = [
+        d for d in z2m.devices if d["ieee_address"] != "0x0017880100abcdef"
+    ]
+    await z2m.publish_devices()
+
+    assert await provider.routers() == []
+
+
+@pytest.mark.asyncio
+async def test_routers_and_sensors_coexist(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(other_device("0x0017880100abcdef"))
+    await z2m.add_device(contact_device(ADDRESS))
+
+    assert len(await provider.routers()) == 1
+    assert len(await provider.list()) == 1

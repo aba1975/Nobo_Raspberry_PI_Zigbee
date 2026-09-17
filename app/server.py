@@ -2848,7 +2848,35 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
 @app.get("/api/sensors")
 async def get_sensors():
     _require_sensor_enabled()
-    return {"sensors": [_sensor_snapshot_dict(item) for item in sensor_snapshots]}
+    return {
+        "sensors": [_sensor_snapshot_dict(item) for item in sensor_snapshots],
+        # Not sensors, and never counted as any. Listed because a network of a
+        # coordinator and nothing but battery sensors has no mesh in it, and
+        # there is otherwise no way to see that from the interface.
+        "routers": [
+            {
+                "router_id": item.router_id,
+                "name": item.name,
+                "description": item.description,
+                "vendor": item.vendor,
+                "model": item.model,
+            }
+            for item in await _sensor_routers()
+        ],
+    }
+
+
+async def _sensor_routers():
+    """Mains-powered relays, or nothing if the provider cannot report them."""
+    provider = sensor_provider
+    if provider is None:
+        return []
+    try:
+        return list(await provider.routers())
+    except RuntimeError:
+        # Not started yet. An empty list is the honest answer and the caller
+        # renders it as "no repeaters", which is what it looks like from here.
+        return []
 
 
 @app.get("/api/sensors/pairing")

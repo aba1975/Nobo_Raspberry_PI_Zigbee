@@ -93,6 +93,12 @@ const Nobo = (() => {
     setSensorSettings: (body) => req('/api/sensors/settings', {
                                   method: 'PUT', body: JSON.stringify(body) }),
     sensors:       ()         => req('/api/sensors').then(r => r.sensors || r),
+    /* Sensors and repeaters in one request. They come from one endpoint
+       because they are one answer: how much of the network is there. */
+    sensorNetwork: ()         => req('/api/sensors').then(r => ({
+                                   sensors: r.sensors || r,
+                                   routers: r.routers || [],
+                                 })),
     pairSensor:    (body)     => req('/api/sensors', {
                                   method: 'POST', body: JSON.stringify(body) }),
     updateSensor:  (id, body) => req(`/api/sensors/${encodeURIComponent(id)}`, {

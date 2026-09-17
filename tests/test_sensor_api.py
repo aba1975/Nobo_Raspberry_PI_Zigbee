@@ -624,3 +624,57 @@ def test_a_changed_signal_reaches_the_browser(client):
     client.post(f"/api/sensors/{sensor_id}/simulate", json={"link_quality": 51})
 
     assert server._sensor_view_signature() != before
+
+
+def test_the_sensor_list_reports_repeaters_separately(client):
+    """Routers are listed beside the sensors and never counted among them.
+
+    A network of a coordinator and nothing but battery sensors has no mesh in
+    it, and the per-sensor signal reading cannot show that: it grades the last
+    hop, so every sensor looks healthy while nothing can reach past the
+    dongle's own radius.
+    """
+    enable(client)
+    add_sensor(client)
+
+    body = client.get("/api/sensors").json()
+
+    assert len(body["sensors"]) == 1
+    # The simulator has no radio, so it has nothing relaying — reported as an
+    # empty list rather than omitted, so the interface takes one path.
+    assert body["routers"] == []
+
+
+def test_a_plug_is_never_counted_as_a_sensor(client, monkeypatch):
+    from sensor_provider import RouterInfo
+
+    enable(client)
+    add_sensor(client)
+
+    async def routers():
+        return [RouterInfo(
+            router_id="0x0017880100abcdef", name="Hall plug",
+            description="IKEA TRETAKT smart plug", vendor="IKEA", model="E22x4",
+        )]
+
+    monkeypatch.setattr(server.sensor_provider, "routers", routers)
+    body = client.get("/api/sensors").json()
+
+    assert len(body["sensors"]) == 1, "a plug must not become a window"
+    assert [r["name"] for r in body["routers"]] == ["Hall plug"]
+    assert body["routers"][0]["vendor"] == "IKEA"
+
+
+def test_a_provider_that_cannot_report_repeaters_is_not_an_error(client, monkeypatch):
+    """Answering "none" beats failing the whole sensor list over a nicety."""
+    enable(client)
+    add_sensor(client)
+
+    async def routers():
+        raise RuntimeError("sensor provider is not started")
+
+    monkeypatch.setattr(server.sensor_provider, "routers", routers)
+    response = client.get("/api/sensors")
+
+    assert response.status_code == 200
+    assert response.json()["routers"] == []

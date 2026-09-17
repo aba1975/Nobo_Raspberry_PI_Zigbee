@@ -34,7 +34,8 @@ from typing import Awaitable, Callable, Optional, Protocol
 
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, PairingOutcome, PairingStatus,
-    ProviderUnavailable, SensorEvent, SensorEventKind, SensorKind, SensorNotFound,
+    ProviderUnavailable, RouterInfo, SensorEvent, SensorEventKind, SensorKind,
+    SensorNotFound,
 )
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
@@ -102,6 +103,10 @@ class Zigbee2MqttContactSensorProvider:
         self._save_metadata = save_metadata or (lambda _data: None)
 
         self._sensors: dict[str, ContactSnapshot] = {}
+        # Mains devices that relay for others. Tracked but never adopted as
+        # sensors: the interface needs to be able to say whether the network
+        # has a mesh in it at all.
+        self._routers: dict[str, RouterInfo] = {}
         self._metadata: dict[str, dict] = {}
         # Zigbee2MQTT addresses devices by friendly name on the wire, so a
         # topic has to be resolved back to the address that identifies them.
@@ -162,6 +167,10 @@ class Zigbee2MqttContactSensorProvider:
     async def list(self) -> list[ContactSnapshot]:
         self._ensure_started()
         return sorted(self._sensors.values(), key=lambda item: item.sensor_id)
+
+    async def routers(self) -> list[RouterInfo]:
+        self._ensure_started()
+        return sorted(self._routers.values(), key=lambda item: item.name)
 
     async def create(
         self,
@@ -394,11 +403,16 @@ class Zigbee2MqttContactSensorProvider:
             return
         seen: set[str] = set()
         self._topic_names = {}
+        routers: dict[str, RouterInfo] = {}
         for entry in document:
             if not isinstance(entry, dict):
                 continue
             address = entry.get("ieee_address")
-            if not _is_address(address) or not _is_contact_sensor(entry):
+            if not _is_address(address):
+                continue
+            if _is_router(entry):
+                routers[address] = _router_info(address, entry)
+            if not _is_contact_sensor(entry):
                 continue
             seen.add(address)
             friendly = entry.get("friendly_name") or address
@@ -409,6 +423,8 @@ class Zigbee2MqttContactSensorProvider:
         for address in list(self._sensors):
             if address not in seen:
                 await self._forget(address)
+
+        self._routers = routers
 
     async def _on_remove_response(self, document) -> None:
         if not isinstance(document, dict):
@@ -489,6 +505,16 @@ class Zigbee2MqttContactSensorProvider:
         elif status == "successful":
             if _is_contact_sensor(data):
                 await self._end_pairing(PairingOutcome.JOINED, sensor_id=address)
+            elif _is_router(data):
+                # Somebody who buys a plug to extend the mesh has succeeded at
+                # exactly what they set out to do, and telling them "that is
+                # not a contact sensor" reads as a rejection. It joined, and
+                # from now on it repeats for everything near it.
+                await self._end_pairing(
+                    PairingOutcome.ROUTER,
+                    sensor_id=address,
+                    detail=_describe(data) or "A mains-powered device",
+                )
             else:
                 # A repeater or plug is a perfectly good thing to have joined;
                 # it is simply not a contact sensor, and saying so beats
@@ -687,6 +713,28 @@ def _link_quality(value, previous: Optional[int]) -> Optional[int]:
 
 def _is_address(value) -> bool:
     return isinstance(value, str) and bool(_IEEE.match(value.lower()))
+
+
+def _is_router(entry: dict) -> bool:
+    """Whether Zigbee2MQTT calls this device a router.
+
+    Taken from the device type rather than guessed from the power source: a
+    device is a router because the mesh says so, and a mains-powered device
+    that has not been commissioned as one would not be relaying anything.
+    """
+    return entry.get("type") == "Router"
+
+
+def _router_info(address: str, entry: dict) -> RouterInfo:
+    definition = entry.get("definition")
+    definition = definition if isinstance(definition, dict) else {}
+    return RouterInfo(
+        router_id=address,
+        name=_default_name(entry, address),
+        description=definition.get("description") or None,
+        vendor=definition.get("vendor") or None,
+        model=definition.get("model") or None,
+    )
 
 
 def _is_contact_sensor(entry: dict) -> bool:

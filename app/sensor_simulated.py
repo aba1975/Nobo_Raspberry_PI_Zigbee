@@ -50,6 +50,14 @@ class SimulatedContactSensorProvider:
         self._ensure_started()
         return sorted(self._sensors.values(), key=lambda item: item.sensor_id)
 
+    async def routers(self) -> list:
+        """There is no radio, so there is nothing relaying and nothing to say.
+
+        Reported as none rather than omitted, so the interface takes the same
+        path it does for a real network that happens to have no repeater in it.
+        """
+        return []
+
     async def create(
         self,
         name: str,

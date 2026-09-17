@@ -189,6 +189,24 @@ Adding a mains-powered router (a smart plug or an in-wall relay) roughly
 amount of adjusting the coordinator. Place it between the dongle and the weak
 area, not in the weak area.
 
+**A repeater needs no code here, and gets none.** It joins Zigbee2MQTT and
+starts relaying immediately; nothing in this application has to understand it
+for the range to improve. What the application does is narrower, and bounded
+deliberately:
+
+- pairing reports it as **"Repeater added"** rather than "that is not a contact
+  sensor", because somebody who bought a plug to extend the mesh has succeeded
+  at exactly what they set out to do, and a rejection message invites them to
+  take it back to the shop;
+- Settings lists what is repeating, and says plainly when nothing is;
+- it is never counted as a sensor, never given a room, and **not switched on or
+  off from here**. Controlling a plug — tying it to Away, say — is a different
+  feature with its own ownership and restart questions, and pretending
+  otherwise in the interface would promise a switch that does not exist.
+
+The "no repeaters" note is shown only once at least one device is paired. On an
+empty installation it would be advice to go shopping for nothing.
+
 `scripts/zigbee-map.sh` answers whether there is a router at all, and which
 parent each sensor actually chose. Link quality in the interface cannot: it
 grades the last hop, so a sensor reporting through a repeater looks healthy no
