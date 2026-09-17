@@ -412,3 +412,59 @@ def test_zigbee2mqtt_is_told_to_timestamp_reports(compose):
     """
     env = compose["services"]["zigbee2mqtt"].get("environment") or []
     assert "ZIGBEE2MQTT_CONFIG_ADVANCED_LAST_SEEN=ISO_8601" in [str(e) for e in env]
+
+
+class TestTheRadioIsConfigurableWithoutEditingTheVolume:
+    """Zigbee2MQTT generates configuration.yaml inside its own named volume on
+    first run, so nothing in this repository can edit it directly. Radio
+    settings therefore have to arrive as ZIGBEE2MQTT_CONFIG_* variables, the
+    same way the report timestamp already does.
+    """
+
+    @staticmethod
+    def _env(compose):
+        return [str(e) for e in (compose["services"]["zigbee2mqtt"].get("environment") or [])]
+
+    def test_the_channel_can_be_set(self, compose):
+        assert "ZIGBEE2MQTT_CONFIG_ADVANCED_CHANNEL=${NOBO_ZIGBEE_CHANNEL:-}" in self._env(compose)
+
+    def test_the_channel_defaults_to_empty(self, compose, env_example):
+        """The one setting here that cannot be taken back.
+
+        Zigbee2MQTT ignores an empty ZIGBEE2MQTT_CONFIG_* variable, so an
+        installation that never sets this keeps the channel its network was
+        formed on. Defaulting it to a number would move the channel of a
+        running mesh, and Aqara and Xiaomi end devices sleep through the
+        channel-change broadcast — every one of them would have to be re-paired
+        by hand at the window it is stuck to.
+        """
+        assert "ZIGBEE2MQTT_CONFIG_ADVANCED_CHANNEL=${NOBO_ZIGBEE_CHANNEL:-}" in self._env(compose)
+        assert not re.search(r"^NOBO_ZIGBEE_CHANNEL=", env_example, re.M), (
+            "an uncommented default here would re-channel an existing mesh"
+        )
+
+    def test_the_transmit_power_is_raised_from_the_firmware_default(self, compose):
+        """The documented ZBDongle-P is a CC2652P with an amplifier and will do
+        20 dBm; its firmware default is 5. Leaving it unset throws away most of
+        the range the hardware was bought for, and unlike the channel it needs
+        no re-pairing and can be put back.
+        """
+        assert "ZIGBEE2MQTT_CONFIG_ADVANCED_TRANSMIT_POWER=${NOBO_ZIGBEE_TRANSMIT_POWER:-20}" in self._env(compose)
+
+    def test_both_radio_settings_are_documented(self, env_example):
+        """A variable nobody knows to set is a variable that does not exist."""
+        for name in ("NOBO_ZIGBEE_CHANNEL", "NOBO_ZIGBEE_TRANSMIT_POWER"):
+            assert name in env_example, f"{name} is not mentioned in .env.example"
+
+    def test_the_channel_advice_avoids_wifi(self, env_example):
+        """15, 20 and 25 are the gaps between Wi-Fi 1/6/11. The Zigbee2MQTT
+        default of 11 sits inside Wi-Fi 1, which is what the survey in
+        docs/SENSORS.md rejected.
+        """
+        block = re.search(
+            r"# The Zigbee channel\..*?#NOBO_ZIGBEE_CHANNEL=\d+", env_example, re.S
+        )
+        assert block, "the channel guidance has gone missing from .env.example"
+        assert "Wi-Fi" in block.group(0)
+        assert "11" in block.group(0)
+
