@@ -207,6 +207,42 @@ deliberately:
 The "no repeaters" note is shown only once at least one device is paired. On an
 empty installation it would be advice to go shopping for nothing.
 
+#### A spare dongle makes the strongest repeater
+
+A second ZBDongle-P flashed with *router* firmware is the best relay this
+project has a use for: the same CC2652P radio and the same amplifier as the
+coordinator, rather than the modest radio inside a smart plug.
+
+**It needs no computer once flashed.** USB supplies power and nothing else —
+no host, no data, no drivers. A phone charger, a spare port on a television, a
+USB socket in the wall: anything that stays on. It is a self-contained Zigbee
+router the moment it has 5 V.
+
+Flashing it does need a machine once, and the demo Pi will do:
+
+| | |
+| --- | --- |
+| Firmware | `CC1352P2_CC2652P_launchpad_router_*.zip` |
+| Not | the `_coordinator_` image, and not the `..._other_...` build |
+| Auto-BSL | **yes** on this adapter — no button-holding needed to enter the bootloader |
+| Tool | `cc2538-bsl` |
+| Pairing | automatic after reflashing, with the network open to join |
+| Factory reset | a single press of the button on the stick |
+
+The firmware choice is from Koenkk's own adapter table, which lists exactly one
+image for the "SONOFF Zigbee 3.0 USB Dongle Plus by ITead" and notes the RF
+switch pin that drives the 20 dBm amplifier. Flashing the wrong image can lock
+the bootloader, so it is worth reading the row rather than guessing.
+
+Reversible: write the coordinator image back and it is a coordinator again.
+
+Two caveats. **A router's transmit power is whatever its firmware was built
+with** — `NOBO_ZIGBEE_TRANSMIT_POWER` configures the coordinator and nothing
+else, and there is no equivalent knob for a router. And **use a decent USB
+supply**: a cheap charger is a noisy thing to sit a 2.4 GHz receiver on top of,
+which is the same reasoning that put the coordinator on an extension lead in
+the first place.
+
 `scripts/zigbee-map.sh` answers whether there is a router at all, and which
 parent each sensor actually chose. Link quality in the interface cannot: it
 grades the last hop, so a sensor reporting through a repeater looks healthy no
@@ -267,6 +303,11 @@ transmit power nor which firmware variant is flashed is exposed by anything.
 amplifier; `..._other_*` is for CC2652P boards wired differently. Both report
 an identical version string, so the only evidence that 20 dBm took effect is
 that the adapter did not complain.
+
+Which one *should* be there is not in doubt, at least: Koenkk's adapter table
+lists exactly one image for the "SONOFF Zigbee 3.0 USB Dongle Plus by ITead",
+and names the pin it uses to drive the 20 dBm amplifier. Only a deliberate
+mistake would have put the other build on it.
 
 **Channel** is `NOBO_ZIGBEE_CHANNEL`, and is deliberately empty by default: an
 empty `ZIGBEE2MQTT_CONFIG_*` variable is ignored, so an existing network keeps
