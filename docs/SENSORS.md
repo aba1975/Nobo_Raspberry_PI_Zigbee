@@ -218,14 +218,32 @@ no host, no data, no drivers. A phone charger, a spare port on a television, a
 USB socket in the wall: anything that stays on. It is a self-contained Zigbee
 router the moment it has 5 V.
 
-Flashing it does need a machine once, and the demo Pi will do:
+Flashing it does need a machine once, and the demo Pi will do. There is a
+script, because the two ways this goes wrong are both unrecoverable by ordinary
+means and neither announces itself:
+
+```bash
+sudo bash scripts/zigbee-flash-router.sh
+```
+
+It finds the spare, **refuses to touch the adapter this system is using as its
+coordinator** — that would destroy the running network, since every sensor is
+paired to it and the network key lives on it — fetches the right image for this
+exact adapter, checks it against the digest GitHub publishes, and asks you to
+type the word `flash` before writing anything.
+
+There is deliberately **no flag to override the coordinator refusal**, and the
+firmware is deliberately **not a parameter**. Both are the decisions that go
+wrong, and a flag would eventually be pasted from a forum by somebody in a
+hurry. If the spare really is the only stick present, unplug the working one.
 
 | | |
 | --- | --- |
 | Firmware | `CC1352P2_CC2652P_launchpad_router_*.zip` |
 | Not | the `_coordinator_` image, and not the `..._other_...` build |
 | Auto-BSL | **yes** on this adapter — no button-holding needed to enter the bootloader |
-| Tool | `cc2538-bsl` |
+| Tool | `cc2538-bsl`, fetched at a pinned commit rather than a branch tip |
+| Needs | `python3-serial` and `python3-intelhex` |
 | Pairing | automatic after reflashing, with the network open to join |
 | Factory reset | a single press of the button on the stick |
 
