@@ -194,6 +194,12 @@ parent each sensor actually chose. Link quality in the interface cannot: it
 grades the last hop, so a sensor reporting through a repeater looks healthy no
 matter how far it is from the Pi.
 
+Run against the demo Pi's real bridge on 17 September 2026: both the `raw` and
+`graphviz` requests were answered, and an empty network — every sensor having
+just been unpaired — was reported as such. What it has *not* yet seen is a real
+mesh with a router in it, so the parent-and-quality half of its output is still
+only proved against constructed payloads.
+
 **Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
 ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
 this is free range that was previously left on the table. It makes the
@@ -217,6 +223,22 @@ sudo docker exec nobo-zigbee2mqtt \
 ```
 
 If the value has not landed, edit that file in place and restart the container.
+
+**Verified on the demo Pi, 17 September 2026.** An ordinary
+`sudo bash scripts/update.sh` against Zigbee2MQTT 2.14.1 did rewrite
+`configuration.yaml` — the file's mtime moved to the moment the container came
+back — and `transmit_power: 20` was in it afterwards, with no complaint from
+the adapter (a CC2652P running Z-Stack 20250321). So on this version the
+variable does arrive without intervention. Check anyway: the code path that
+writes it is not one this project controls, and the failure is silent.
+
+The same check produced the argument for `NOBO_ZIGBEE_CHANNEL` better than any
+reasoning did. That Pi was found already on **channel 15** — correct, matching
+the survey below, and present only because somebody had once edited the file
+inside the volume by hand. Nothing in the repository knew, so a second
+installation built from this source would have formed its network on 11 while
+the first sat on 15, and the only record of the decision was a paragraph of
+prose. That is exactly the gap the variable closes.
 
 **Placement beats all of it.** The dongle wants a short, *shielded* extension
 (0.5–1 m is plenty) on a **USB 2** port, as far as the cable allows from the
