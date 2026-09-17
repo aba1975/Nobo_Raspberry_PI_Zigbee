@@ -218,6 +218,38 @@ this is free range that was previously left on the table. It makes the
 so it rescues a link that was marginal in one direction only, and cannot make a
 sensor audible that the coordinator simply cannot hear.
 
+**Do not expect the link quality numbers to move.** LQI is measured by whichever
+radio *received* the frame, and every number this application displays came from
+a sensor's report, so all of them describe the sensor→coordinator direction.
+Raising what the coordinator transmits cannot change any of them, and somebody
+comparing before and after will reasonably conclude the setting did nothing.
+What it actually buys is the other direction: acknowledgements the sensor has to
+hear or it retransmits and drains its battery, the interview during pairing, and
+any command sent *to* a device. Judge it by devices staying joined, not by a
+bigger number.
+
+Two things follow from the same fact. **Antenna gain is worth more than
+transmit power**, because an antenna is reciprocal — it improves receive as
+well as transmit, and receive is the side that is actually limited here. And
+**a high-gain omni is not automatically better**: gain is bought by flattening
+the radiation pattern into a disc, which is the wrong shape for a building with
+a floor above the dongle. In a single-storey spread, more gain helps; across
+floors, a modest antenna standing vertically usually beats a tall thin one.
+
+There is nothing else on the dongle to adjust. Koenkk's coordinator firmware
+exposes no antenna selection — the ZBDongle-P has only the external SMA — and
+the transmit power above is the whole of the radio configuration. Check the
+firmware is current (`bridge/info` → `coordinator.meta.revision`, against
+<https://github.com/Koenkk/Z-Stack-firmware/releases>) and leave it alone
+otherwise; flashing carries real risk and buys nothing on its own.
+
+**What cannot be read back**, and should not be claimed: neither the achieved
+transmit power nor which firmware variant is flashed is exposed by anything.
+`CC1352P2_CC2652P_launchpad_*` is the build for the ZBDongle-P and drives the
+amplifier; `..._other_*` is for CC2652P boards wired differently. Both report
+an identical version string, so the only evidence that 20 dBm took effect is
+that the adapter did not complain.
+
 **Channel** is `NOBO_ZIGBEE_CHANNEL`, and is deliberately empty by default: an
 empty `ZIGBEE2MQTT_CONFIG_*` variable is ignored, so an existing network keeps
 the channel it was formed on. Choose it before pairing anything. See the survey
