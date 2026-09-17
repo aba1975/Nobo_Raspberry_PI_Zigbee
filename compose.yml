@@ -154,6 +154,33 @@ services:
       # generated inside the volume on first run, so a fresh installation
       # would otherwise not have it.
       - ZIGBEE2MQTT_CONFIG_ADVANCED_LAST_SEEN=ISO_8601
+      # The Zigbee channel, and the one setting here that cannot be taken back.
+      #
+      # Deliberately empty by default. Zigbee2MQTT ignores an empty
+      # ZIGBEE2MQTT_CONFIG_* variable, so an installation that never sets this
+      # keeps whatever channel its network was formed on — which is the only
+      # safe default, because changing the channel of a *running* mesh strands
+      # every sleepy end device until it is re-paired by hand, at the window it
+      # is stuck to.
+      #
+      # Choose it before pairing anything. docs/SENSORS.md explains the survey;
+      # the short version is that the Zigbee2MQTT default of 11 sits inside
+      # Wi-Fi 1, and 15, 20 or 25 are the gaps between Wi-Fi 1/6/11.
+      - ZIGBEE2MQTT_CONFIG_ADVANCED_CHANNEL=${NOBO_ZIGBEE_CHANNEL:-}
+      # Coordinator transmit power in dBm.
+      #
+      # The ZBDongle-P this project documents is a CC2652P with a power
+      # amplifier and will do 20; its firmware default is 5, so leaving this
+      # unset throws away most of the range the hardware was bought for. Costs
+      # nothing, needs no re-pairing, and is reversible.
+      #
+      # It raises only what the *coordinator* shouts, never what a battery
+      # sensor can whisper back, so it improves a marginal link but cannot
+      # rescue one the sensor's own radio cannot reach. Routers do that.
+      #
+      # Lower it to 5 for an adapter with no amplifier — a bare CC2652RB, or a
+      # ZBDongle-E — which cannot reach 20 and will log the attempt as an error.
+      - ZIGBEE2MQTT_CONFIG_ADVANCED_TRANSMIT_POWER=${NOBO_ZIGBEE_TRANSMIT_POWER:-20}
 
 volumes:
   nobo-data:

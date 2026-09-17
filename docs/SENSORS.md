@@ -176,6 +176,55 @@ client library's responsibility and is deliberately not reimplemented. The same
 caveat applies as to `fake_hub.py`: it proves a message was understood, not that
 a radio delivered it.
 
+### Extending range
+
+Three settings and one purchase, in the order they are worth doing.
+
+**Only mains-powered devices repeat.** Aqara and Xiaomi contact sensors are
+Zigbee *end devices*: they sleep between reports and route nothing, ever. A
+network of a coordinator and nothing but battery sensors has no mesh in it —
+it is a hub and spokes, and every distant sensor is weak for the same reason.
+Adding a mains-powered router (a smart plug or an in-wall relay) roughly
+*halves* the distance any one hop has to cross, which buys far more than any
+amount of adjusting the coordinator. Place it between the dongle and the weak
+area, not in the weak area.
+
+`scripts/zigbee-map.sh` answers whether there is a router at all, and which
+parent each sensor actually chose. Link quality in the interface cannot: it
+grades the last hop, so a sensor reporting through a repeater looks healthy no
+matter how far it is from the Pi.
+
+**Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
+ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
+this is free range that was previously left on the table. It makes the
+*coordinator* louder and not the sensors, which still answer at around 10 dBm —
+so it rescues a link that was marginal in one direction only, and cannot make a
+sensor audible that the coordinator simply cannot hear.
+
+**Channel** is `NOBO_ZIGBEE_CHANNEL`, and is deliberately empty by default: an
+empty `ZIGBEE2MQTT_CONFIG_*` variable is ignored, so an existing network keeps
+the channel it was formed on. Choose it before pairing anything. See the survey
+under "Test rig" below for how, and treat the answer as permanent.
+
+**These variables reach Zigbee2MQTT only when it writes its configuration
+file** — on first run, and whenever a setting is persisted afterwards. They are
+not re-read from the environment on an ordinary restart. On an installation
+that already has a `configuration.yaml` in its volume, check rather than assume:
+
+```bash
+sudo docker exec nobo-zigbee2mqtt \
+    grep -E 'channel|transmit_power' /app/data/configuration.yaml
+```
+
+If the value has not landed, edit that file in place and restart the container.
+
+**Placement beats all of it.** The dongle wants a short, *shielded* extension
+(0.5–1 m is plenty) on a **USB 2** port, as far as the cable allows from the
+Pi's USB 3 sockets, any attached SSD, and the Wi-Fi router. USB 3 radiates
+broadband noise straight through 2.4 GHz, and a dongle sitting against a Pi's
+own Wi-Fi radio is being jammed by the machine it is plugged into. This costs
+nothing to try and is frequently the whole problem.
+
 ### Test rig
 
 A rig lives on the demo Pi at `/opt/zigbee-test`, deliberately **outside** the
@@ -191,6 +240,11 @@ including the Pi's own radio, which sits centimetres from the dongle. Zigbee 15
 that dominant adjacent cluster. The default, channel 11, would have sat inside
 Wi-Fi 1. **This choice is effectively permanent** — changing it later means
 re-pairing every sleepy device.
+
+That survey is the reason `NOBO_ZIGBEE_CHANNEL` exists. Until it did, the
+decision was recorded here but enforced nowhere, and a fresh installation of
+the application stack would silently form its network on the channel this
+paragraph rejects.
 
 When Zigbee2MQTT moves into the application stack it must go behind a Compose
 profile, as `tls` already is, so a Nobø-only installation starts nothing extra.
