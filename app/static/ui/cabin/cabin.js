@@ -1163,7 +1163,7 @@
 
     const offline = sensors.filter(sensor => !sensor.available);
     if (offline.length === sensors.length) {
-      return `${sensors.length} · sensor system offline`;
+      return `${sensors.length} \u00B7 sensor system offline`;
     }
 
     const quiet = sensors.filter(sensor => sensor.available && sensorIsStale(sensor));

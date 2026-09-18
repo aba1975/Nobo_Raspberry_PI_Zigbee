@@ -998,7 +998,8 @@ def _sensor_system_line(zones):
         path = handle.name
     try:
         result = subprocess.run(
-            ["node", path], capture_output=True, text=True, timeout=30
+            ["node", path], capture_output=True, text=True,
+            encoding="utf-8", timeout=30,
         )
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout.strip())
@@ -1047,7 +1048,7 @@ def test_everything_unavailable_is_one_failure_not_many():
     line = _sensor_system_line([_zone([
         _counted("a", available=False), _counted("b", available=False),
     ])])
-    assert "sensor system offline" in line
+    assert line == "2 \u00b7 sensor system offline"
     assert "2 offline" not in line
 
 
