@@ -1135,6 +1135,46 @@
     return (Date.now() - heard) > SENSOR_QUIET_HOURS * 3600 * 1000;
   }
 
+  /* Every sensor in the house, as one line for System status.
+
+     Three facts that are deliberately not merged. "Offline" is Zigbee2MQTT
+     giving up on a device after twenty-five hours of silence, which is true
+     but late: a battery pulled at breakfast still reads healthy at bedtime.
+     "Quiet" is the same six-hour reading the zone cards already show, one
+     room at a time, and is the earlier and more useful of the two.
+
+     Every sensor unavailable at once is one failure - Zigbee2MQTT stopped, or
+     the broker went - and not N independent ones, so it is named rather than
+     counted. "15 (15 offline)" would send somebody hunting fifteen windows
+     for a fault that is in a container. */
+  function sensorSystemLine(zones) {
+    const list = zones || [];
+    /* That the feature is on at all has to be read from the zones payload,
+       which carries a summary only when it is. state.sensorSettings would be
+       the obvious source and is the wrong one: it is fetched for admins only,
+       so using it would blank this row for everybody else. */
+    if (!list.some(zone => zone && zone.sensor_summary)) return null;
+
+    const sensors = [];
+    for (const zone of list) {
+      for (const sensor of (zone && zone.sensors) || []) sensors.push(sensor);
+    }
+    if (!sensors.length) return 'On, none added yet';
+
+    const offline = sensors.filter(sensor => !sensor.available);
+    if (offline.length === sensors.length) {
+      return `${sensors.length} \u00B7 sensor system offline`;
+    }
+
+    const quiet = sensors.filter(sensor => sensor.available && sensorIsStale(sensor));
+    const notes = [];
+    if (quiet.length) notes.push(`${quiet.length} quiet`);
+    if (offline.length) notes.push(`${offline.length} offline`);
+    return notes.length
+      ? `${sensors.length} (${notes.join(', ')})`
+      : `${sensors.length} (all reporting)`;
+  }
+
   /* Zigbee link quality, 0 to 255, as the coordinator scored the last message
      it heard. The raw number means nothing to anybody, and its only practical
      use is answering "does this spot need a repeater?", so it is shown as a
@@ -2068,12 +2108,17 @@
     const st = state.status || {};
     const hub = state.hub || {};
     const info = state.hubInfo || {};
+    const sensorLine = sensorSystemLine(state.zones);
     const rows = [
       ['Zones', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
       ['Coldest zone', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
       ['Zones overridden', String(s.overriddenCount)],
+      /* Sensors sit with the house, not with the hub: a separate radio and a
+         separate failure. The row is absent, not empty, when the feature is
+         off, so a Nobø-only installation gains nothing to explain. */
+      ...(sensorLine ? [['Sensors', sensorLine]] : []),
       ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
@@ -3720,7 +3765,7 @@
       </section>`;
   }
 
-  async function saveSensorSettings(enabled = state.sensorSettings.enabled) {
+  async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
     // Turning the feature on or off must not quietly rewrite anyone's rules,
     // so every zone goes back exactly as it came.
     const zones = {};
@@ -3733,7 +3778,9 @@
         override_all_modes: policy.override_all_modes,
       };
     });
-    state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones });
+    state.sensorSettings = await Nobo.api.setSensorSettings(
+      provider ? { enabled, provider, zones } : { enabled, zones }
+    );
     const network = enabled
       ? await Nobo.api.sensorNetwork()
       : { sensors: [], routers: [] };
@@ -3743,13 +3790,98 @@
     renderSettings();
   }
 
+  /* Which kind of sensors, asked once when the feature is switched on.
+
+     Two genuinely different things share this switch. Demo sensors are
+     invented and their state is yours to set; real ones are readings from a
+     radio. Only demo mode can offer the choice at all - the simulated
+     provider is refused outside it, deliberately, so that a simulator can
+     never be mistaken for hardware.
+
+     The real option is checked before it is offered rather than after it is
+     chosen. This process cannot see the USB stick - the adapter belongs to
+     the zigbee2mqtt container - but it can ask whether that container is
+     alive, and an installation with no Zigbee stack running would otherwise
+     accept the switch, persist it, and retry a refused connection every five
+     seconds for ever while the interface said "On". */
+  function sensorProviderSheet() {
+    const settings = state.sensorSettings || {};
+    if (!settings.demo_mode) {
+      // Nothing to choose: simulated sensors are demo-only, so the real
+      // provider is the only answer and the server checks it either way.
+      enableSensors('zigbee2mqtt');
+      return;
+    }
+
+    let check = null;
+    let checking = true;
+
+    const draw = () => {
+      const realNote = checking
+        ? '<span class="field-hint">Checking for a Zigbee stack\u2026</span>'
+        : check && check.usable
+          ? '<span class="field-hint">Zigbee2MQTT is running and reachable.</span>'
+          : `<span class="field-hint sensor-check-bad">${esc((check && check.detail) || 'Not available.')}</span>`;
+      const realDisabled = checking || !(check && check.usable);
+      openSheet('Which sensors?', `
+        <p class="zd-sub">This can be changed later, but the two do not share a
+        sensor list: switching afterwards starts again with none paired.</p>
+        <div class="sensor-provider-choice">
+          <button class="btn btn-wide" type="button" data-pick="simulated">
+            <strong>Demo sensors</strong>
+            <span class="field-hint">Invented contacts you can open and close yourself.
+            No hardware, no broker, and nothing reaches a real heater.</span>
+          </button>
+          <button class="btn btn-wide" type="button" data-pick="zigbee2mqtt"
+            ${realDisabled ? 'disabled aria-disabled="true"' : ''}>
+            <strong>Real Zigbee sensors</strong>
+            ${realNote}
+          </button>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+        </div>`, (root) => {
+        root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+        root.querySelectorAll('[data-pick]').forEach(button => {
+          button.onclick = () => {
+            if (button.hasAttribute('disabled')) return;
+            closeSheet();
+            enableSensors(button.dataset.pick);
+          };
+        });
+      });
+    };
+
+    draw();
+    Nobo.api.zigbeeCheck()
+      .then(result => { check = result; })
+      .catch(error => { check = { usable: false, detail: error.message }; })
+      .finally(() => {
+        checking = false;
+        // Only redraw while this sheet is still the one on screen: the answer
+        // can arrive after somebody has already chosen demo sensors and moved
+        // on, and reopening it over them would be its own bug.
+        if (!sheetEl.hidden && sheetBody.querySelector('[data-pick]')) draw();
+      });
+  }
+
+  async function enableSensors(provider) {
+    try {
+      await saveSensorSettings(true, provider);
+      Nobo.toast(provider === 'simulated'
+        ? 'Demo sensors enabled'
+        : 'Contact sensors enabled');
+    } catch (e) { Nobo.toast(e.message, 'error'); }
+  }
+
   function wireSensorSettings(root) {
     const toggle = root.querySelector('[data-act="toggle-sensors"]');
     if (!toggle) return;
     toggle.onclick = async () => {
+      if (!state.sensorSettings.enabled) { sensorProviderSheet(); return; }
       try {
-        await saveSensorSettings(!state.sensorSettings.enabled);
-        Nobo.toast(state.sensorSettings.enabled ? 'Contact sensors enabled' : 'Contact sensors disabled');
+        await saveSensorSettings(false);
+        Nobo.toast('Contact sensors disabled');
       } catch (e) { Nobo.toast(e.message, 'error'); }
     };
     const pair = root.querySelector('[data-act="pair-sensor"]');

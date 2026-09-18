@@ -57,6 +57,19 @@ def client():
         yield test_client
 
 
+class _Probe:
+    """What a working Zigbee2MQTT looks like to the settings handler."""
+
+    usable = True
+    broker_reachable = True
+    bridge_online = True
+    detail = "Zigbee2MQTT is running and reachable."
+
+
+async def _stack_present():
+    return _Probe()
+
+
 def enable(client, provider="simulated"):
     response = client.put(
         "/api/sensors/settings", json={"enabled": True, "provider": provider}
@@ -137,6 +150,10 @@ def zigbee(monkeypatch):
     monkeypatch.setattr(
         server, "create_provider", lambda *args, **kwargs: provider
     )
+    # The radio is whatever this fixture supplies, so the pre-flight check has
+    # to be told the same. Left alone it would ask a real broker on 127.0.0.1,
+    # find nothing, and refuse to enable the provider these tests are about.
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_present)
     return provider, z2m
 
 
@@ -349,3 +366,97 @@ def test_the_simulator_is_offered_in_demo_mode(client):
     assert body["provider_supported"] is True
     assert body["simulation_supported"] is True
     assert "simulated" in body["providers"]
+
+
+# -- refusing real sensors with no radio behind them ------------------------
+#
+# The defect this closes: choosing the Zigbee provider on a Pi with no dongle
+# and no Zigbee2MQTT succeeded, persisted, and left the interface saying "On"
+# while the MQTT client retried a refused connection every five seconds for
+# ever. Nothing said why, and it survived a reboot in that state.
+
+
+class _NoStack:
+    usable = False
+    broker_reachable = False
+    bridge_online = False
+    detail = "Nothing answered at mqtt://127.0.0.1:1883."
+
+
+async def _stack_absent():
+    return _NoStack()
+
+
+def test_real_sensors_are_refused_when_no_zigbee_stack_answers(client, monkeypatch):
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_absent)
+    response = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+    assert response.status_code == 503, response.text
+    assert "Nothing answered" in response.json()["detail"]
+
+
+def test_a_refused_switch_changes_nothing(client, monkeypatch):
+    """It must not half-apply. The previous defect persisted the choice before
+    anything had been checked, so the broken state outlived the request."""
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_absent)
+    client.put("/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"})
+    body = client.get("/api/sensors/settings").json()
+    assert body["enabled"] is False
+    assert server.sensor_settings.provider != "zigbee2mqtt" or not server.sensor_settings.enabled
+
+
+def test_the_refusal_is_retryable_not_a_flat_no(client, monkeypatch):
+    """503, not 501. Zigbee2MQTT coming up after this application is ordinary
+    boot ordering rather than a permanent incapability, so the same request a
+    minute later has to be able to succeed."""
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_absent)
+    first = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+    assert first.status_code == 503
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_present)
+    second = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+    assert second.status_code == 200, second.text
+
+
+def test_an_ordinary_save_does_not_re_check_the_radio(client, zigbee, monkeypatch):
+    """Editing a zone's rule while Zigbee2MQTT happens to be restarting must
+    not be refused. The check belongs to taking the provider up, not to every
+    write, and the running service reports an outage of its own accord."""
+    enable(client, provider="zigbee2mqtt")
+
+    called = []
+
+    async def _should_not_run():
+        called.append(True)
+        return _NoStack()
+
+    monkeypatch.setattr(server, "probe_zigbee_stack", _should_not_run)
+    again = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+    assert again.status_code == 200, again.text
+    assert not called, "the radio was re-checked on a save that changed no provider"
+
+
+def test_turning_sensors_off_is_never_blocked_by_a_missing_radio(client, zigbee, monkeypatch):
+    """Being unable to reach the radio must not trap somebody with the feature
+    switched on."""
+    enable(client, provider="zigbee2mqtt")
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_absent)
+    off = client.put("/api/sensors/settings", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["enabled"] is False
+
+
+def test_the_check_is_offered_to_the_interface_before_it_commits(client, monkeypatch):
+    """So the choice can be greyed out with a reason, rather than offered and
+    then refused."""
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_absent)
+    body = client.get("/api/sensors/zigbee-check").json()
+    assert body["usable"] is False
+    assert body["detail"]
+    assert "url" in body

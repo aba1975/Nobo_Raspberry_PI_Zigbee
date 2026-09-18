@@ -199,7 +199,9 @@ Contact sensors are off by default and completely hidden until an administrator
 enables them in Cabin under **Settings**. Nothing extra runs until then — no
 broker, no dongle, no additional containers.
 
-There are two providers. **Zigbee** talks to real door and window sensors
+There are two providers, and turning sensors on asks which — they are two
+different systems rather than two settings of one, and they do not share a
+sensor list. **Zigbee** talks to real door and window sensors
 through a USB stick; see [the hardware side](#the-hardware-side) below.
 **Simulated** invents them, for looking around without buying anything, and is
 available only in demo mode so that a simulator can never be mistaken for
@@ -207,6 +209,12 @@ hardware. With it an administrator can create sensors, name and assign them to
 zones, and set their open/closed, availability, battery and signal state by
 hand — all of which a real sensor reports for itself and none of which can be
 set by hand.
+
+Choosing the real one is checked before it is accepted: if there is no
+Zigbee2MQTT to hand the radio to, Settings says so instead of switching on and
+leaving the system claiming sensors it has no way to hear. It is offered again
+the moment the stack is there, since a container starting after the application
+is ordinary boot ordering.
 
 Settings stays compact as the installation grows: sensor status and management
 live inside each zone rather than in one unbounded list.

@@ -420,6 +420,44 @@ Then choose the provider in Settings. `simulated` stays demo-only; `zigbee2mqtt`
 is allowed in either mode, which is what lets real sensors be tested against a
 simulated hub without touching a building's heating.
 
+**Choosing `zigbee2mqtt` is checked before it is accepted.** This process
+cannot see the USB stick — the adapter is passed to the *zigbee2mqtt*
+container, not to this one — so what is checked instead is whether the stack
+that owns the radio is alive, which is the same question in every way that
+matters: a stick in a Pi with Zigbee2MQTT stopped is exactly as useless as no
+stick. `probe_zigbee2mqtt()` subscribes to the retained `bridge/state` and
+distinguishes three answers: no broker at all, a broker with nothing behind it,
+and a Zigbee2MQTT that is there.
+
+Without it, switching to real sensors on a Pi with no dongle simply *succeeded*
+— it persisted, Settings said On, and the MQTT client then retried a refused
+connection every five seconds for ever, across reboots, with nothing on screen
+to explain why.
+
+The refusal is a **503, not a 501**: Zigbee2MQTT starting after this
+application is ordinary boot ordering, not a permanent incapability, and the
+same request a minute later should work. It runs **only when the provider is
+being taken up** — never on an ordinary save, so editing a zone's rule while
+the radio restarts is not refused, and never on the way *off*, so a missing
+radio cannot trap somebody with the feature enabled.
+
+| | |
+| --- | --- |
+| `GET /api/sensors/zigbee-check` | Whether real sensors could be switched on right now: `usable`, `broker_reachable`, `bridge_online`, `detail`. Admin only. |
+
+That check is its own request rather than a field on the settings response,
+because it talks to the broker and waits, and the settings are read on every
+page load. The interface asks it when somebody opens the choice, so Settings
+can grey out the real option and say why, rather than offering it and then
+refusing. Turning sensors on therefore asks *which kind*: demo and real are two
+different systems rather than two settings of one, and they do not share a
+sensor list.
+
+`probe_zigbee_stack()` in `server.py` is a module-level seam beside
+`create_provider` for the same reason that one is. **A test that installs a
+fake provider must patch both or neither** — patching only the factory leaves
+the pre-flight check asking a real broker that is not there.
+
 ### Moving the dongle to another installation
 
 Sensors are paired to the *coordinator*, not to the Pi, but the network key and

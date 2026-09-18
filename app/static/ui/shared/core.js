@@ -92,6 +92,10 @@ const Nobo = (() => {
     sensorSettings:    ()     => req('/api/sensors/settings'),
     setSensorSettings: (body) => req('/api/sensors/settings', {
                                   method: 'PUT', body: JSON.stringify(body) }),
+    /* Whether real Zigbee sensors could be switched on right now. Its own
+       request because it talks to the broker and waits, and the settings are
+       read on every page load. */
+    zigbeeCheck:   ()         => req('/api/sensors/zigbee-check'),
     sensors:       ()         => req('/api/sensors').then(r => r.sensors || r),
     /* Sensors and repeaters in one request. They come from one endpoint
        because they are one answer: how much of the network is there. */

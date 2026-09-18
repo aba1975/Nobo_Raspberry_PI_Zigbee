@@ -7,8 +7,10 @@ Classic — and leave visual judgement to a person with the app open.
 """
 
 import json
+import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -946,3 +948,146 @@ def test_sensors_and_repeaters_arrive_in_one_request():
     assert "sensorNetwork" in CORE
     assert CORE.count("req('/api/sensors')") <= 2
     assert "sensorNetwork()" in CABIN
+
+
+# ---------------------------------------------------------------------------
+# The whole-house sensor count in System status
+# ---------------------------------------------------------------------------
+
+FRESH_SEEN = "2099-01-01T00:00:00+00:00"
+STALE_SEEN = "2000-01-01T00:00:00+00:00"
+
+
+def _counted(name, available=True, last_seen=FRESH_SEEN):
+    return {
+        "name": name, "kind": "window", "state": "closed",
+        "available": available, "battery": 100, "last_seen_at": last_seen,
+    }
+
+
+def _zone(sensors, zone_id="1"):
+    """A zone as the payload carries it once the feature is switched on."""
+    return {
+        "zone_id": zone_id, "name": f"Zone {zone_id}", "sensors": sensors,
+        "sensor_summary": {"sensor_count": len(sensors), "open_count": 0,
+                           "unavailable_count": 0, "warning_raised": False,
+                           "state": "closed"},
+    }
+
+
+def _sensor_system_line(zones):
+    """Run the real counter in node and return what System status would show.
+
+    Written to a file rather than passed with ``node -e``: the lifted source
+    is long enough to exceed the Windows command-line limit, and a test that
+    cannot run on the machine somebody is using is a test that stops being
+    read.
+    """
+    lifted = [re.search(r"const SENSOR_QUIET_HOURS = \d+;", CABIN).group(0)]
+    for marker in ("function sensorIsStale", "function sensorSystemLine"):
+        start = CABIN.index(marker)
+        end = CABIN.index("\n  }\n", start) + len("\n  }\n")
+        lifted.append(CABIN[start:end])
+    script = "%s\nconsole.log(JSON.stringify(sensorSystemLine(%s)));" % (
+        "\n".join(lifted), json.dumps(zones),
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".js", delete=False, encoding="utf-8"
+    ) as handle:
+        handle.write(script)
+        path = handle.name
+    try:
+        result = subprocess.run(
+            ["node", path], capture_output=True, text=True,
+            encoding="utf-8", timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout.strip())
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_no_sensor_row_at_all_when_the_feature_is_off():
+    """A Nobo-only installation must gain nothing to explain. The zones
+    payload carries no summary when sensors are off, and that absence - not
+    state.sensorSettings, which is fetched for admins only - is what decides
+    it. Reading the admin-only settings here would blank the row for every
+    ordinary user instead."""
+    assert _sensor_system_line([{"zone_id": "1", "name": "Kitchen"}]) is None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_healthy_house_says_so_rather_than_staying_silent():
+    line = _sensor_system_line([_zone([_counted("a"), _counted("b"), _counted("c")])])
+    assert line == "3 (all reporting)"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_quiet_and_offline_are_counted_separately():
+    """They are different facts and the earlier one is the useful one.
+
+    Zigbee2MQTT will not call a battery device offline until it has been
+    silent for twenty-five hours, so a battery pulled at breakfast still reads
+    healthy at bedtime. Six hours of silence is the signal worth acting on,
+    and collapsing the two would hide it behind the late one.
+    """
+    line = _sensor_system_line([_zone([
+        _counted("fine"),
+        _counted("hush", last_seen=STALE_SEEN),
+        _counted("gone", available=False),
+    ])])
+    assert line == "3 (1 quiet, 1 offline)"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_everything_unavailable_is_one_failure_not_many():
+    """Zigbee2MQTT stopping, or the broker going, marks every sensor
+    unreachable at once. Reporting "15 (15 offline)" would send somebody
+    hunting fifteen windows for a fault that is in a container."""
+    line = _sensor_system_line([_zone([
+        _counted("a", available=False), _counted("b", available=False),
+    ])])
+    assert line == "2 \u00b7 sensor system offline"
+    assert "2 offline" not in line
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_sensor_that_is_offline_and_stale_is_counted_once():
+    """Offline already implies silence, so counting it as quiet as well would
+    make the two numbers add up to more than the house has."""
+    line = _sensor_system_line([_zone([
+        _counted("fine"), _counted("gone", available=False, last_seen=STALE_SEEN),
+    ])])
+    assert line == "2 (1 offline)"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_the_count_spans_the_whole_house_not_one_room():
+    """The zone cards already answer this one room at a time; the point of
+    the System status line is the building."""
+    line = _sensor_system_line([
+        _zone([_counted("a"), _counted("b", last_seen=STALE_SEEN)], zone_id="1"),
+        _zone([_counted("c", available=False)], zone_id="2"),
+    ])
+    assert line == "3 (1 quiet, 1 offline)"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_switched_on_with_nothing_paired_says_so():
+    assert _sensor_system_line([_zone([])]) == "On, none added yet"
+
+
+def test_the_row_is_built_from_the_zones_everyone_receives():
+    """state.sensorSettings is admin-only. Using it to decide this row would
+    hide the count from exactly the people who are not going to go and read
+    the Zigbee2MQTT log themselves."""
+    start = CABIN.index("function sensorSystemLine")
+    end = CABIN.index("\n  }\n", start)
+    body = CABIN[start:end]
+    # Comments are allowed to name the wrong source in order to warn about it;
+    # only the code is being checked here.
+    code = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    code = re.sub(r"//.*", "", code)
+    assert "state.sensorSettings" not in code
+    assert "sensor_summary" in code
