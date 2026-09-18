@@ -1135,6 +1135,46 @@
     return (Date.now() - heard) > SENSOR_QUIET_HOURS * 3600 * 1000;
   }
 
+  /* Every sensor in the house, as one line for System status.
+
+     Three facts that are deliberately not merged. "Offline" is Zigbee2MQTT
+     giving up on a device after twenty-five hours of silence, which is true
+     but late: a battery pulled at breakfast still reads healthy at bedtime.
+     "Quiet" is the same six-hour reading the zone cards already show, one
+     room at a time, and is the earlier and more useful of the two.
+
+     Every sensor unavailable at once is one failure - Zigbee2MQTT stopped, or
+     the broker went - and not N independent ones, so it is named rather than
+     counted. "15 (15 offline)" would send somebody hunting fifteen windows
+     for a fault that is in a container. */
+  function sensorSystemLine(zones) {
+    const list = zones || [];
+    /* That the feature is on at all has to be read from the zones payload,
+       which carries a summary only when it is. state.sensorSettings would be
+       the obvious source and is the wrong one: it is fetched for admins only,
+       so using it would blank this row for everybody else. */
+    if (!list.some(zone => zone && zone.sensor_summary)) return null;
+
+    const sensors = [];
+    for (const zone of list) {
+      for (const sensor of (zone && zone.sensors) || []) sensors.push(sensor);
+    }
+    if (!sensors.length) return 'On, none added yet';
+
+    const offline = sensors.filter(sensor => !sensor.available);
+    if (offline.length === sensors.length) {
+      return `${sensors.length} · sensor system offline`;
+    }
+
+    const quiet = sensors.filter(sensor => sensor.available && sensorIsStale(sensor));
+    const notes = [];
+    if (quiet.length) notes.push(`${quiet.length} quiet`);
+    if (offline.length) notes.push(`${offline.length} offline`);
+    return notes.length
+      ? `${sensors.length} (${notes.join(', ')})`
+      : `${sensors.length} (all reporting)`;
+  }
+
   /* Zigbee link quality, 0 to 255, as the coordinator scored the last message
      it heard. The raw number means nothing to anybody, and its only practical
      use is answering "does this spot need a repeater?", so it is shown as a
@@ -2068,12 +2108,17 @@
     const st = state.status || {};
     const hub = state.hub || {};
     const info = state.hubInfo || {};
+    const sensorLine = sensorSystemLine(state.zones);
     const rows = [
       ['Zones', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
       ['Coldest zone', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
       ['Zones overridden', String(s.overriddenCount)],
+      /* Sensors sit with the house, not with the hub: a separate radio and a
+         separate failure. The row is absent, not empty, when the feature is
+         off, so a Nobø-only installation gains nothing to explain. */
+      ...(sensorLine ? [['Sensors', sensorLine]] : []),
       ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
