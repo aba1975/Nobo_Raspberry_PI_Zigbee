@@ -168,6 +168,23 @@ class ContactSensorProvider(Protocol):
     def subscribe(self, callback: EventCallback) -> Unsubscribe: ...
 
 
+def zigbee2mqtt_endpoint() -> tuple[str, str]:
+    """Where Zigbee2MQTT is expected to be, as (broker url, base topic).
+
+    Shared by the provider and by the pre-flight probe so the two cannot drift
+    apart: a probe that checked a different broker from the one the provider
+    goes on to use would be worse than no probe at all.
+    """
+    import os
+
+    from sensor_mqtt import DEFAULT_URL
+
+    return (
+        os.environ.get("NOBO_MQTT_URL", DEFAULT_URL),
+        os.environ.get("NOBO_MQTT_BASE_TOPIC", "zigbee2mqtt"),
+    )
+
+
 def create_provider(name: str, *, demo_mode: bool, **kwargs) -> ContactSensorProvider:
     """Construct a provider without allowing simulation to masquerade as hardware."""
     if name == "simulated":
@@ -184,16 +201,13 @@ def create_provider(name: str, *, demo_mode: bool, **kwargs) -> ContactSensorPro
         # cannot pretend to be hardware, which says nothing about real sensors
         # running beside a simulated hub — the arrangement used to test Zigbee
         # equipment without touching a building's heating.
-        import os
-
-        from sensor_mqtt import DEFAULT_URL, AiomqttTransport
+        from sensor_mqtt import AiomqttTransport
         from sensor_persistence import load_zigbee_metadata, save_zigbee_metadata
         from sensor_zigbee2mqtt import Zigbee2MqttContactSensorProvider
 
-        url = kwargs.pop("url", None) or os.environ.get("NOBO_MQTT_URL", DEFAULT_URL)
-        base_topic = kwargs.pop("base_topic", None) or os.environ.get(
-            "NOBO_MQTT_BASE_TOPIC", "zigbee2mqtt"
-        )
+        default_url, default_topic = zigbee2mqtt_endpoint()
+        url = kwargs.pop("url", None) or default_url
+        base_topic = kwargs.pop("base_topic", None) or default_topic
         transport = kwargs.pop("transport", None) or AiomqttTransport(url)
         kwargs.setdefault("load_metadata", load_zigbee_metadata)
         kwargs.setdefault("save_metadata", save_zigbee_metadata)

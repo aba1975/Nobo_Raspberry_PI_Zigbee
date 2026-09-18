@@ -44,7 +44,7 @@ from sensor_automation import (
 from sensor_persistence import ActionWhenOpen, SensorSettings, ZoneSensorPolicy
 from sensor_provider import (
     ContactSnapshot, ContactState, PairingStatus, ProviderUnavailable, SensorKind,
-    SensorNotFound, create_provider,
+    SensorNotFound, create_provider, zigbee2mqtt_endpoint,
 )
 from sensor_zigbee2mqtt import SensorRemovalFailed
 
@@ -2059,6 +2059,21 @@ async def start_sensor_service() -> None:
     await evaluate_sensor_automation()
 
 
+async def probe_zigbee_stack():
+    """Whether there is a Zigbee2MQTT to hand the radio to.
+
+    A module-level seam on purpose, beside ``create_provider``: a test that
+    installs a fake provider is saying the radio is whatever it supplies, and
+    must be able to say the same about the pre-flight check. Patch both or
+    neither — patching only the factory leaves this asking a real broker that
+    is not there.
+    """
+    from sensor_mqtt import probe_zigbee2mqtt
+
+    url, base_topic = zigbee2mqtt_endpoint()
+    return await probe_zigbee2mqtt(url, base_topic=base_topic)
+
+
 async def stop_sensor_service() -> None:
     global sensor_provider, sensor_unsubscribe, sensor_snapshots
     global sensor_zone_aggregates
@@ -2778,6 +2793,26 @@ async def get_sensor_settings(request: Request):
     return _sensor_settings_response()
 
 
+@app.get("/api/sensors/zigbee-check")
+async def check_zigbee_stack(request: Request):
+    """Whether real Zigbee sensors could be switched on right now.
+
+    Deliberately its own request rather than a field on the settings response:
+    it talks to the broker and waits, and the settings are read on every page
+    load. Asking is what the interface does when somebody opens the choice,
+    not something everybody pays for on the way past.
+    """
+    _require_admin(_get_session_or_401(request))
+    probe = await probe_zigbee_stack()
+    return {
+        "usable": probe.usable,
+        "broker_reachable": probe.broker_reachable,
+        "bridge_online": probe.bridge_online,
+        "detail": probe.detail,
+        "url": zigbee2mqtt_endpoint()[0],
+    }
+
+
 @app.put("/api/sensors/settings")
 async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
     global sensor_settings
@@ -2793,6 +2828,33 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
         _sensor_provider_unavailable(
             "Simulated sensors are demo-only. Choose the Zigbee provider for real hardware."
         )
+    # Real sensors need a radio, and this process cannot see one: the adapter
+    # is passed to the zigbee2mqtt container rather than to this one. What can
+    # be checked is whether the stack that owns it is alive, which is the same
+    # question in every way that matters - a stick in a Pi with Zigbee2MQTT
+    # stopped is as useless as no stick.
+    #
+    # Without this the switch simply succeeded, persisted, and left the system
+    # claiming sensors were on while the MQTT client retried a refused
+    # connection every five seconds for ever.
+    #
+    # Only when taking the provider up, never on an ordinary save: somebody
+    # editing a zone's rule while Zigbee2MQTT happens to be restarting should
+    # not have their edit refused, and the running service already reports the
+    # outage of its own accord.
+    taking_up_zigbee = (
+        body.enabled
+        and provider == "zigbee2mqtt"
+        and (not sensor_settings.enabled or sensor_settings.provider != provider)
+    )
+    if taking_up_zigbee:
+        probe = await probe_zigbee_stack()
+        if not probe.usable:
+            # 503 rather than 501: this is expected to work and currently does
+            # not, so it is worth trying again. Zigbee2MQTT starting after this
+            # application is ordinary boot ordering, not a permanent
+            # incapability.
+            raise HTTPException(status_code=503, detail=probe.detail)
 
     known_zone_ids = {str(zone["zone_id"]) for zone in _build_zones_data()}
     unknown = set(body.zones) - known_zone_ids

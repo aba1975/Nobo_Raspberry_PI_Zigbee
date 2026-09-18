@@ -14,7 +14,7 @@ import json
 import pytest
 import pytest_asyncio
 
-from sensor_mqtt import AiomqttTransport
+from sensor_mqtt import AiomqttTransport, probe_zigbee2mqtt
 from sensor_provider import ContactState
 from sensor_zigbee2mqtt import Zigbee2MqttContactSensorProvider
 from tests.fake_zigbee2mqtt import contact_device
@@ -188,3 +188,99 @@ async def test_end_to_end_over_a_real_socket(broker):
     ) in broker.received
 
     await provider.stop()
+
+
+# ---------------------------------------------------------------------------
+# Asking whether there is a Zigbee2MQTT to switch to
+# ---------------------------------------------------------------------------
+#
+# The adapter is passed to the zigbee2mqtt container, not to this process, so
+# "is the dongle plugged in?" cannot be answered here at all. What can be
+# answered is whether the stack that owns the radio is alive - which is the
+# same question in every way that matters, because a stick in a Pi with
+# Zigbee2MQTT stopped is as useless as no stick.
+
+
+@pytest.mark.asyncio
+async def test_a_running_zigbee2mqtt_is_recognised(broker):
+    await broker.publish("zigbee2mqtt/bridge/state", json.dumps({"state": "online"}))
+    probe = await probe_zigbee2mqtt(broker.url, timeout=5)
+    assert probe.usable
+    assert probe.broker_reachable and probe.bridge_online
+
+
+@pytest.mark.asyncio
+async def test_a_broker_with_no_zigbee2mqtt_behind_it_is_not_usable(broker):
+    """The case this exists for: Mosquitto up, Zigbee2MQTT never started.
+
+    Nothing is retained on bridge/state, so the probe waits and then has to
+    say so. Reporting the broker as reachable is the useful half of the
+    answer - it tells the reader the fault is the Zigbee container, not the
+    network.
+    """
+    probe = await probe_zigbee2mqtt(broker.url, timeout=1)
+    assert not probe.usable
+    assert probe.broker_reachable
+    assert not probe.bridge_online
+    assert "Zigbee2MQTT" in probe.detail
+
+
+@pytest.mark.asyncio
+async def test_zigbee2mqtt_having_stopped_is_not_usable(broker):
+    """Its last will leaves "offline" retained, which must not read as ready."""
+    await broker.publish("zigbee2mqtt/bridge/state", json.dumps({"state": "offline"}))
+    probe = await probe_zigbee2mqtt(broker.url, timeout=5)
+    assert not probe.usable
+    assert probe.broker_reachable
+    assert not probe.bridge_online
+
+
+@pytest.mark.asyncio
+async def test_no_broker_at_all_is_reported_as_such():
+    """Port 1 is reserved and nothing listens on it, so this is a refusal
+    rather than a timeout - the shape an installation with no Zigbee profile
+    running actually has."""
+    probe = await probe_zigbee2mqtt("mqtt://127.0.0.1:1", timeout=5)
+    assert not probe.usable
+    assert not probe.broker_reachable
+    assert not probe.bridge_online
+
+
+@pytest.mark.asyncio
+async def test_a_custom_base_topic_is_honoured(broker):
+    """NOBO_MQTT_BASE_TOPIC moves every topic, and a probe that ignored it
+    would declare a perfectly good installation unusable."""
+    await broker.publish("attic/bridge/state", json.dumps({"state": "online"}))
+    assert (await probe_zigbee2mqtt(broker.url, base_topic="attic", timeout=5)).usable
+    assert not (await probe_zigbee2mqtt(broker.url, timeout=1)).usable
+
+
+@pytest.mark.asyncio
+async def test_a_payload_the_provider_could_not_read_is_not_green_lit(broker):
+    """The provider json-decodes bridge/state and ignores anything else. A
+    probe that accepted a bare "online" would wave through a broker publishing
+    something the provider itself cannot act on."""
+    await broker.publish("zigbee2mqtt/bridge/state", "online")
+    probe = await probe_zigbee2mqtt(broker.url, timeout=1)
+    assert not probe.usable
+    assert probe.broker_reachable
+
+
+def test_the_probe_and_the_provider_read_the_same_environment():
+    """A probe that checked a different broker from the one the provider then
+    used would be worse than no probe at all."""
+    import os
+
+    from sensor_provider import zigbee2mqtt_endpoint
+
+    previous = (os.environ.get("NOBO_MQTT_URL"), os.environ.get("NOBO_MQTT_BASE_TOPIC"))
+    try:
+        os.environ["NOBO_MQTT_URL"] = "mqtt://example.invalid:1884"
+        os.environ["NOBO_MQTT_BASE_TOPIC"] = "attic"
+        assert zigbee2mqtt_endpoint() == ("mqtt://example.invalid:1884", "attic")
+    finally:
+        for key, value in zip(("NOBO_MQTT_URL", "NOBO_MQTT_BASE_TOPIC"), previous):
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

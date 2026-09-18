@@ -3765,7 +3765,7 @@
       </section>`;
   }
 
-  async function saveSensorSettings(enabled = state.sensorSettings.enabled) {
+  async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
     // Turning the feature on or off must not quietly rewrite anyone's rules,
     // so every zone goes back exactly as it came.
     const zones = {};
@@ -3778,7 +3778,9 @@
         override_all_modes: policy.override_all_modes,
       };
     });
-    state.sensorSettings = await Nobo.api.setSensorSettings({ enabled, zones });
+    state.sensorSettings = await Nobo.api.setSensorSettings(
+      provider ? { enabled, provider, zones } : { enabled, zones }
+    );
     const network = enabled
       ? await Nobo.api.sensorNetwork()
       : { sensors: [], routers: [] };
@@ -3788,13 +3790,98 @@
     renderSettings();
   }
 
+  /* Which kind of sensors, asked once when the feature is switched on.
+
+     Two genuinely different things share this switch. Demo sensors are
+     invented and their state is yours to set; real ones are readings from a
+     radio. Only demo mode can offer the choice at all - the simulated
+     provider is refused outside it, deliberately, so that a simulator can
+     never be mistaken for hardware.
+
+     The real option is checked before it is offered rather than after it is
+     chosen. This process cannot see the USB stick - the adapter belongs to
+     the zigbee2mqtt container - but it can ask whether that container is
+     alive, and an installation with no Zigbee stack running would otherwise
+     accept the switch, persist it, and retry a refused connection every five
+     seconds for ever while the interface said "On". */
+  function sensorProviderSheet() {
+    const settings = state.sensorSettings || {};
+    if (!settings.demo_mode) {
+      // Nothing to choose: simulated sensors are demo-only, so the real
+      // provider is the only answer and the server checks it either way.
+      enableSensors('zigbee2mqtt');
+      return;
+    }
+
+    let check = null;
+    let checking = true;
+
+    const draw = () => {
+      const realNote = checking
+        ? '<span class="field-hint">Checking for a Zigbee stack\u2026</span>'
+        : check && check.usable
+          ? '<span class="field-hint">Zigbee2MQTT is running and reachable.</span>'
+          : `<span class="field-hint sensor-check-bad">${esc((check && check.detail) || 'Not available.')}</span>`;
+      const realDisabled = checking || !(check && check.usable);
+      openSheet('Which sensors?', `
+        <p class="zd-sub">This can be changed later, but the two do not share a
+        sensor list: switching afterwards starts again with none paired.</p>
+        <div class="sensor-provider-choice">
+          <button class="btn btn-wide" type="button" data-pick="simulated">
+            <strong>Demo sensors</strong>
+            <span class="field-hint">Invented contacts you can open and close yourself.
+            No hardware, no broker, and nothing reaches a real heater.</span>
+          </button>
+          <button class="btn btn-wide" type="button" data-pick="zigbee2mqtt"
+            ${realDisabled ? 'disabled aria-disabled="true"' : ''}>
+            <strong>Real Zigbee sensors</strong>
+            ${realNote}
+          </button>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+        </div>`, (root) => {
+        root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+        root.querySelectorAll('[data-pick]').forEach(button => {
+          button.onclick = () => {
+            if (button.hasAttribute('disabled')) return;
+            closeSheet();
+            enableSensors(button.dataset.pick);
+          };
+        });
+      });
+    };
+
+    draw();
+    Nobo.api.zigbeeCheck()
+      .then(result => { check = result; })
+      .catch(error => { check = { usable: false, detail: error.message }; })
+      .finally(() => {
+        checking = false;
+        // Only redraw while this sheet is still the one on screen: the answer
+        // can arrive after somebody has already chosen demo sensors and moved
+        // on, and reopening it over them would be its own bug.
+        if (!sheetEl.hidden && sheetBody.querySelector('[data-pick]')) draw();
+      });
+  }
+
+  async function enableSensors(provider) {
+    try {
+      await saveSensorSettings(true, provider);
+      Nobo.toast(provider === 'simulated'
+        ? 'Demo sensors enabled'
+        : 'Contact sensors enabled');
+    } catch (e) { Nobo.toast(e.message, 'error'); }
+  }
+
   function wireSensorSettings(root) {
     const toggle = root.querySelector('[data-act="toggle-sensors"]');
     if (!toggle) return;
     toggle.onclick = async () => {
+      if (!state.sensorSettings.enabled) { sensorProviderSheet(); return; }
       try {
-        await saveSensorSettings(!state.sensorSettings.enabled);
-        Nobo.toast(state.sensorSettings.enabled ? 'Contact sensors enabled' : 'Contact sensors disabled');
+        await saveSensorSettings(false);
+        Nobo.toast('Contact sensors disabled');
       } catch (e) { Nobo.toast(e.message, 'error'); }
     };
     const pair = root.querySelector('[data-act="pair-sensor"]');

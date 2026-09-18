@@ -8,7 +8,9 @@ neither need the dependency installed nor pay for importing it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
@@ -30,6 +32,117 @@ DEFAULT_URL = "mqtt://127.0.0.1:1883"
 # a broker coming up after this application, are ordinary events rather than
 # faults, so reconnecting quietly is the right behaviour.
 RECONNECT_SECONDS = 5.0
+
+# How long to give the broker when asking whether Zigbee2MQTT is there at all.
+# bridge/state is retained, so a running Zigbee2MQTT answers within a round
+# trip; this is a budget for a slow Pi, not for waiting on anything to start.
+PROBE_TIMEOUT_SECONDS = 4.0
+
+
+@dataclass(frozen=True)
+class Zigbee2MqttProbe:
+    """What a short look at the broker could establish.
+
+    Three outcomes worth telling apart, because they need different things
+    doing: no broker at all (the Zigbee profile is not running), a broker with
+    no Zigbee2MQTT behind it (the container is down, or has never started), and
+    a Zigbee2MQTT that is there and answering.
+    """
+
+    broker_reachable: bool
+    bridge_online: bool
+    detail: str
+
+    @property
+    def usable(self) -> bool:
+        return self.broker_reachable and self.bridge_online
+
+
+async def probe_zigbee2mqtt(
+    url: str = DEFAULT_URL,
+    *,
+    base_topic: str = "zigbee2mqtt",
+    timeout: float = PROBE_TIMEOUT_SECONDS,
+) -> Zigbee2MqttProbe:
+    """Ask, briefly, whether there is a Zigbee2MQTT worth switching to.
+
+    This is the closest thing to "is the dongle plugged in?" that this process
+    can honestly answer. The adapter is passed to the *zigbee2mqtt* container,
+    not to this one, so there is no device node here to look at — and a stick
+    plugged into a Pi where Zigbee2MQTT is not running is exactly as useless as
+    no stick at all. What can be established is whether the stack that owns the
+    radio is alive, which is the question actually being asked.
+
+    Never raises: every failure is an answer, and the caller turns it into a
+    sentence somebody can act on.
+    """
+    if aiomqtt is None:
+        return Zigbee2MqttProbe(
+            False, False,
+            "The MQTT client library is not installed in this image, so real "
+            "Zigbee sensors cannot be used.",
+        )
+
+    parsed = urlparse(url)
+    topic = f"{base_topic}/bridge/state"
+    connected = asyncio.Event()
+
+    async def look() -> bool:
+        async with aiomqtt.Client(
+            hostname=parsed.hostname or "127.0.0.1",
+            port=parsed.port or 1883,
+            username=parsed.username or None,
+            password=parsed.password or None,
+            identifier="nobo-web-control-probe",
+        ) as client:
+            connected.set()
+            await client.subscribe(topic)
+            async for message in client.messages:
+                # Retained, so a Zigbee2MQTT that is running - or one that ran
+                # and left its will behind - answers immediately.
+                try:
+                    document = json.loads(bytes(message.payload or b"").decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    # Read exactly as the provider reads it. Being more lenient
+                    # here would green-light a broker publishing something the
+                    # provider itself cannot understand.
+                    continue
+                if isinstance(document, dict):
+                    return document.get("state") == "online"
+            return False
+
+    task = asyncio.create_task(look(), name="zigbee2mqtt-probe")
+    try:
+        online = await asyncio.wait_for(task, timeout=timeout)
+    except asyncio.TimeoutError:
+        if connected.is_set():
+            return Zigbee2MqttProbe(
+                True, False,
+                "The MQTT broker is running, but Zigbee2MQTT has never "
+                "announced itself on it. It is most likely not started — check "
+                "that COMPOSE_PROFILES includes 'zigbee' and that the adapter "
+                "path in NOBO_ZIGBEE_ADAPTER exists.",
+            )
+        return Zigbee2MqttProbe(
+            False, False,
+            f"Nothing answered at {url}. The Zigbee stack does not appear to "
+            "be running on this Pi.",
+        )
+    except Exception as exc:  # noqa: BLE001 - every failure is a diagnosis
+        logger.info("Zigbee2MQTT probe of %s failed: %s", url, exc)
+        return Zigbee2MqttProbe(
+            False, False,
+            f"No MQTT broker answered at {url} ({exc}). The Zigbee stack does "
+            "not appear to be running on this Pi.",
+        )
+
+    if online:
+        return Zigbee2MqttProbe(True, True, "Zigbee2MQTT is running and reachable.")
+    return Zigbee2MqttProbe(
+        True, False,
+        "The MQTT broker is running, but Zigbee2MQTT reports itself offline. "
+        "It has stopped, or cannot open the adapter.",
+    )
 
 
 class MqttUnavailable(ProviderUnavailable):
