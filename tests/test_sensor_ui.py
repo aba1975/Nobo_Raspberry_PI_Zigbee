@@ -1091,3 +1091,65 @@ def test_the_row_is_built_from_the_zones_everyone_receives():
     code = re.sub(r"//.*", "", code)
     assert "state.sensorSettings" not in code
     assert "sensor_summary" in code
+
+
+# -- which kind of sensors, after the first day -----------------------------
+
+
+def test_the_sensor_source_is_shown_once_sensors_are_on():
+    """Reported as "there is no demo mode for sensors". There is — but it was
+    offered only at the moment of switching the feature on, so an installation
+    already running one kind could neither see which nor change it."""
+    assert "function sensorSourceRow" in CABIN
+    assert "Sensor source" in CABIN
+    start = CABIN.index("function sensorSourceRow")
+    end = CABIN.index("\n  }\n", start)
+    row = CABIN[start:end]
+    assert "Demo sensors" in row and "Real Zigbee sensors" in row
+
+
+def test_the_source_row_is_rendered_while_the_feature_is_on():
+    card = CABIN[CABIN.index("function renderSensorSettingsCard"):]
+    card = card[:card.index("\n  /* Which kind of sensors")]
+    assert "sensorSourceRow(settings)" in card
+
+
+def test_changing_the_source_is_offered_only_where_there_is_a_choice():
+    """Outside demo mode the simulator is refused by the server, so a button
+    that could only fail would be worse than none — but which source is in use
+    is still worth saying."""
+    start = CABIN.index("function sensorSourceRow")
+    row = CABIN[start:CABIN.index("\n  }\n", start)]
+    assert "settings.demo_mode" in row
+    assert "only offered in demo mode" in row
+
+
+def test_the_change_button_is_wired():
+    assert 'data-act="change-source"' in CABIN
+    assert "sensorProviderSheet({ changing: true })" in CABIN
+
+
+def test_the_sheet_marks_the_source_already_in_use():
+    assert "in use" in CABIN
+    assert "aria-current" in CABIN
+
+
+def test_choosing_the_source_already_running_does_nothing():
+    """Not a request to tear the provider down and build it again."""
+    assert "if (button.dataset.pick === current) return;" in CABIN
+
+
+def test_the_current_source_is_never_disabled_in_the_sheet():
+    """Otherwise a Zigbee installation whose broker is briefly down would show
+    its own running source greyed out, which reads as a fault."""
+    assert "realDisabled && current !== 'zigbee2mqtt'" in CABIN
+
+
+def test_switching_no_longer_claims_the_sensors_are_lost():
+    """It said switching "starts again with none paired", which reads as *your
+    sensors are gone*. Neither store is cleared — proved by
+    test_switching_source_and_back_keeps_the_demo_sensors — and a warning that
+    overstates the cost stops somebody trying it at all."""
+    assert "starts again with none paired" not in CABIN
+    assert "Nothing is unpaired and nothing is deleted" in CABIN
+    assert "neither list is discarded" in CABIN

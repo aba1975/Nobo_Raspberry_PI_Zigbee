@@ -460,3 +460,76 @@ def test_the_check_is_offered_to_the_interface_before_it_commits(client, monkeyp
     assert body["usable"] is False
     assert body["detail"]
     assert "url" in body
+
+
+@pytest.fixture
+def either_provider(monkeypatch):
+    """Both kinds available at once, chosen by name like the real factory.
+
+    The ``zigbee`` fixture hands back its fake whatever is asked for, which is
+    right for tests about the radio and wrong for one about moving between the
+    two — asking for the simulator would quietly get a Zigbee provider.
+    """
+    from sensor_provider import create_provider as real_create_provider
+
+    broker = FakeBroker()
+    z2m = FakeZigbee2Mqtt(broker)
+    fake = Zigbee2MqttContactSensorProvider(
+        transport=FakeTransport(broker),
+        load_metadata=lambda: {},
+        save_metadata=lambda _data: None,
+    )
+
+    def dispatch(name, **kwargs):
+        if name == "zigbee2mqtt":
+            return fake
+        return real_create_provider(name, **kwargs)
+
+    monkeypatch.setattr(server, "create_provider", dispatch)
+    monkeypatch.setattr(server, "probe_zigbee_stack", _stack_present)
+    return fake, z2m
+
+
+def test_switching_source_and_back_keeps_the_demo_sensors(client, either_provider):
+    """What "the two do not share a sensor list" does and does not mean.
+
+    Each kind keeps its own list and switching shows the other one, but
+    nothing is discarded: the simulated store and the Zigbee metadata are both
+    on disk and neither is cleared on the way past. The interface used to warn
+    that switching "starts again with none paired", which reads as *your
+    sensors are gone* and would stop somebody trying it at all.
+    """
+    enable(client, provider="simulated")
+    created = client.post(
+        "/api/sensors", json={"name": "Kitchen Window", "kind": "window"}
+    )
+    assert created.status_code == 200, created.text
+
+    # Away to the radio...
+    moved = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+    assert moved.status_code == 200, moved.text
+    assert client.get("/api/sensors").json()["sensors"] == []
+
+    # ...and back.
+    client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "simulated"}
+    )
+
+    names = [s["name"] for s in client.get("/api/sensors").json()["sensors"]]
+    assert names == ["Kitchen Window"], "the demo sensors were not waiting"
+
+
+def test_the_source_can_be_changed_while_sensors_are_on(client, either_provider):
+    """Without this the choice exists only at the moment of switching the
+    feature on, so an installation already running one kind has no way to see
+    or change which — which is exactly how it was reported."""
+    enable(client, provider="simulated")
+
+    response = client.put(
+        "/api/sensors/settings", json={"enabled": True, "provider": "zigbee2mqtt"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["provider"] == "zigbee2mqtt"

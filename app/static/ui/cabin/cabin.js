@@ -3741,6 +3741,7 @@
             aria-pressed="${settings.enabled ? 'true' : 'false'}">${settings.enabled ? 'On' : 'Off'}</button>
         </div>
         ${settings.enabled ? `
+          ${sensorSourceRow(settings)}
           <div class="sensor-settings-summary">
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
             <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
@@ -3763,6 +3764,31 @@
             </div>` : ''}`
           : '<div class="note">Nothing sensor-related is shown elsewhere while this is off.</div>'}
       </section>`;
+  }
+
+  /* Which kind of sensors this installation is running, and a way back.
+
+     The choice used to exist only at the moment of switching the feature on,
+     so anything already running one kind had no way to see or change which —
+     which is how it was reported: "there is no demo mode for sensors". The
+     answer was that there is, but only ever offered once, and by then invisible.
+
+     Shown even where there is nothing to change to, because "which am I
+     looking at?" is the question being asked, and it is worth answering
+     whether or not the answer can be acted on. */
+  function sensorSourceRow(settings) {
+    const simulated = !!settings.simulated;
+    return `
+      <div class="switch sensor-source">
+        <div class="switch-text"><strong>Sensor source</strong>
+          <span>${simulated
+            ? 'Demo sensors \u2014 invented, and their state is yours to set. Nothing reaches a heater.'
+            : 'Real Zigbee sensors \u2014 contact, battery and signal are readings from the hardware.'}</span>
+        </div>
+        ${settings.demo_mode
+          ? `<button class="btn" type="button" data-act="change-source">Change</button>`
+          : `<span class="field-hint">Demo sensors are only offered in demo mode.</span>`}
+      </div>`;
   }
 
   async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
@@ -3804,8 +3830,9 @@
      alive, and an installation with no Zigbee stack running would otherwise
      accept the switch, persist it, and retry a refused connection every five
      seconds for ever while the interface said "On". */
-  function sensorProviderSheet() {
+  function sensorProviderSheet({ changing = false } = {}) {
     const settings = state.sensorSettings || {};
+    const current = changing ? (settings.simulated ? 'simulated' : 'zigbee2mqtt') : null;
     if (!settings.demo_mode) {
       // Nothing to choose: simulated sensors are demo-only, so the real
       // provider is the only answer and the server checks it either way.
@@ -3823,18 +3850,22 @@
           ? '<span class="field-hint">Zigbee2MQTT is running and reachable.</span>'
           : `<span class="field-hint sensor-check-bad">${esc((check && check.detail) || 'Not available.')}</span>`;
       const realDisabled = checking || !(check && check.usable);
-      openSheet('Which sensors?', `
-        <p class="zd-sub">This can be changed later, but the two do not share a
-        sensor list: switching afterwards starts again with none paired.</p>
+      openSheet(changing ? 'Sensor source' : 'Which sensors?', `
+        <p class="zd-sub">The two keep separate lists, so switching shows the
+        other one and hides this one. ${changing
+          ? 'Nothing is unpaired and nothing is deleted \u2014 switch back and what is here now is waiting.'
+          : 'This can be changed later, and neither list is discarded when you do.'}</p>
         <div class="sensor-provider-choice">
-          <button class="btn btn-wide" type="button" data-pick="simulated">
-            <strong>Demo sensors</strong>
+          <button class="btn btn-wide" type="button" data-pick="simulated"
+            ${current === 'simulated' ? 'aria-current="true"' : ''}>
+            <strong>Demo sensors${current === 'simulated' ? ' \u2014 in use' : ''}</strong>
             <span class="field-hint">Invented contacts you can open and close yourself.
             No hardware, no broker, and nothing reaches a real heater.</span>
           </button>
           <button class="btn btn-wide" type="button" data-pick="zigbee2mqtt"
-            ${realDisabled ? 'disabled aria-disabled="true"' : ''}>
-            <strong>Real Zigbee sensors</strong>
+            ${current === 'zigbee2mqtt' ? 'aria-current="true"' : ''}
+            ${realDisabled && current !== 'zigbee2mqtt' ? 'disabled aria-disabled="true"' : ''}>
+            <strong>Real Zigbee sensors${current === 'zigbee2mqtt' ? ' \u2014 in use' : ''}</strong>
             ${realNote}
           </button>
         </div>
@@ -3846,6 +3877,9 @@
           button.onclick = () => {
             if (button.hasAttribute('disabled')) return;
             closeSheet();
+            // Choosing the one already running is a way of saying "leave it",
+            // not a request to tear the provider down and build it again.
+            if (button.dataset.pick === current) return;
             enableSensors(button.dataset.pick);
           };
         });
@@ -3869,8 +3903,8 @@
     try {
       await saveSensorSettings(true, provider);
       Nobo.toast(provider === 'simulated'
-        ? 'Demo sensors enabled'
-        : 'Contact sensors enabled');
+        ? 'Now using demo sensors'
+        : 'Now using real Zigbee sensors');
     } catch (e) { Nobo.toast(e.message, 'error'); }
   }
 
@@ -3884,6 +3918,8 @@
         Nobo.toast('Contact sensors disabled');
       } catch (e) { Nobo.toast(e.message, 'error'); }
     };
+    const changeSource = root.querySelector('[data-act="change-source"]');
+    if (changeSource) changeSource.onclick = () => sensorProviderSheet({ changing: true });
     const pair = root.querySelector('[data-act="pair-sensor"]');
     if (pair) pair.onclick = () => pairSensorSheet();
     wireZoneSensors(root);
