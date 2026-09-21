@@ -615,6 +615,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* A dial you can only turn by hand is a real constraint, so it is called out
    in words, not by a colour alone. */
 .badge-manual { background: transparent; color: var(--ink-soft); border-color: var(--rule); border-style: dashed; }
+/* A zone with nothing in it. Quieter than "Set on heater", which it used to
+   borrow: that badge tells you where to go and turn something, and there is
+   nothing here to turn. Not a fault either — a zone is empty for a while
+   between being created and being filled. */
+.badge-empty { background: transparent; color: var(--ink-faint); border-color: var(--rule); border-style: dashed; }
 
 /* A set point that no longer matches what was asked for here. Amber because it
    wants noticing on a scan of the room list, but it is not a fault - the room

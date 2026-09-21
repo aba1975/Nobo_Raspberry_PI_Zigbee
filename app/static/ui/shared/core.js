@@ -123,8 +123,14 @@ const Nobo = (() => {
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {
                                        method: 'PUT', body: JSON.stringify(body) }),
     removeDevice: (serial)         => req(`/api/devices/${encodeURIComponent(serial)}`, { method: 'DELETE' }),
-    moveDevice:   (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}/move`, {
-                                       method: 'POST', body: JSON.stringify(body) }),
+    /* Takes the zone id, not a body. The caller used to assemble the object
+       and sent `zone_id` where the API requires `new_zone_id`, so every move
+       from the Cabin interface was rejected with a 422 before it reached the
+       hub — while the interface said "Heater moved". Building the body here
+       leaves one place for the field name to be right. */
+    moveDevice:   (serial, zoneId) => req(`/api/devices/${encodeURIComponent(serial)}/move`, {
+                                       method: 'POST',
+                                       body: JSON.stringify({ new_zone_id: zoneId }) }),
     // PATCH, not the PUT above: that one replaces a heater with a different
     // serial, this only changes what it is called.
     renameDevice: (serial, name)   => req(`/api/devices/${encodeURIComponent(serial)}/name`, {

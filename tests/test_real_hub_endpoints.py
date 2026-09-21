@@ -377,6 +377,26 @@ class TestDeviceManagement:
         assert response.status_code == 200, response.text
         wait_until(lambda: fake.components["186100000001"][4] == "2")
 
+    def test_a_heater_moves_into_a_zone_that_was_just_created(self, client, fake):
+        """The sequence reported from the cabin: make an empty zone, then move
+        a heater into it. Doing it in the official app worked; doing it here
+        reported an error and left the heater unusable in its new room.
+        """
+        created = client.post("/api/zones", json={"name": "Loft"})
+        assert created.status_code == 200, created.text
+        zone_id = created.json()["zone_id"]
+
+        moved = client.post(
+            "/api/devices/186100000001/move", json={"new_zone_id": zone_id}
+        )
+        assert moved.status_code == 200, moved.text
+
+        wait_until(lambda: fake.components["186100000001"][4] == zone_id)
+        zones = {z["zone_id"]: z for z in client.get("/api/zones").json()["zones"]}
+        assert "186100000001" in zones[zone_id]["components"], (
+            "the hub took the move but the zone does not show the heater"
+        )
+
     def test_move_device_rejects_an_unknown_zone(self, client):
         response = client.post(
             "/api/devices/186100000001/move", json={"new_zone_id": "999"}

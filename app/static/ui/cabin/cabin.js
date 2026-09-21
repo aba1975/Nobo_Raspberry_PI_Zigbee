@@ -1942,13 +1942,22 @@
        as "set to" would be a straight lie, so these rooms lead with the mode
        they are running and say where the temperature actually comes from. */
     const remote = zone.supports_temp_adjust !== false;
+    /* A room with nothing in it is not the same as a room whose heaters have
+       no remote control, and the server cannot tell them apart for us: with no
+       components, "does anything support adjustment?" is false either way. So
+       an empty zone used to claim "Set on heater" and "Dial sets the
+       temperature", inviting somebody to go and turn a dial that is not there.
+       The distinguishing fact is simply whether the room contains anything. */
+    const empty = !(zone.components || []).length;
     const adjustable = key !== null && remote;
 
     const scheduled = (zone.current_mode || 'normal') === 'normal';
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
     const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
 
-    const manualBadge = !remote
+    const manualBadge = empty
+      ? `<span class="badge badge-empty" title="This zone has no heater and no sensor yet. Add a heater to control it, or a contact sensor to monitor it.">Empty</span>`
+      : !remote
       ? `<span class="badge badge-manual" title="No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
       : (zone.has_manual_devices
           ? `<span class="badge badge-manual" title="Some heaters in this zone have no remote temperature control. Their temperature is set by a dial on the heater itself.">Some dial-only</span>`
@@ -1960,7 +1969,10 @@
     const more = comps.length > 3 ? `<span class="more">+${comps.length - 3}</span>` : '';
 
     let label, setBlock;
-    if (!remote) {
+    if (empty) {
+      label = 'Contains';
+      setBlock = `<span class="set-none">Nothing yet</span>`;
+    } else if (!remote) {
       label = 'Running';
       setBlock = `<span class="set-mode">${esc(modeLabel)}</span>`;
     } else {
@@ -1970,7 +1982,9 @@
         : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
     }
 
-    const nowBlock = zone.current_temperature == null
+    const nowBlock = empty
+      ? `<span class="set-now">No heater or sensor</span>`
+      : zone.current_temperature == null
       ? `<span class="set-now">${remote ? 'No sensor' : 'Dial sets the temperature'}</span>`
       : `<span class="set-now">now ${Nobo.fmtTemp(zone.current_temperature)}&deg;</span>`;
 
@@ -3233,7 +3247,7 @@
       root.querySelector('[data-act="ok"]').onclick = async () => {
         const zoneId = root.querySelector('#mvZone').value;
         try {
-          await Nobo.api.moveDevice(serial, { zone_id: zoneId });
+          await Nobo.api.moveDevice(serial, zoneId);
           closeSheet();
           Nobo.toast('Heater moved');
           await refresh(true);
