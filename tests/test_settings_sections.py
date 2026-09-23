@@ -133,9 +133,33 @@ class TestItLooksLikeTheRestOfTheApp:
         assert re.search(r"\.card select\s*\{[^}]*border-radius:\s*11px", CSS, re.S)
 
     def test_the_controls_stay_thumb_sized(self):
-        assert re.search(r"\.seg-btn\s*\{[^}]*min-height:\s*38px", CSS, re.S)
+        assert re.search(r"\.choice-btn\s*\{[^}]*min-height:\s*38px", CSS, re.S)
         assert re.search(r"\.sec > summary\s*\{[^}]*min-height:\s*44px", CSS, re.S)
 
     def test_a_three_way_control_wraps_rather_than_shrinking_on_a_phone(self):
         """Squeezing it would make the targets narrower than a thumb."""
-        assert re.search(r"@media \(max-width: 30rem\)[^}]*\{[^@]*\.set-row\s*\{[^}]*flex-wrap", CSS, re.S)
+        assert re.search(r"@media \(max-width: 30rem\)[^@]*\.opt-row\s*\{[^}]*flex-wrap", CSS, re.S)
+
+    def test_the_new_classes_do_not_take_names_that_were_already_used(self):
+        """What the screenshot showed. `.seg-btn` already belonged to the away
+        sheet's two-answer control — a grid of full-width boxes, defined later
+        in the file — and `.set-label` to the zone card's uppercase "SET TO".
+        Reusing both names silently redressed these controls as those ones:
+        pale-green pills and labels in small caps.
+
+        Checked by counting definitions rather than by reading the rules,
+        because the failure was invisible in either file alone.
+        """
+        for taken in (".seg-btn", ".set-label", ".set-row"):
+            blocks = re.findall(rf"^\{re.escape(taken)}\s*[,{{]", CSS, re.M)
+            assert len(blocks) <= 1, f"{taken} is defined {len(blocks)} times"
+        # And the settings controls use their own names.
+        assert ".choice-btn" in CSS and ".opt-label" in CSS
+        assert 'class="choice-btn"' in CABIN
+        assert 'class="opt-label"' in CABIN
+
+    def test_the_labels_are_not_shouting(self):
+        """`.set-label` is uppercase with letter-spacing, which is right for
+        "SET TO" above a big number and wrong for a sentence."""
+        block = re.search(r"\.opt-label strong\s*\{([^}]*)\}", CSS, re.S).group(1)
+        assert "text-transform: none" in block

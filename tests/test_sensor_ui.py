@@ -1114,17 +1114,20 @@ def test_the_sensor_source_is_shown_once_sensors_are_on():
         assert value in card, value
 
 
-def test_the_source_is_rendered_whether_or_not_sensors_are_on():
-    """"Which am I looking at?" is worth answering even when the answer is
-    "none", and turning them on has to be possible from the same control."""
+def test_the_source_is_hidden_while_sensors_are_off():
+    """Off has no source to choose. Folding "off" in beside the two sources
+    made a three-way control that read as a mode switch rather than as the
+    two separate questions it is."""
     start = CABIN.index("function renderSensorSettingsCard")
     card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
-    body = card[card.index("return settingsSection("):]
-    assert "${sourceControl}" in body
-    assert "settings.enabled ?" in body.split("${sourceControl}")[0], (
-        "the source must not be inside the enabled-only branch"
-    )
+    assert "const sourceRow = !settings.enabled ? '' : settingRow(" in card
 
+
+def test_using_them_at_all_is_its_own_control():
+    start = CABIN.index("function renderSensorSettingsCard")
+    card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
+    assert "segControl('sensor-enabled'" in card
+    assert "'off', 'Off'" in card and "'on', 'On'" in card
 
 def test_demo_sensors_are_offered_only_where_they_are_allowed():
     """Outside demo mode the simulator is refused by the server, so offering
@@ -1137,10 +1140,11 @@ def test_demo_sensors_are_offered_only_where_they_are_allowed():
 
 def test_the_source_control_is_wired():
     assert 'data-seg="sensor-source"' in CABIN
+    assert 'data-seg="sensor-enabled"' in CABIN
     start = CABIN.index("function wireSettingsSegments")
     body = CABIN[start:CABIN.index("\n  }\n", start)]
     assert "saveSensorSettings(false)" in body
-    assert "saveSensorSettings(true, wanted)" in body
+    assert "saveSensorSettings(true, button.dataset.value)" in body
 
 
 def test_choosing_the_source_already_running_does_nothing_from_the_row():

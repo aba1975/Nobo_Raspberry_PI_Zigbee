@@ -412,32 +412,49 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sec-body > .section-head:first-child { margin-top: .8rem; }
 
 /* One of a few, everywhere. The same question used to get a toggle in one
-   place and a button opening a sheet in another. */
-.seg-control {
+   place and a button opening a sheet in another.
+
+   Named "choice" rather than "seg": .seg and .seg-btn were already taken by
+   the away sheet's two-answer control, which is a grid of full-width boxes
+   and sits later in this file — so reusing the names silently redressed this
+   one as that one, which is what the screenshot showed. */
+.choice {
   display: inline-flex; flex: none; background: var(--paper);
   border: 1px solid var(--rule); border-radius: 999px; overflow: hidden;
 }
-.seg-btn {
+.choice-btn {
   border: 0; background: none; font: inherit; font-size: .82rem;
-  padding: .45rem .8rem; min-height: 38px; cursor: pointer; color: var(--ink-soft);
+  padding: .45rem .9rem; min-height: 38px; cursor: pointer; color: var(--ink-soft);
+  white-space: nowrap;
 }
-.seg-btn[aria-pressed="true"] { background: var(--pine); color: #fff; font-weight: 600; }
-.seg-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.choice-btn + .choice-btn { border-left: 1px solid var(--rule); }
+.choice-btn:hover:not([aria-pressed="true"]) { color: var(--ink); }
+.choice-btn[aria-pressed="true"] { background: var(--pine); color: #fff; font-weight: 600; }
+.choice-btn[disabled] { opacity: .5; cursor: not-allowed; }
 
-.set-row {
+/* Likewise .set-row and .set-label already describe the zone card's "SET TO"
+   block, which is uppercase small-caps — which is why these labels came out
+   shouting. */
+.opt-row {
   display: flex; align-items: center; gap: .75rem;
   padding: .6rem 0; border-bottom: 1px solid var(--rule);
 }
-.set-row:last-child { border-bottom: 0; }
-.set-label { flex: 1; min-width: 0; }
-.set-label strong { display: block; font-weight: 620; }
-.set-label small { display: block; font-size: .78rem; color: var(--ink-faint); }
+.opt-row:last-child { border-bottom: 0; }
+.opt-label { flex: 1; min-width: 0; }
+.opt-label strong {
+  display: block; font-weight: 620; font-size: .95rem;
+  text-transform: none; letter-spacing: normal; color: var(--ink);
+}
+.opt-label small {
+  display: block; font-size: .78rem; color: var(--ink-faint);
+  text-transform: none; letter-spacing: normal; font-weight: 400;
+}
 
 @media (max-width: 30rem) {
   /* A three-way control plus its label does not fit a narrow phone on one
      line, and squeezing it makes 38px targets narrower than a thumb. */
-  .set-row { flex-wrap: wrap; }
-  .set-row .seg-control { margin-left: auto; }
+  .opt-row { flex-wrap: wrap; }
+  .opt-row .choice { margin-left: auto; }
 }
 
 .zone {

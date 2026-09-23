@@ -3865,32 +3865,34 @@
     const unassigned = sensors.filter(sensor =>
       sensor.zone_id == null || !knownZones.has(String(sensor.zone_id))
     );
-    const current = !settings.enabled ? 'off' : (settings.simulated ? 'simulated' : 'zigbee2mqtt');
-    /* One question, one control. This used to be a toggle for "on" and a
-       separate row with a Change button for "which kind", which made the same
-       question the heater source answers look like a different kind of
-       setting. Off is offered alongside the two sources because off is what
-       this mostly is. */
-    const sourceControl = settingRow(
+    /* Two questions, not one. Whether to use contact sensors at all is a
+       different thing from which kind, and folding "off" in beside the two
+       sources made a three-way control that read as a mode switch. Off also
+       has no source to choose, so the second row simply is not there. */
+    const onOff = settingRow(
+      'Use contact sensors',
+      'Door and window state, left-open warnings and optional heating actions.',
+      segControl('sensor-enabled', [['off', 'Off'], ['on', 'On']],
+        settings.enabled ? 'on' : 'off', { label: 'Use contact sensors' }));
+
+    const sourceRow = !settings.enabled ? '' : settingRow(
       'Source', settings.demo_mode
         ? 'Demo sensors are invented and their state is yours to set.'
         : 'Demo sensors are only offered while the heaters are in demo mode.',
-      segControl('sensor-source',
-        settings.demo_mode
-          ? [['off', 'Off'], ['simulated', 'Demo'], ['zigbee2mqtt', 'Zigbee']]
-          : [['off', 'Off'], ['zigbee2mqtt', 'Zigbee']],
-        current, { label: 'Where sensor data comes from' }));
+      segControl('sensor-source', [['simulated', 'Demo'], ['zigbee2mqtt', 'Zigbee']],
+        settings.simulated ? 'simulated' : 'zigbee2mqtt',
+        { label: 'Where sensor data comes from', disabled: !settings.demo_mode }));
 
     return settingsSection('sensors', 'Door and window sensors',
       !settings.enabled ? '<b>Off</b>'
         : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired`, `
-        ${settings.enabled
-          ? '<div class="section-head"><button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button></div>'
-          : ''}
-        <p class="zd-sub">Optional contact monitoring. Door and window state, left-open
-        warnings and optional heating actions.</p>
-        ${sourceControl}
+        <p class="zd-sub">Optional contact monitoring.</p>
+        ${onOff}
+        ${sourceRow}
         ${settings.enabled ? `
+          <div class="section-head" style="margin-top:.9rem">
+            <button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>
+          </div>
           <div class="sensor-settings-summary">
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
             <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
@@ -4313,9 +4315,9 @@
    *  `options` is [[value, label], …].
    */
   function segControl(action, options, current, opts = {}) {
-    return `<span class="seg-control" role="group"${opts.label ? ` aria-label="${esc(opts.label)}"` : ''}>${
+    return `<span class="choice" role="group"${opts.label ? ` aria-label="${esc(opts.label)}"` : ''}>${
       options.map(([value, label]) => `
-        <button type="button" class="seg-btn" data-seg="${esc(action)}" data-value="${esc(value)}"
+        <button type="button" class="choice-btn" data-seg="${esc(action)}" data-value="${esc(value)}"
           aria-pressed="${String(value) === String(current) ? 'true' : 'false'}"
           ${opts.disabled ? 'disabled' : ''}>${esc(label)}</button>`).join('')}</span>`;
   }
@@ -4323,8 +4325,8 @@
   /** A labelled row with its control on the right. */
   function settingRow(title, hint, control) {
     return `
-      <div class="set-row">
-        <span class="set-label"><strong>${esc(title)}</strong>${
+      <div class="opt-row">
+        <span class="opt-label"><strong>${esc(title)}</strong>${
           hint ? `<small>${esc(hint)}</small>` : ''}</span>
         ${control}
       </div>`;
@@ -4346,18 +4348,32 @@
         toggleDemo(wantDemo);
       };
     });
+    root.querySelectorAll('[data-seg="sensor-enabled"]').forEach(button => {
+      button.onclick = async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const on = button.dataset.value === 'on';
+        try {
+          if (!on) {
+            await saveSensorSettings(false);
+            Nobo.toast('Contact sensors turned off');
+            return;
+          }
+          /* Turning them on needs a source, and the one it had is the right
+             default: demo where demo is allowed, otherwise the radio. */
+          const settings = state.sensorSettings || {};
+          const provider = settings.demo_mode ? 'simulated' : 'zigbee2mqtt';
+          await saveSensorSettings(true, provider);
+          Nobo.toast(provider === 'simulated' ? 'Demo sensors on' : 'Zigbee sensors on');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
     root.querySelectorAll('[data-seg="sensor-source"]').forEach(button => {
       button.onclick = async () => {
         if (button.getAttribute('aria-pressed') === 'true') return;
-        const wanted = button.dataset.value;
         try {
-          if (wanted === 'off') {
-            await saveSensorSettings(false);
-            Nobo.toast('Contact sensors turned off');
-          } else {
-            await saveSensorSettings(true, wanted);
-            Nobo.toast(wanted === 'simulated' ? 'Demo sensors on' : 'Zigbee sensors on');
-          }
+          await saveSensorSettings(true, button.dataset.value);
+          Nobo.toast(button.dataset.value === 'simulated'
+            ? 'Now using demo sensors' : 'Now using real Zigbee sensors');
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
     });
