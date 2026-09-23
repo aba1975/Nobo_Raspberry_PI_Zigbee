@@ -360,7 +360,85 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .assign-row:last-child { border-bottom: 0; }
 .assign-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Controls outside .field used to fall through to the browser default, which
+   on this palette reads as a square grey box in a system font beside rounded
+   paper-coloured ones. Any select in a card gets the same treatment as one in
+   a labelled field. */
+.card select {
+  font: inherit; padding: .5rem .65rem; min-height: 40px;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink);
+}
+.sec select {
+  font: inherit; padding: .5rem .65rem; min-height: 40px;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink);
+}
 .assign-row select { max-width: 11.5rem; }
+/* --------------------------------------------------- settings sections */
+
+/* Settings had grown to ten cards and one long scroll. Each topic is now a
+   <details>, and its summary carries the live value — so the closed list is
+   an index of the whole configuration rather than a table of contents. That
+   is the only thing that makes collapsing worth doing: a summary repeating
+   its own heading would hide the settings and give nothing back. */
+.sec {
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  margin-bottom: .6rem; overflow: hidden;
+}
+.sec > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: .6rem;
+  padding: .85rem .95rem; font-weight: 650; min-height: 44px;
+}
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary:focus-visible { outline: 2px solid var(--pine); outline-offset: -2px; }
+.sec .caret {
+  color: var(--ink-faint); font-size: 1.05rem; line-height: 1; flex: none;
+  transition: transform .15s ease;
+}
+.sec[open] .caret { transform: rotate(90deg); }
+.sec-name { flex: none; }
+/* The state, not the heading, is the reason the row is readable while shut. */
+.sec-state {
+  margin-left: auto; font-size: .79rem; color: var(--ink-faint); font-weight: 400;
+  text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.sec-state b { color: var(--pine); font-weight: 600; }
+.sec-state.is-alert { color: var(--amber); font-weight: 600; }
+.sec-body { padding: 0 .95rem 1.05rem; border-top: 1px solid var(--rule); }
+.sec-body > .zd-sub:first-child,
+.sec-body > .section-head:first-child { margin-top: .8rem; }
+
+/* One of a few, everywhere. The same question used to get a toggle in one
+   place and a button opening a sheet in another. */
+.seg-control {
+  display: inline-flex; flex: none; background: var(--paper);
+  border: 1px solid var(--rule); border-radius: 999px; overflow: hidden;
+}
+.seg-btn {
+  border: 0; background: none; font: inherit; font-size: .82rem;
+  padding: .45rem .8rem; min-height: 38px; cursor: pointer; color: var(--ink-soft);
+}
+.seg-btn[aria-pressed="true"] { background: var(--pine); color: #fff; font-weight: 600; }
+.seg-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+.set-row {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .6rem 0; border-bottom: 1px solid var(--rule);
+}
+.set-row:last-child { border-bottom: 0; }
+.set-label { flex: 1; min-width: 0; }
+.set-label strong { display: block; font-weight: 620; }
+.set-label small { display: block; font-size: .78rem; color: var(--ink-faint); }
+
+@media (max-width: 30rem) {
+  /* A three-way control plus its label does not fit a narrow phone on one
+     line, and squeezing it makes 38px targets narrower than a thumb. */
+  .set-row { flex-wrap: wrap; }
+  .set-row .seg-control { margin-left: auto; }
+}
 
 .zone {
   position: relative;

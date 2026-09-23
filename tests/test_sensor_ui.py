@@ -1099,35 +1099,55 @@ def test_the_row_is_built_from_the_zones_everyone_receives():
 def test_the_sensor_source_is_shown_once_sensors_are_on():
     """Reported as "there is no demo mode for sensors". There is — but it was
     offered only at the moment of switching the feature on, so an installation
-    already running one kind could neither see which nor change it."""
-    assert "function sensorSourceRow" in CABIN
-    assert "Sensor source" in CABIN
-    start = CABIN.index("function sensorSourceRow")
-    end = CABIN.index("\n  }\n", start)
-    row = CABIN[start:end]
-    assert "Demo sensors" in row and "Real Zigbee sensors" in row
+    already running one kind could neither see which nor change it.
+
+    The row survives; the control changed. It used to be a toggle for on/off
+    beside a separate row with a Change button for which kind, which made the
+    same question the heater source answers look like a different sort of
+    setting. It is now one segmented control, and off sits beside the two
+    sources because off is what this mostly is.
+    """
+    start = CABIN.index("function renderSensorSettingsCard")
+    card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
+    assert "segControl('sensor-source'" in card
+    for value in ("'off', 'Off'", "'simulated', 'Demo'", "'zigbee2mqtt', 'Zigbee'"):
+        assert value in card, value
 
 
-def test_the_source_row_is_rendered_while_the_feature_is_on():
-    card = CABIN[CABIN.index("function renderSensorSettingsCard"):]
-    card = card[:card.index("\n  /* Which kind of sensors")]
-    assert "sensorSourceRow(settings)" in card
+def test_the_source_is_rendered_whether_or_not_sensors_are_on():
+    """"Which am I looking at?" is worth answering even when the answer is
+    "none", and turning them on has to be possible from the same control."""
+    start = CABIN.index("function renderSensorSettingsCard")
+    card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
+    body = card[card.index("return settingsSection("):]
+    assert "${sourceControl}" in body
+    assert "settings.enabled ?" in body.split("${sourceControl}")[0], (
+        "the source must not be inside the enabled-only branch"
+    )
 
 
-def test_changing_the_source_is_offered_only_where_there_is_a_choice():
-    """Outside demo mode the simulator is refused by the server, so a button
-    that could only fail would be worse than none — but which source is in use
-    is still worth saying."""
-    start = CABIN.index("function sensorSourceRow")
-    row = CABIN[start:CABIN.index("\n  }\n", start)]
-    assert "settings.demo_mode" in row
-    assert "only offered in demo mode" in row
+def test_demo_sensors_are_offered_only_where_they_are_allowed():
+    """Outside demo mode the simulator is refused by the server, so offering
+    it could only fail. The other two choices stay."""
+    start = CABIN.index("function renderSensorSettingsCard")
+    card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
+    assert "settings.demo_mode" in card
+    assert "only offered while the heaters are in demo mode" in card
 
 
-def test_the_change_button_is_wired():
-    assert 'data-act="change-source"' in CABIN
-    assert "sensorProviderSheet({ changing: true })" in CABIN
+def test_the_source_control_is_wired():
+    assert 'data-seg="sensor-source"' in CABIN
+    start = CABIN.index("function wireSettingsSegments")
+    body = CABIN[start:CABIN.index("\n  }\n", start)]
+    assert "saveSensorSettings(false)" in body
+    assert "saveSensorSettings(true, wanted)" in body
 
+
+def test_choosing_the_source_already_running_does_nothing_from_the_row():
+    """Not a request to tear the provider down and build it again."""
+    start = CABIN.index("function wireSettingsSegments")
+    body = CABIN[start:CABIN.index("\n  }\n", start)]
+    assert "aria-pressed') === 'true'" in body
 
 def test_the_sheet_marks_the_source_already_in_use():
     assert "in use" in CABIN
