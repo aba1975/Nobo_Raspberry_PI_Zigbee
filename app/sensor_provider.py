@@ -185,22 +185,22 @@ def zigbee2mqtt_endpoint() -> tuple[str, str]:
     )
 
 
-def create_provider(name: str, *, demo_mode: bool, **kwargs) -> ContactSensorProvider:
-    """Construct a provider without allowing simulation to masquerade as hardware."""
+def create_provider(name: str, **kwargs) -> ContactSensorProvider:
+    """Construct the named provider.
+
+    Neither is tied to whether the *hub* is simulated. Demo sensors beside a
+    real hub are how somebody tries the feature before a Zigbee stick arrives,
+    and real sensors beside a demo hub are how Zigbee equipment is tested
+    without touching a building's heating. What stops invented contacts from
+    reaching real heaters is the automation, which stands down for them; see
+    ``BlockReason.DEMO_SENSORS``.
+    """
     if name == "simulated":
-        if not demo_mode:
-            raise RuntimeError(
-                "The simulated sensor provider is available only in demo mode"
-            )
         from sensor_simulated import SimulatedContactSensorProvider
 
         return SimulatedContactSensorProvider(**kwargs)
 
     if name == "zigbee2mqtt":
-        # Deliberately not gated on demo mode.  That gate exists so a simulator
-        # cannot pretend to be hardware, which says nothing about real sensors
-        # running beside a simulated hub — the arrangement used to test Zigbee
-        # equipment without touching a building's heating.
         from sensor_mqtt import AiomqttTransport
         from sensor_persistence import load_zigbee_metadata, save_zigbee_metadata
         from sensor_zigbee2mqtt import Zigbee2MqttContactSensorProvider

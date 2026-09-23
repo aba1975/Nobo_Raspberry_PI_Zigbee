@@ -106,6 +106,10 @@ class HeatingZone:
     effective_mode: str
     fallback_mode: str
     has_zone_override: bool = False
+    # False while invented contacts sit beside a real hub. A demo sensor is
+    # there to be opened and closed by hand, and nothing a person does with
+    # one should ever leave a real room in Eco.
+    sensors_may_act: bool = True
 
 
 class AggregateState(str, Enum):
@@ -129,6 +133,7 @@ class BlockReason(str, Enum):
     COLDER_MODE = "colder_mode"      # the room is already colder than the rule
     NO_EQUIPMENT = "no_equipment"    # monitoring-only room
     DISCONNECTED = "disconnected"    # no hub to ask
+    DEMO_SENSORS = "demo_sensors"    # invented contacts, real heaters
 
 
 @dataclass(frozen=True)
@@ -444,6 +449,16 @@ class SensorAutomation:
             return
         if state.open_started_at is None or step.contacts_settled:
             return
+        if zone is not None and not zone.sensors_may_act:
+            # Before the delay, not after it, so the room never says it is
+            # "about to" do something it is not going to do. Anything held
+            # from before the source changed goes back now rather than
+            # waiting for a contact that may never be closed.
+            if state.owned_action is not None:
+                await self._hand_back_ownership(step, actions)
+            step.status = ActionStatus.BLOCKED
+            step.block_reason = BlockReason.DEMO_SENSORS
+            return
         if step.now < state.open_started_at + policy.action_delay_seconds:
             step.status = ActionStatus.PENDING
             return
@@ -588,6 +603,7 @@ class SensorAutomation:
             if open_cycle
             and policy.action_when_open is not ActionWhenOpen.NOTHING
             and state.owned_action is None
+            and step.block_reason is not BlockReason.DEMO_SENSORS
             else None
         )
         status = step.status

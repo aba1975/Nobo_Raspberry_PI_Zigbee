@@ -1129,13 +1129,47 @@ def test_using_them_at_all_is_its_own_control():
     assert "segControl('sensor-enabled'" in card
     assert "'off', 'Off'" in card and "'on', 'On'" in card
 
-def test_demo_sensors_are_offered_only_where_they_are_allowed():
-    """Outside demo mode the simulator is refused by the server, so offering
-    it could only fail. The other two choices stay."""
+def test_both_sources_are_offered_whatever_the_hub():
+    """Reported from a real installation: the source control was greyed out
+    beside a real hub, so sensors could not be tried without a Zigbee stick.
+    Both sources are offered; beside a real hub demo sensors say they never
+    change a heater, which is what the server enforces."""
     start = CABIN.index("function renderSensorSettingsCard")
     card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
-    assert "settings.demo_mode" in card
-    assert "only offered while the heaters are in demo mode" in card
+    assert "disabled: !settings.demo_mode" not in card
+    assert "only offered while the heaters are in demo mode" not in card
+    assert "settings.sensors_may_act === false" in card
+    assert "never change a real heater" in card
+
+
+def test_a_missing_zigbee_stick_is_reported_when_zigbee_is_chosen():
+    """The refusal is kept on screen under the control, not flashed past."""
+    start = CABIN.index("function renderSensorSettingsCard")
+    card = CABIN[start:CABIN.index("\n  async function saveSensorSettings", start)]
+    assert "state.sensorSourceError" in card
+    assert 'sensor-source-error" role="status"' in card
+    start = CABIN.index("function wireSettingsSegments")
+    body = CABIN[start:CABIN.index("\n  function renderSettings", start)]
+    assert "e.status === 503" in body
+    assert "state.sensorSourceError = e.message" in body
+
+
+def test_turning_sensors_on_never_needs_a_stick():
+    """On resumes the last source, and falls back to demo sensors, saying so,
+    when that was Zigbee and the stick is gone."""
+    start = CABIN.index("function wireSettingsSegments")
+    body = CABIN[start:CABIN.index("\n  function renderSettings", start)]
+    assert "settings.provider === 'zigbee2mqtt' ? 'zigbee2mqtt' : 'simulated'" in body
+    assert "await saveSensorSettings(true, 'simulated')" in body
+    assert "settings.demo_mode ? 'simulated' : 'zigbee2mqtt'" not in body
+
+
+def test_api_errors_carry_their_status():
+    assert "error.status = res.status" in CORE
+
+
+def test_a_demo_block_is_explained():
+    assert "demo_sensors:" in CABIN
 
 
 def test_the_source_control_is_wired():
@@ -1144,7 +1178,7 @@ def test_the_source_control_is_wired():
     start = CABIN.index("function wireSettingsSegments")
     body = CABIN[start:CABIN.index("\n  }\n", start)]
     assert "saveSensorSettings(false)" in body
-    assert "saveSensorSettings(true, button.dataset.value)" in body
+    assert "saveSensorSettings(true, wanted)" in body
 
 
 def test_choosing_the_source_already_running_does_nothing_from_the_row():

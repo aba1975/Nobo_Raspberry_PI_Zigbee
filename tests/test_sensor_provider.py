@@ -89,10 +89,10 @@ async def test_simulated_crud_events_and_restart(tmp_path):
         await restarted.remove("sensor-1")
 
 
-def test_provider_factory_is_demo_only(tmp_path):
-    with pytest.raises(RuntimeError):
-        create_provider("simulated", demo_mode=False, path=tmp_path / "x.json")
-    provider = create_provider("simulated", demo_mode=True, path=tmp_path / "x.json")
+def test_provider_factory_builds_the_simulator_beside_either_hub(tmp_path):
+    """The factory no longer asks about the hub: demo sensors beside a real hub
+    are allowed, and it is the automation that keeps them off the heaters."""
+    provider = create_provider("simulated", path=tmp_path / "x.json")
     assert isinstance(provider, SimulatedContactSensorProvider)
 
 

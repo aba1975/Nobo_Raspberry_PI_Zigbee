@@ -1045,6 +1045,7 @@
       colder_mode: `This room is already colder than ${target}, so it stays as it is.`,
       no_equipment: 'Monitoring only — there is no heater in this room.',
       disconnected: 'The hub cannot be reached, so the heating was not changed.',
+      demo_sensors: 'Demo sensors never change a real heater, so the heating is left as it is.',
     }[summary.block_reason] || 'The heating was left as it is.';
   }
 
@@ -3875,13 +3876,26 @@
       segControl('sensor-enabled', [['off', 'Off'], ['on', 'On']],
         settings.enabled ? 'on' : 'off', { label: 'Use contact sensors' }));
 
+    /* Both sources are always offered. Demo sensors beside a real hub are how
+       somebody tries this before a Zigbee stick arrives; they warn like real
+       ones, and the server stands the heating action down for them. Zigbee is
+       checked when it is chosen, and a refusal is kept on screen below the
+       control rather than flashed past in a toast. */
+    const sourceHint = !settings.simulated
+      ? 'Readings from real door and window sensors, through the Zigbee stick.'
+      : settings.sensors_may_act === false
+        ? 'Demo sensors are invented and their state is yours to set. They warn like real ones, but never change a real heater.'
+        : 'Demo sensors are invented and their state is yours to set.';
     const sourceRow = !settings.enabled ? '' : settingRow(
-      'Source', settings.demo_mode
-        ? 'Demo sensors are invented and their state is yours to set.'
-        : 'Demo sensors are only offered while the heaters are in demo mode.',
+      'Source', sourceHint,
       segControl('sensor-source', [['simulated', 'Demo'], ['zigbee2mqtt', 'Zigbee']],
         settings.simulated ? 'simulated' : 'zigbee2mqtt',
-        { label: 'Where sensor data comes from', disabled: !settings.demo_mode }));
+        { label: 'Where sensor data comes from' }));
+    const sourceError = settings.enabled && state.sensorSourceError ? `
+      <div class="note note-warn sensor-source-error" role="status">
+        <strong>Zigbee is not available${settings.simulated ? ' \u2014 still using demo sensors' : ''}</strong>
+        <span>${esc(state.sensorSourceError)}</span>
+      </div>` : '';
 
     return settingsSection('sensors', 'Door and Window Sensor Configuration',
       !settings.enabled ? '<b>Off</b>'
@@ -3889,6 +3903,7 @@
         <p class="zd-sub">Optional contact monitoring.</p>
         ${onOff}
         ${sourceRow}
+        ${sourceError}
         ${settings.enabled ? `
           <div class="section-head" style="margin-top:.9rem">
             <button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>
@@ -3946,9 +3961,8 @@
 
      Two genuinely different things share this switch. Demo sensors are
      invented and their state is yours to set; real ones are readings from a
-     radio. Only demo mode can offer the choice at all - the simulated
-     provider is refused outside it, deliberately, so that a simulator can
-     never be mistaken for hardware.
+     radio. Both are offered beside either hub; demo sensors beside a real
+     hub warn but never act on the heating.
 
      The real option is checked before it is offered rather than after it is
      chosen. This process cannot see the USB stick - the adapter belongs to
@@ -3959,12 +3973,6 @@
   function sensorProviderSheet({ changing = false } = {}) {
     const settings = state.sensorSettings || {};
     const current = changing ? (settings.simulated ? 'simulated' : 'zigbee2mqtt') : null;
-    if (!settings.demo_mode) {
-      // Nothing to choose: simulated sensors are demo-only, so the real
-      // provider is the only answer and the server checks it either way.
-      enableSensors('zigbee2mqtt');
-      return;
-    }
 
     let check = null;
     let checking = true;
@@ -4360,27 +4368,53 @@
         const on = button.dataset.value === 'on';
         try {
           if (!on) {
+            state.sensorSourceError = null;
             await saveSensorSettings(false);
             Nobo.toast('Contact sensors turned off');
             return;
           }
-          /* Turning them on needs a source, and the one it had is the right
-             default: demo where demo is allowed, otherwise the radio. */
+          /* Turning them on resumes whichever source was last in use, demo
+             for a fresh install. Switching on must never be refused for want
+             of a Zigbee stick: if the radio it last used is not there, it
+             starts on demo sensors and says so, and Zigbee can be chosen
+             again once the stick is back. */
           const settings = state.sensorSettings || {};
-          const provider = settings.demo_mode ? 'simulated' : 'zigbee2mqtt';
-          await saveSensorSettings(true, provider);
-          Nobo.toast(provider === 'simulated' ? 'Demo sensors on' : 'Zigbee sensors on');
+          const provider = settings.provider === 'zigbee2mqtt' ? 'zigbee2mqtt' : 'simulated';
+          try {
+            await saveSensorSettings(true, provider);
+            state.sensorSourceError = null;
+            renderSettings();
+            Nobo.toast(provider === 'simulated' ? 'Demo sensors on' : 'Zigbee sensors on');
+          } catch (e) {
+            if (provider !== 'zigbee2mqtt' || e.status !== 503) throw e;
+            state.sensorSourceError = e.message;
+            await saveSensorSettings(true, 'simulated');
+            Nobo.toast('No Zigbee stick found \u2014 demo sensors on', 'error');
+          }
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
     });
     root.querySelectorAll('[data-seg="sensor-source"]').forEach(button => {
       button.onclick = async () => {
         if (button.getAttribute('aria-pressed') === 'true') return;
+        const wanted = button.dataset.value;
         try {
-          await saveSensorSettings(true, button.dataset.value);
-          Nobo.toast(button.dataset.value === 'simulated'
+          await saveSensorSettings(true, wanted);
+          state.sensorSourceError = null;
+          renderSettings();
+          Nobo.toast(wanted === 'simulated'
             ? 'Now using demo sensors' : 'Now using real Zigbee sensors');
-        } catch (e) { Nobo.toast(e.message, 'error'); }
+        } catch (e) {
+          if (wanted === 'zigbee2mqtt' && e.status === 503) {
+            // The server refused and changed nothing, so the control still
+            // shows the source in use; the reason stays until it is resolved.
+            state.sensorSourceError = e.message;
+            renderSettings();
+            Nobo.toast('No Zigbee stick found', 'error');
+            return;
+          }
+          Nobo.toast(e.message, 'error');
+        }
       };
     });
   }

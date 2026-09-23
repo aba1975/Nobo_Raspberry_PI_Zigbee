@@ -224,12 +224,57 @@ def test_sensor_mutation_reaches_websocket_clients(client):
         assert first["sensor_summary"]["sensor_count"] == 1
 
 
-def test_real_mode_cannot_enable_the_simulated_provider(client, monkeypatch):
+def test_demo_sensors_can_be_turned_on_beside_a_real_hub(client, monkeypatch):
+    """Reported from a real installation: the switch could not be turned on
+    at all without a Zigbee stick. Demo sensors are how the feature is tried
+    before one arrives, and they must be refused nothing but the heaters."""
     monkeypatch.setattr(server, "DEMO_MODE", False)
     response = client.put(
-        "/api/sensors/settings", json={"enabled": True, "zones": {}}
+        "/api/sensors/settings",
+        json={"enabled": True, "provider": "simulated", "zones": {}},
     )
-    assert response.status_code == 501
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["simulated"] is True
+    assert body["sensors_may_act"] is False
+    assert all(
+        not zone.sensors_may_act for zone in server._sensor_heating_state().values()
+    )
+
+
+def test_demo_sensors_on_the_demo_hub_still_act(client):
+    body = enable(client)
+    assert body["sensors_may_act"] is True
+    assert all(zone.sensors_may_act for zone in server._sensor_heating_state().values())
+
+
+def test_real_sensors_act_beside_a_real_hub(monkeypatch):
+    monkeypatch.setattr(server, "DEMO_MODE", False)
+    monkeypatch.setattr(
+        server, "sensor_settings", SensorSettings(enabled=True, provider="zigbee2mqtt")
+    )
+    assert server._sensors_may_act() is True
+
+
+def test_zigbee_without_a_stick_is_refused_and_demo_keeps_running(client, monkeypatch):
+    """The refusal belongs to the moment Zigbee is chosen, and changes nothing."""
+    from sensor_mqtt import Zigbee2MqttProbe
+
+    enable(client)
+
+    async def no_stack():
+        return Zigbee2MqttProbe(False, False, "Nothing answered.")
+
+    monkeypatch.setattr(server, "probe_zigbee_stack", no_stack)
+    response = client.put(
+        "/api/sensors/settings",
+        json={"enabled": True, "provider": "zigbee2mqtt", "zones": {}},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Nothing answered."
+    assert server.sensor_settings.provider == "simulated"
+    assert server.sensor_settings.enabled is True
 
 
 def test_enabled_simulated_provider_blocks_switch_to_real_hub(client):

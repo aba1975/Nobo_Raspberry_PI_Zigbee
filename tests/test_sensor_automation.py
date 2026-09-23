@@ -61,7 +61,8 @@ class Commands:
 
 
 def heating(
-    running="comfort", *, fallback=None, held=False, equipment=True, connected=True
+    running="comfort", *, fallback=None, held=False, equipment=True, connected=True,
+    may_act=True,
 ):
     """One zone, described the way the server describes it.
 
@@ -78,6 +79,7 @@ def heating(
             effective_mode=running,
             fallback_mode=fallback if fallback is not None else running,
             has_zone_override=held,
+            sensors_may_act=may_act,
         )
     }
 
@@ -559,6 +561,42 @@ async def test_a_room_we_cannot_act_on_is_reported_rather_than_guessed(zones, re
     assert result.zones["1"].block_reason is reason
     # A monitoring-only room still warns; it simply cannot heat.
     assert result.zones["1"].warning_raised is True
+
+
+@pytest.mark.asyncio
+async def test_demo_sensors_beside_a_real_hub_warn_but_never_heat():
+    """Invented contacts are for clicking. A click must not leave a real room
+    in Eco, and the room must not claim it is about to do so either."""
+    clock, commands = Clock(), Commands()
+    engine = machine(commands, clock)
+    rules = policy(ActionWhenOpen.ECO, warn=10, delay=20)
+
+    first = await engine.evaluate([sensor("a", "open")], rules, heating(may_act=False))
+    assert first.zones["1"].action_status is ActionStatus.BLOCKED
+    assert first.zones["1"].block_reason is BlockReason.DEMO_SENSORS
+    assert first.zones["1"].action_deadline is None
+
+    clock.value = 1000
+    later = await engine.evaluate([sensor("a", "open")], rules, heating(may_act=False))
+    assert commands.calls == []
+    assert later.zones["1"].warning_raised is True
+    assert later.zones["1"].owned_action is None
+
+
+@pytest.mark.asyncio
+async def test_a_hold_from_real_sensors_goes_back_when_demo_ones_take_over():
+    """Switching source while a real window held a room in Eco must not leave
+    the hold stranded behind a contact nobody will ever close."""
+    commands = Commands()
+    engine = machine(commands, states=owned(None))
+    result = await engine.evaluate(
+        [sensor("a", "open")],
+        policy(ActionWhenOpen.ECO, delay=0),
+        heating("eco", fallback="comfort", held=True, may_act=False),
+    )
+    assert commands.calls == [("normal", "1")]
+    assert engine.states["1"].owned_action is None
+    assert result.zones["1"].block_reason is BlockReason.DEMO_SENSORS
 
 
 # ---------------------------------------------------------------------------

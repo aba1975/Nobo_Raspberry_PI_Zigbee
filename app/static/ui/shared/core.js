@@ -32,7 +32,9 @@ const Nobo = (() => {
         const body = await res.json();
         if (body && body.detail) detail = body.detail;
       } catch (_) { /* response had no JSON body */ }
-      throw new Error(detail);
+      const error = new Error(detail);
+      error.status = res.status;
+      throw error;
     }
     return res.status === 204 ? null : res.json();
   }

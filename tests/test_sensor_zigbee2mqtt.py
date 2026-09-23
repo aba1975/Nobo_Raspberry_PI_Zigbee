@@ -677,7 +677,6 @@ def test_the_factory_builds_a_zigbee_provider_outside_demo_mode():
     broker = FakeBroker()
     provider = create_provider(
         "zigbee2mqtt",
-        demo_mode=False,
         transport=FakeTransport(broker),
         load_metadata=lambda: {},
         save_metadata=lambda _data: None,
@@ -689,18 +688,19 @@ def test_the_factory_builds_a_zigbee_provider_outside_demo_mode():
     assert isinstance(provider, Zigbee2MqttContactSensorProvider)
 
 
-def test_the_factory_still_refuses_a_simulator_outside_demo_mode():
+def test_the_factory_builds_a_simulator_whatever_the_hub(tmp_path):
     from sensor_provider import create_provider
+    from sensor_simulated import SimulatedContactSensorProvider
 
-    with pytest.raises(RuntimeError):
-        create_provider("simulated", demo_mode=False)
+    provider = create_provider("simulated", path=tmp_path / "sensors.json")
+    assert isinstance(provider, SimulatedContactSensorProvider)
 
 
 def test_the_factory_refuses_an_unknown_provider():
     from sensor_provider import create_provider
 
     with pytest.raises(ValueError):
-        create_provider("hue", demo_mode=True)
+        create_provider("hue")
 
 
 def test_settings_accept_the_zigbee_provider(tmp_path):

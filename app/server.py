@@ -1700,7 +1700,8 @@ async def apply_hub_config(demo_mode: bool, serial: str, ip: str) -> dict:
     if not demo_mode and sensor_settings.enabled:
         raise HTTPException(
             status_code=409,
-            detail="Disable Zigbee sensors before switching to a real hub.",
+            detail="Turn contact sensors off before switching to a real hub. "
+                   "They can be turned back on afterwards.",
         )
 
     config = {"demo_mode": bool(demo_mode), "serial": serial, "ip": ip}
@@ -2027,8 +2028,20 @@ def _sensor_heating_state() -> Dict[str, HeatingZone]:
             effective_mode=fallback if current == "normal" else current,
             fallback_mode=fallback,
             has_zone_override=bool(zone.get("has_zone_override")),
+            sensors_may_act=_sensors_may_act(),
         )
     return state
+
+
+def _sensors_may_act() -> bool:
+    """Whether contact sensors are allowed to change the heating at all.
+
+    Everything except invented sensors beside a real hub. Demo sensors exist
+    to be opened and closed by hand while somebody looks around, and a click
+    on one must never leave a real room in Eco. Real sensors act on either
+    hub, and demo sensors act on the demo hub, which is itself invented.
+    """
+    return DEMO_MODE or sensor_settings.provider != "simulated"
 
 
 async def _sensor_override_command(zone_id: str, mode: str) -> None:
@@ -2091,7 +2104,7 @@ async def start_sensor_service() -> None:
         return
     if sensor_wakeup is None:
         sensor_wakeup = asyncio.Event()
-    sensor_provider = create_provider(sensor_settings.provider, demo_mode=DEMO_MODE)
+    sensor_provider = create_provider(sensor_settings.provider)
     await sensor_provider.start()
     sensor_unsubscribe = sensor_provider.subscribe(_sensor_provider_event)
     for zone_id, state in sensor_automation.states.items():
@@ -3008,12 +3021,12 @@ async def get_capabilities_endpoint():
             "enabled": sensor_settings.enabled,
             "provider": sensor_settings.provider if sensor_settings.enabled else None,
             # Sensors do not depend on the hub: they arrive over a separate
-            # radio. The Zigbee provider works whether the hub is real or
-            # simulated, so the only thing demo mode decides is whether the
-            # *simulator* is also on offer.
+            # radio, and both providers run beside either hub. What demo mode
+            # decides is whether demo sensors may act on the heating; see
+            # ``_sensors_may_act``.
             "provider_supported": True,
             "providers": sorted(sensor_persistence.PROVIDERS),
-            "simulation_supported": DEMO_MODE,
+            "simulation_supported": True,
             "reason": None,
         },
     }
@@ -3068,6 +3081,9 @@ def _sensor_settings_response() -> Dict[str, Any]:
         # to type in their battery level would be offering to invent a
         # hardware reading.
         "simulated": _provider_can_simulate(),
+        # False only for demo sensors beside a real hub, so the interface can
+        # say before anybody tries it that they will warn but never heat.
+        "sensors_may_act": _sensors_may_act(),
         "pairing": _sensor_pairing_response(),
         "zones": zones,
     }
@@ -3137,10 +3153,9 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
             detail="provider must be one of: "
                    + ", ".join(sorted(sensor_persistence.PROVIDERS)),
         )
-    if body.enabled and provider == "simulated" and not DEMO_MODE:
-        _sensor_provider_unavailable(
-            "Simulated sensors are demo-only. Choose the Zigbee provider for real hardware."
-        )
+    # Demo sensors are allowed beside a real hub: it is how somebody tries the
+    # feature before a Zigbee stick arrives. They warn, but the automation
+    # stands down for them, so nothing clicked on one reaches a real heater.
     # Real sensors need a radio, and this process cannot see one: the adapter
     # is passed to the zigbee2mqtt container rather than to this one. What can
     # be checked is whether the stack that owns it is alive, which is the same
@@ -4227,7 +4242,7 @@ async def delete_zone(zone_id: str):
     require_capability("delete_zone")
     persisted_sensors = (
         sensor_persistence.load_simulated_sensors()
-        if DEMO_MODE and not sensor_settings.enabled
+        if not sensor_settings.enabled and sensor_settings.provider == "simulated"
         else []
     )
     assigned_sensors = [

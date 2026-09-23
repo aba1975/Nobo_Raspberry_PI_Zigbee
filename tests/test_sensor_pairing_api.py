@@ -356,8 +356,9 @@ def test_sensors_are_not_advertised_as_hub_dependent(client, monkeypatch):
     assert body["provider_supported"] is True
     assert body["reason"] is None
     assert "zigbee2mqtt" in body["providers"]
-    # The simulator is the part demo mode actually gates.
-    assert body["simulation_supported"] is False
+    # Demo sensors are offered beside a real hub too; they warn but never
+    # act on the heating there.
+    assert body["simulation_supported"] is True
 
 
 def test_the_simulator_is_offered_in_demo_mode(client):

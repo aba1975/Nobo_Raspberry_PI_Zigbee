@@ -203,10 +203,13 @@ There are two providers, and turning sensors on asks which — they are two
 different systems rather than two settings of one, and they do not share a
 sensor list. **Zigbee** talks to real door and window sensors
 through a USB stick; see [the hardware side](#the-hardware-side) below.
-**Simulated** invents them, for looking around without buying anything, and is
-available only in demo mode so that a simulator can never be mistaken for
-hardware. With it an administrator can create sensors, name and assign them to
-zones, and set their open/closed, availability, battery and signal state by
+**Simulated** invents them, for looking around without buying anything. It
+runs beside either hub, so the feature can be tried before a Zigbee stick
+arrives — but beside a real hub demo sensors only ever *warn*: the heating
+action stands down for them, so clicking an invented window open can never
+put a real room in Eco. Choosing Zigbee checks that the Zigbee stack is
+running and says so, keeping demo sensors, if it is not. With demo sensors an
+administrator can create sensors, name and assign them to zones, and set their open/closed, availability, battery and signal state by
 hand — all of which a real sensor reports for itself and none of which can be
 set by hand.
 

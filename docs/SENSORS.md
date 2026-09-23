@@ -416,9 +416,13 @@ reboots, and pointing a coordinator at the wrong adapter is not a failure that
 announces itself. `ZIGBEE2MQTT_TAG` is pinned so a rebuild cannot change the
 Zigbee stack under a working mesh.
 
-Then choose the provider in Settings. `simulated` stays demo-only; `zigbee2mqtt`
-is allowed in either mode, which is what lets real sensors be tested against a
-simulated hub without touching a building's heating.
+Then choose the provider in Settings. Both are allowed beside either hub.
+`zigbee2mqtt` beside a demo hub is what lets real sensors be tested without
+touching a building's heating; `simulated` beside a real hub is how the feature
+is tried before a stick arrives, and there the automation stands down
+(`BlockReason.DEMO_SENSORS`) so invented contacts warn but never change a real
+heater. Choosing `zigbee2mqtt` is refused with a 503 and the reason if the
+Zigbee stack is not answering, and nothing changes.
 
 **Choosing `zigbee2mqtt` is checked before it is accepted.** This process
 cannot see the USB stick — the adapter is passed to the *zigbee2mqtt*
