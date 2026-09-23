@@ -307,6 +307,33 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   align-items: stretch;
 }
 
+/* A category heading is a full-width row of the same grid the cards are in,
+   rather than a separate list per group. One grid means the cards go on
+   sharing their row heights and the layout keeps working at every width with
+   no breakpoints to maintain.
+
+   Deliberately quiet: small, uppercase, pine, with a hairline under it. The
+   groups are there to be scanned past, not read, and anything heavier would
+   compete with the room names that people actually came for. */
+.zone-group-head {
+  grid-column: 1 / -1;
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem;
+  margin: .75rem 0 -.1rem;
+  padding-bottom: .3rem;
+  border-bottom: 1px solid var(--rule);
+}
+.zone-group-head:first-child { margin-top: .1rem; }
+.grp-name {
+  margin: 0;
+  font-size: .74rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--pine);
+}
+/* The summary is the reason the heading exists, so it sits on the same line
+   as the name rather than under it - one line per group, not two. */
+.grp-sum { font-size: .78rem; color: var(--ink-faint); }
+.grp-cold { color: var(--m-away); font-weight: 600; }
+.grp-warn { color: var(--amber); font-weight: 600; }
+
 .zone {
   position: relative;
   display: grid;

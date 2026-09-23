@@ -2019,6 +2019,103 @@
       </li>`;
   }
 
+  /* ------------------------------------------------------------------
+   * Grouping the cards by category
+   *
+   * Categories are this application's own idea, kept beside the zone icon and
+   * unknown to the hub. They exist so a building with more rooms than fit on
+   * a screen can be scanned by part - bathrooms, upstairs - rather than read
+   * end to end.
+   *
+   * The whole design rests on grouping having to earn its pixels. Below the
+   * threshold, or when the categories do not actually divide the list, the
+   * page renders exactly as it did before: one grid, no headings, nothing to
+   * explain to somebody with four rooms.
+   * ---------------------------------------------------------------- */
+
+  /* Fewer than this and the list is short enough to read whole, so headings
+     would be chrome around something nobody was struggling with. */
+  const GROUPING_MIN_ZONES = 6;
+
+  /** Zones bucketed by category, in the order the categories first appear.
+   *
+   *  Order is inherited rather than chosen: the first zone of a category fixes
+   *  where that category sits. That keeps the groups in the same order as the
+   *  zone list they came from, and means no reordering UI has to exist.
+   *  Uncategorised zones always come last, whenever they turned up.
+   */
+  function zoneGroups(zones) {
+    const buckets = new Map();
+    for (const zone of zones) {
+      const key = String(zone.category || '').trim();
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(zone);
+    }
+    const named = [...buckets.keys()].filter(Boolean).map(key => [key, buckets.get(key)]);
+    if (buckets.has('')) named.push(['', buckets.get('')]);
+    return named;
+  }
+
+  /** Whether grouping those zones is worth the headings it costs. */
+  function groupingIsWorthIt(zones, groups) {
+    return zones.length >= GROUPING_MIN_ZONES
+      && groups.length >= 2
+      && groups.some(([name]) => name);
+  }
+
+  /* A room worth walking to: a contact sensor has raised a warning, or the
+     set point was changed on a heater behind the application's back. Both
+     already have a badge on the card; the group line only counts them. */
+  function zoneNeedsAttention(zone) {
+    return !!(zone.sensor_summary && zone.sensor_summary.warning_raised)
+      || !!zone.setpoint_changed_outside;
+  }
+
+  /** What a group heading says about itself.
+   *
+   *  The point of the heading. A line that only repeats the word you typed is
+   *  decoration; one that reports what the rooms under it are doing can answer
+   *  the question without the cards being read at all.
+   *
+   *  Every part of it degrades: most hubs report no room temperature whatever
+   *  - every component here has `tempsensor_for_zone_id = None` - so "coldest"
+   *  simply does not appear rather than inventing a number.
+   */
+  function groupSummary(zones) {
+    const parts = [`${zones.length} ${zones.length === 1 ? 'zone' : 'zones'}`];
+
+    const modes = new Set(zones.map(zone => Nobo.effectiveMode(zone)));
+    if (modes.size === 1) {
+      const only = [...modes][0];
+      parts.push(`all at ${(Nobo.MODES[only] || {}).label || only}`);
+    } else {
+      const measured = zones.filter(zone => zone.current_temperature != null);
+      if (measured.length) {
+        const coldest = measured.reduce((a, b) =>
+          b.current_temperature < a.current_temperature ? b : a);
+        parts.push(`coldest <span class="grp-cold">${Nobo.fmtTemp(coldest.current_temperature)}\u00B0</span>`);
+      }
+    }
+
+    const attention = zones.filter(zoneNeedsAttention).length;
+    if (attention) {
+      parts.push(`<span class="grp-warn">${attention} ${attention === 1 ? 'needs' : 'need'} attention</span>`);
+    }
+    return parts.join(' \u00B7 ');
+  }
+
+  /* A heading is a full-width row of the same grid the cards are in, so the
+     cards keep sharing their row heights and the layout stays one grid with
+     no breakpoints. Uncategorised zones are gathered under "Other" rather
+     than being nagged into a category they may not want. */
+  function groupHeadingRow(name, zones) {
+    return `
+      <li class="zone-group-head" role="presentation">
+        <h3 class="grp-name">${esc(name || 'Other')}</h3>
+        <span class="grp-sum">${groupSummary(zones)}</span>
+      </li>`;
+  }
+
   function renderZones() {
     const list = $('#zoneList');
     if (!state.zones.length) {
@@ -2027,7 +2124,11 @@
       $('#roomsNote').textContent = '';
       return;
     }
-    list.innerHTML = state.zones.map(zoneRow).join('');
+    const groups = zoneGroups(state.zones);
+    list.innerHTML = groupingIsWorthIt(state.zones, groups)
+      ? groups.map(([name, zones]) =>
+          groupHeadingRow(name, zones) + zones.map(zoneRow).join('')).join('')
+      : state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
     const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'zone' : 'zones'}`;
     $('#roomsNote').textContent = manual
@@ -3544,10 +3645,25 @@
     });
   }
 
+  /* Name and category in one sheet.
+   *
+   * The category is free text with the ones already in use offered beneath it:
+   * a picker would need a manager to add and rename entries, and a plain box
+   * invites "Upstairs" and "upstairs" to become two groups. The datalist is
+   * the smallest thing that avoids both. */
   function renameZone(zone) {
-    openSheet('Rename zone', `
+    const used = [...new Set(state.zones
+      .map(z => String(z.category || '').trim())
+      .filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    openSheet('Zone details', `
       <label class="field"><span>Zone name</span>
         <input type="text" id="rzName" value="${esc(zone.name)}" autocomplete="off"></label>
+      <label class="field"><span>Part of the building <small class="field-hint">Optional. Zones sharing a
+        category are grouped together on the front page, once there are enough to be worth it.</small></span>
+        <input type="text" id="rzCategory" list="rzCategories" autocomplete="off"
+          placeholder="Bathrooms, Upstairs, Boathouse\u2026"
+          value="${esc(zone.category || '')}"></label>
+      <datalist id="rzCategories">${used.map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Save</button>
@@ -3556,10 +3672,14 @@
       root.querySelector('[data-act="ok"]').onclick = async () => {
         const name = root.querySelector('#rzName').value.trim();
         if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
+        const typed = root.querySelector('#rzCategory').value.trim();
+        /* Match an existing category that differs only by case, so "upstairs"
+           joins "Upstairs" instead of starting a second group beside it. */
+        const category = used.find(c => c.toLowerCase() === typed.toLowerCase()) || typed;
         try {
-          await Nobo.api.updateZone(zone.zone_id, { name });
+          await Nobo.api.updateZone(zone.zone_id, { name, category });
           closeSheet();
-          Nobo.toast('Zone renamed');
+          Nobo.toast('Zone saved');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };

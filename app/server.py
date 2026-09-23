@@ -383,6 +383,10 @@ demo_schedules: Dict[str, dict] = config_persistence.load_demo_schedules()
 # kept locally and apply in both demo and real-hub mode. Keyed by zone id.
 zone_icons: Dict[str, str] = config_persistence.load_zone_icons()
 
+# Which part of the building a zone is in, so the front page can group the
+# cards. The hub has no such field either, so the same arrangement applies.
+zone_categories: Dict[str, str] = config_persistence.load_zone_categories()
+
 # Optional contact sensors. The provider is started only when the persisted
 # master switch is on; disabled installations pay no runtime or UI cost.
 sensor_settings: SensorSettings = sensor_persistence.load_sensor_settings()
@@ -1065,6 +1069,9 @@ class ZoneAdd(BaseModel):
 class ZoneUpdate(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
+    # Which part of the building this zone is in, used only to group the cards
+    # on the front page. Free text, and "" means uncategorised.
+    category: Optional[str] = None
     # The hub's own ``override_allowed`` flag, phrased the way it behaves.
     # True: Home, Away, Comfort and Eco from the front page apply to this zone.
     # False: the zone keeps whatever it was set to and ignores them.
@@ -2472,6 +2479,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'zone_id': demo_zone['zone_id'],
                 'name': demo_zone['name'],
                 'icon': demo_zone.get('icon', ''),
+                'category': zone_categories.get(str(demo_zone['zone_id']), ''),
                 'rooms': demo_zone.get('rooms', []),
                 'components': demo_zone['components'],
                 'components_display': components_display,
@@ -2558,6 +2566,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'zone_id': str(zone_id),
                 'name': zone_name,
                 'icon': zone_icons.get(str(zone_id), ''),
+                'category': zone_categories.get(str(zone_id), ''),
                 'rooms': [zone_name],  # Default to zone name
                 'components': zone_components,
                 'components_display': components_display,
@@ -3797,6 +3806,17 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
         if update.icon is not None:
             zone_icons[str(zone_id)] = update.icon.strip()
             config_persistence.save_zone_icons(zone_icons)
+
+        if update.category is not None:
+            category = update.category.strip()
+            if category:
+                zone_categories[str(zone_id)] = category
+            else:
+                # Uncategorised is the absence of a key rather than an empty
+                # one, so the file does not fill up with blanks for every zone
+                # somebody ever opened and left alone.
+                zone_categories.pop(str(zone_id), None)
+            config_persistence.save_zone_categories(zone_categories)
 
         await asyncio.sleep(0.3)
         return {
