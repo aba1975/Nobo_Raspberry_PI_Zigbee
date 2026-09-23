@@ -1404,3 +1404,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sensor-router-list li { display: flex; align-items: center; gap: .45rem; }
 .sensor-router-list li > span { display: flex; flex-direction: column; }
 .sensor-router-list small { color: var(--ink-soft); font-size: .76rem; }
+
+/* An alert that works, but not yet: the equipment it watches is switched off.
+   Dimmed rather than hidden, because hiding it made somebody who had just
+   added the feature conclude the update had not arrived — and because the
+   sensor source control a few topics above greys its unavailable option out
+   and says why, rather than removing it. */
+.notify-row.is-unavailable { opacity: .55; }
+.notify-row.is-unavailable input { cursor: not-allowed; }

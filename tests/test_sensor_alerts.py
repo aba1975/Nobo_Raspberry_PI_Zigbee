@@ -96,19 +96,50 @@ def test_every_new_alert_is_off_by_default(key):
 @pytest.mark.parametrize("key", [
     "contact_open_long", "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
 ])
-def test_the_sensor_alerts_are_hidden_when_sensors_are_off(key, monkeypatch):
-    """A Nobø-only installation must not be offered alerts about equipment it
-    does not have."""
+def test_the_sensor_alerts_say_why_they_are_unavailable(key, monkeypatch):
+    """They used to be removed, and somebody who had just added the feature
+    could not find them and concluded the update had not arrived.
+
+    They are not in the same class as the deleted cold-room alarm, which could
+    never work on this hardware. These work the moment sensors are switched on,
+    so they are shown and explained rather than hidden.
+    """
     from sensor_persistence import SensorSettings
 
     # SensorSettings is frozen, so the whole object is replaced rather than
     # poked — which is also how the application changes it.
     monkeypatch.setattr(server, "sensor_settings", SensorSettings(enabled=False))
     out = server._filter_sensor_notification_settings({
-        "events": {key: False}, "event_types": {key: EVENT_TYPES[key]},
+        "events": {key: True}, "event_types": {key: dict(EVENT_TYPES[key])},
     })
-    assert key not in out["event_types"]
-    assert key not in out["events"]
+    assert key in out["event_types"], "hiding it is what caused the confusion"
+    assert out["event_types"][key]["unavailable"]
+    assert out["events"][key] is False, "it must not look armed when it cannot fire"
+
+
+def test_marking_them_does_not_scar_the_shared_catalogue(monkeypatch):
+    """EVENT_TYPES is module-level. Marking it in place would mark it for every
+    installation this process serves until it restarts."""
+    from sensor_persistence import SensorSettings
+
+    monkeypatch.setattr(server, "sensor_settings", SensorSettings(enabled=False))
+    server._filter_sensor_notification_settings({
+        "events": {"sensor_quiet": False},
+        "event_types": {"sensor_quiet": dict(EVENT_TYPES["sensor_quiet"])},
+    })
+    assert "unavailable" not in EVENT_TYPES["sensor_quiet"]
+
+
+def test_they_are_offered_normally_once_sensors_are_on(monkeypatch):
+    from sensor_persistence import SensorSettings
+
+    monkeypatch.setattr(server, "sensor_settings", SensorSettings(enabled=True))
+    out = server._filter_sensor_notification_settings({
+        "events": {"sensor_quiet": True},
+        "event_types": {"sensor_quiet": dict(EVENT_TYPES["sensor_quiet"])},
+    })
+    assert "unavailable" not in out["event_types"]["sensor_quiet"]
+    assert out["events"]["sensor_quiet"] is True
 
 
 # -- a door left open ------------------------------------------------------
@@ -564,3 +595,16 @@ def test_comfort_and_eco_are_not_away(sent, monkeypatch):
             {"1": "Kitchen"},
         )
         assert [m for m in sent if m["type"] == "contact_open_while_away"] == [], mode
+
+
+def test_an_unavailable_alert_is_drawn_dimmed_and_cannot_be_ticked():
+    cabin = (
+        server.Path(server.__file__).resolve().parent
+        / "static" / "ui" / "cabin" / "cabin.js"
+    ).read_text(encoding="utf-8")
+    css = (
+        server.Path(server.__file__).resolve().parent
+        / "static" / "ui" / "cabin" / "cabin.css"
+    ).read_text(encoding="utf-8")
+    assert "types[key].unavailable ? 'disabled'" in cabin
+    assert ".notify-row.is-unavailable" in css

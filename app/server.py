@@ -3670,15 +3670,36 @@ def _temperature_capability() -> Dict[str, Any]:
 
 
 def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark the sensor alerts unavailable when there are no sensors.
+
+    They used to be removed outright, on the reasoning that an alert which
+    cannot fire is worse than none. That reasoning belongs to the alerts that
+    were *deleted* — a cold-room alarm can never work on this hardware, so
+    offering it would be a lie. These are different: they work perfectly, as
+    soon as contact sensors are switched on.
+
+    Removing them meant somebody who had just added one could not find it and
+    reasonably concluded the update had not arrived. It was also inconsistent
+    with the sensor source control a few topics above, which greys the Zigbee
+    option out and says why rather than hiding it.
+    """
     if sensor_settings.enabled:
         return out
+    reason = "Needs contact sensors, which are off."
+    types = out.get("event_types", {})
     for key in (
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
         "contact_open_while_away",
     ):
-        out.get("events", {}).pop(key, None)
-        out.get("event_types", {}).pop(key, None)
+        spec = types.get(key)
+        if spec is None:
+            continue
+        # Copied, never mutated in place: EVENT_TYPES is module-level and
+        # shared, and marking it here would mark it for every installation
+        # this process serves until it restarts.
+        types[key] = {**spec, "unavailable": reason}
+        out.get("events", {})[key] = False
     return out
 
 

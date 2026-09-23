@@ -657,9 +657,10 @@ With [contact sensors](#contact-sensors) switched on, six more appear.
 They are the only alerts here whose subject is the *equipment* rather than the
 house, and that is not an accident: a Nobø component's status field is
 permanently 0, so a heater cannot say it is unwell, while a Zigbee contact can
-say when it last spoke and roughly what charge it has left. On a Nobø-only
-installation these are hidden rather than shown greyed out — an alert that
-could never fire is worse than no alert.
+say when it last spoke and roughly what charge it has left. Without sensors
+they are shown dimmed and say why, rather than vanishing: they are not in the
+same class as the deleted cold-room alarm, which could never work on this
+hardware — these work the moment you switch sensors on.
 
 | Event | What it means |
 | --- | --- |

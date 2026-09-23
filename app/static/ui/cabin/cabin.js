@@ -4765,11 +4765,15 @@
       <h3 class="notify-head">What to tell me about</h3>
       <div class="exc-list">
         ${Object.keys(types).map(key => `
-          <label class="exc-row notify-row">
+          <label class="exc-row notify-row ${types[key].unavailable ? 'is-unavailable' : ''}">
             <input type="checkbox" data-ev="${esc(key)}"
-                   ${n.events[key] ? 'checked' : ''} ${dis}>
+                   ${n.events[key] ? 'checked' : ''}
+                   ${types[key].unavailable ? 'disabled' : dis}>
             <span class="exc-name">${esc(types[key].label)}
-              <small class="field-hint">${esc(types[key].help)}</small>
+              <small class="field-hint">${esc(types[key].help)}${
+                types[key].unavailable
+                  ? ` <strong>${esc(types[key].unavailable)}</strong>`
+                  : ''}</small>
             </span>
           </label>`).join('')}
       </div>
