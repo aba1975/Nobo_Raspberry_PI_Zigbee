@@ -18,6 +18,30 @@
 	# on. Inside a container that achieves nothing and just logs a failure, and
 	# the root is exported by hand anyway.
 	skip_install_trust
+
+	# HTTP/1.1 and HTTP/2 only — no HTTP/3.
+	#
+	# QUIC wants a 7 MB UDP receive buffer and a Raspberry Pi gives it 208 kB,
+	# which Caddy says out loud at every start:
+	#
+	#   failed to sufficiently increase receive buffer size
+	#   (was: 208 kiB, wanted: 7168 kiB, got: 416 kiB)
+	#
+	# It is not a warning to ignore. Caddy still advertises h3 in Alt-Svc, so a
+	# browser moves to QUIC on its second visit and keeps doing so for thirty
+	# days — and over an undersized buffer that is slower than the TCP it left,
+	# sometimes by enough to look like the Pi has stopped responding. Reported
+	# as "the webpage loads very slowly", and invisible to curl, which stays on
+	# HTTP/1.1 and never sees the problem.
+	#
+	# The alternative is raising net.core.rmem_max on the host, which is a
+	# change to the Pi rather than to this application, has to be repeated on
+	# every installation, and buys nothing here: HTTP/3 exists for lossy mobile
+	# links and long round trips, and this is a cable to a device in the same
+	# building.
+	servers {
+		protocols h1 h2
+	}
 }
 
 {$NOBO_DOMAIN} {

@@ -13,6 +13,16 @@
 	# Let's Encrypt emails this address before a certificate expires, which is
 	# the only warning you get if renewal has been failing.
 	email {$NOBO_TLS_EMAIL}
+
+	# HTTP/1.1 and HTTP/2 only, for the same reason as the internal-CA
+	# Caddyfile: QUIC wants a 7 MB UDP receive buffer, a Raspberry Pi offers
+	# 208 kB, and a browser that takes the advertised h3 ends up slower than
+	# the TCP it left — for thirty days, because that is how long Alt-Svc is
+	# remembered. Both files carry this, so which certificate you chose cannot
+	# decide whether the site is fast.
+	servers {
+		protocols h1 h2
+	}
 }
 
 {$NOBO_DOMAIN} {

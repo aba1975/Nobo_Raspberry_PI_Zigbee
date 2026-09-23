@@ -468,3 +468,34 @@ class TestTheRadioIsConfigurableWithoutEditingTheVolume:
         assert "Wi-Fi" in block.group(0)
         assert "11" in block.group(0)
 
+
+
+class TestTheProxyDoesNotOfferQuicToAPi:
+    """Reported as "the webpage loads very slowly".
+
+    Caddy turns on HTTP/3 by default and advertises it in Alt-Svc, so a
+    browser moves to QUIC on its second visit and remembers to for thirty
+    days. QUIC asks for a 7 MB UDP receive buffer; a Raspberry Pi grants
+    208 kB, and Caddy says so at every start:
+
+        failed to sufficiently increase receive buffer size
+        (was: 208 kiB, wanted: 7168 kiB, got: 416 kiB)
+
+    Over that buffer HTTP/3 is slower than the HTTP/2 it replaced, sometimes
+    by enough to look like the Pi has stopped answering. It was invisible in
+    testing because curl stays on HTTP/1.1 and never takes the offer.
+    """
+
+    def test_both_caddyfiles_serve_tcp_only(self):
+        for path in (CADDYFILE, CADDYFILE_ACME):
+            text = path.read_text(encoding="utf-8")
+            assert re.search(r"servers\s*\{[^}]*protocols\s+h1\s+h2", text), (
+                f"{path.name} still lets Caddy offer HTTP/3"
+            )
+
+    def test_the_reason_is_written_down_where_it_would_be_undone(self):
+        """Somebody tidying this will delete it unless the comment explains
+        that it is load-bearing."""
+        text = CADDYFILE.read_text(encoding="utf-8")
+        assert "receive buffer" in text
+        assert "Alt-Svc" in text
