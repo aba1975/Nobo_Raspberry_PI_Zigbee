@@ -653,7 +653,7 @@ then comes from the account it really came from.
 | **Something changed from another app** | A zone changed and it was not this system that did it. |
 | **An away period starts or ends** | Confirms a planned trip actually took effect. |
 
-With [contact sensors](#door-and-window-sensors) switched on, six more appear.
+With [contact sensors](#contact-sensors) switched on, six more appear.
 They are the only alerts here whose subject is the *equipment* rather than the
 house, and that is not an accident: a Nobø component's status field is
 permanently 0, so a heater cannot say it is unwell, while a Zigbee contact can
@@ -663,6 +663,7 @@ could never fire is worse than no alert.
 
 | Event | What it means |
 | --- | --- |
+| **Something is open and the house is empty** | Open while the global mode is Away — the last moment you can turn the car around. **The only sensor alert marked urgent, so quiet hours cannot hold it.** Held for five minutes first, because the front door is open while you are walking out of it. One alert for the house, naming every open room. |
 | **A door or window is left open** | After that zone's warning delay. |
 | **The door or window is closed again** | Every contact in a warned zone reports closed. |
 | **A door or window is still open a day later** | An escalation, not a repeat. The first says you left something open; this says nobody has dealt with it — usually a different person, on a different day. |

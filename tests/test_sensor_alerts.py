@@ -393,3 +393,174 @@ def test_the_from_field_warns_that_a_provider_may_overrule_it():
     hint = hint[:hint.index("</label>")]
     assert "may overrule this" in hint
     assert "Send mail as" in hint
+
+
+# -- open, with nobody coming back -----------------------------------------
+#
+# The one the owner called most critical: a window open while the house is set
+# to Away, which may be weeks before anybody looks again.
+
+
+@pytest.fixture
+def away(monkeypatch):
+    monkeypatch.setattr(server, "_global_override_mode", lambda: "away")
+
+
+@pytest.fixture
+def at_home(monkeypatch):
+    monkeypatch.setattr(server, "_global_override_mode", lambda: None)
+
+
+def test_open_while_away_is_reported(sent, monkeypatch, away):
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    opened = time.time() - 600  # past the grace period
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=opened)}), {"1": "Kitchen"}
+    )
+
+    alerts = [m for m in sent if m["type"] == "contact_open_while_away"]
+    assert len(alerts) == 1
+    assert "Kitchen" in alerts[0]["subject"]
+
+
+def test_it_is_urgent_so_quiet_hours_cannot_hold_it(sent, monkeypatch, away):
+    """Leaving at 23:00 is exactly when a held-back alert is useless, and
+    'critical' is the only severity that ignores quiet hours."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=time.time() - 600)}), {"1": "Kitchen"}
+    )
+
+    alert = [m for m in sent if m["type"] == "contact_open_while_away"][0]
+    assert alert["severity"] == "critical"
+
+
+def test_walking_out_of_the_front_door_is_not_an_alarm(sent, monkeypatch, away):
+    """The trap that would have made this useless: the front door is open
+    *while* you walk out of it, so firing immediately would cry wolf on every
+    single departure — and then be ignored on the one that mattered."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=time.time() - 5)}), {"1": "Hallway"}
+    )
+
+    assert [m for m in sent if m["type"] == "contact_open_while_away"] == []
+
+
+def test_the_grace_period_schedules_its_own_check(monkeypatch, away):
+    """Nothing else will happen if you leave a door open and drive off."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    opened = time.time() - 5
+
+    deadline = server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=opened)}), {"1": "Hallway"}
+    )
+
+    assert deadline == pytest.approx(opened + server.SENSOR_AWAY_GRACE_SECONDS)
+
+
+def test_a_window_open_since_breakfast_alerts_the_moment_you_leave(sent, monkeypatch, away):
+    """Measuring the grace from when the contact opened, not from when Away was
+    set, is what gives the right answer in both directions."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=time.time() - 6 * 3600)}),
+        {"1": "Kitchen"},
+    )
+
+    assert len([m for m in sent if m["type"] == "contact_open_while_away"]) == 1
+
+
+def test_nothing_is_said_while_somebody_is_home(sent, monkeypatch, at_home):
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=time.time() - 6 * 3600)}),
+        {"1": "Kitchen"},
+    )
+
+    assert [m for m in sent if m["type"] == "contact_open_while_away"] == []
+
+
+def test_several_open_rooms_are_one_alert_naming_them_all(sent, monkeypatch, away):
+    """Three emails for three windows is the noise that gets a rule switched
+    off, and you need the whole list to decide whether to turn back."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    opened = time.time() - 600
+
+    server._evaluate_sensor_alerts(
+        _result({
+            "1": _aggregate(zone_id="1", open_started_at=opened),
+            "2": _aggregate(zone_id="2", open_started_at=opened),
+        }),
+        {"1": "Kitchen", "2": "Loft"},
+    )
+
+    alerts = [m for m in sent if m["type"] == "contact_open_while_away"]
+    assert len(alerts) == 1
+    assert "Kitchen" in alerts[0]["subject"] and "Loft" in alerts[0]["subject"]
+
+
+def test_shutting_it_reports_the_recovery(sent, monkeypatch, away):
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    opened = time.time() - 600
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=opened)}), {"1": "Kitchen"}
+    )
+    sent.clear()
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=None)}), {"1": "Kitchen"}
+    )
+
+    recoveries = [m for m in sent if m["type"] == "contact_open_while_away"]
+    assert len(recoveries) == 1
+    assert "shut" in recoveries[0]["subject"]
+
+
+def test_coming_home_clears_it_without_an_email(sent, monkeypatch):
+    """"You are back" is not news to somebody who has just walked in. The
+    recovery exists for the other ending — that somebody went and shut it."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    monkeypatch.setattr(server, "_global_override_mode", lambda: "away")
+    opened = time.time() - 600
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=opened)}), {"1": "Kitchen"}
+    )
+    sent.clear()
+
+    monkeypatch.setattr(server, "_global_override_mode", lambda: None)
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=opened)}), {"1": "Kitchen"}
+    )
+
+    assert sent == []
+
+
+def test_it_is_said_once_not_every_pass(sent, monkeypatch, away):
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    result = _result({"1": _aggregate(open_started_at=time.time() - 600)})
+
+    server._evaluate_sensor_alerts(result, {"1": "Kitchen"})
+    server._evaluate_sensor_alerts(result, {"1": "Kitchen"})
+    server._evaluate_sensor_alerts(result, {"1": "Kitchen"})
+
+    assert len([m for m in sent if m["type"] == "contact_open_while_away"]) == 1
+
+
+def test_comfort_and_eco_are_not_away(sent, monkeypatch):
+    """Only Away means nobody is coming back. A house held on Eco is occupied."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+    for mode in ("comfort", "eco", "normal", None):
+        server.notifier._conditions.clear()
+        sent.clear()
+        monkeypatch.setattr(server, "_global_override_mode", lambda m=mode: m)
+        server._evaluate_sensor_alerts(
+            _result({"1": _aggregate(open_started_at=time.time() - 6 * 3600)}),
+            {"1": "Kitchen"},
+        )
+        assert [m for m in sent if m["type"] == "contact_open_while_away"] == [], mode

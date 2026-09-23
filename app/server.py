@@ -2191,6 +2191,20 @@ SENSOR_QUIET_SECONDS = 6 * 3600
 # cannot disagree about what "low" means.
 SENSOR_BATTERY_LOW_PERCENT = 20
 
+# How long an open contact is tolerated after the house goes to Away.
+#
+# Not a delay for its own sake: the front door is open *while you are walking
+# out of it*, so without this the most important alert in the system would fire
+# on every single departure — and an alert that cries wolf every time is how
+# somebody learns to ignore the one that matters. Five minutes covers leaving
+# and is still early enough to turn the car around.
+#
+# It is measured from when the contact opened rather than from when Away was
+# set, which gives the right answer in both directions: a window that has been
+# open since breakfast alerts the moment you leave, and a door opened as you go
+# gets its five minutes.
+SENSOR_AWAY_GRACE_SECONDS = 5 * 60
+
 
 def _evaluate_sensor_alerts(
     result: SensorAutomationResult, zones_by_id: Dict[str, str]
@@ -2207,6 +2221,64 @@ def _evaluate_sensor_alerts(
     """
     now = time.time()
     deadlines: List[float] = []
+
+    # --- open, with nobody coming back ------------------------------------
+    #
+    # The most serious thing this system can detect, and the only sensor alert
+    # marked urgent — which is what lets it through quiet hours. Leaving at
+    # 23:00 is precisely when a held-back alert would be useless.
+    #
+    # One alert for the house rather than one per window: "you left with
+    # something open" is a single event, and three emails for three windows is
+    # the noise that gets a rule switched off. The rooms are named in the body.
+    away = _global_override_mode() == "away"
+    open_rooms: List[str] = []
+    away_due: List[float] = []
+    for zone_id, aggregate in result.zones.items():
+        started = aggregate.open_started_at
+        if started is None:
+            continue
+        due = started + SENSOR_AWAY_GRACE_SECONDS
+        if now >= due:
+            open_rooms.append(zones_by_id.get(zone_id, f"Zone {zone_id}"))
+        elif away:
+            away_due.append(due)
+    if away:
+        deadlines.extend(away_due)
+
+    key = "contact-open-while-away"
+    if away and open_rooms:
+        rooms = ", ".join(sorted(open_rooms))
+        notifier.set_condition(
+            "contact_open_while_away", key, True,
+            subject=f"Open and empty: {rooms}",
+            body=(
+                f"{site_settings()['display_name']} is set to Away and these are "
+                f"open: {rooms}.\n\n"
+                f"Away holds every room at the anti-frost temperature, so nothing here "
+                f"is going to warm the place up while it is open. If nobody is going "
+                f"back soon this is worth a telephone call to somebody nearby.\n\n"
+                f"A sensor knocked off its frame reads open for ever and looks exactly "
+                f"the same from here, so it is worth checking the app before anyone "
+                f"drives out."
+            ),
+            severity="critical",
+            recovery_subject="Everything is shut again",
+            recovery_body="Every contact sensor reports closed again.",
+            recovery_event_type="contact_open_while_away",
+        )
+    elif not away:
+        # Coming home clears it without an email. "You are back" is not news to
+        # somebody who has just walked in, and the recovery message exists for
+        # the other ending: that somebody went and shut it.
+        notifier.set_condition("contact_open_while_away", key, False)
+    else:
+        notifier.set_condition(
+            "contact_open_while_away", key, False,
+            recovery_subject="Everything is shut again",
+            recovery_body="Every contact sensor reports closed again.",
+            recovery_event_type="contact_open_while_away",
+        )
 
     # --- a door or window nobody has dealt with ----------------------------
     for zone_id, aggregate in result.zones.items():
@@ -3603,6 +3675,7 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
     for key in (
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
+        "contact_open_while_away",
     ):
         out.get("events", {}).pop(key, None)
         out.get("event_types", {}).pop(key, None)

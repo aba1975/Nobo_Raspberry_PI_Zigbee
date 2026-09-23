@@ -192,6 +192,16 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
                 "instead of one per sensor, and the individual warnings are held back "
                 "while it is raised.",
     },
+    "contact_open_while_away": {
+        "label": "Something is open and the house is empty",
+        "default": False,
+        "help": "The one worth being woken for: a door or window open while the house is "
+                "set to Away, which is usually the last moment you can turn the car "
+                "around. Marked urgent, so it is the only sensor alert that ignores "
+                "quiet hours. Held for five minutes first, because the front door is "
+                "open while you are walking out of it and an alert every single "
+                "departure would teach you to ignore this one.",
+    },
 }
 
 SEVERITIES = {"info", "warning", "critical"}

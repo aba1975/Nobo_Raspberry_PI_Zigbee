@@ -21,6 +21,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
 
+import pathlib
+
 import notifications
 import notify_watch
 
@@ -141,12 +143,37 @@ def test_only_honest_alerts_remain():
       says plainly that it is weeks of notice and cannot be asked for.
     - ``sensor_all_quiet`` — the same evidence read as one fault, so a stopped
       container does not arrive as one email per sensor.
+    - ``contact_open_while_away`` — two facts this system already holds, read
+      together: the global override is Away, and a contact is open.
     """
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
+        "contact_open_while_away",
     }
+
+
+def test_only_the_two_alerts_that_cannot_wait_ignore_quiet_hours():
+    """Quiet hours exist so routine news waits until morning, and the exception
+    has to stay an exception: if everything were urgent, nothing would be.
+
+    Two earn it, and both for the same reason — the delay *is* the damage.
+    Losing the hub means nothing can be switched by anybody until it returns.
+    Open-while-away means you are leaving now, and by morning you are hours
+    away with the anti-frost temperature holding an open room.
+    """
+    import re
+
+    import server
+
+    source = pathlib.Path(server.__file__).read_text(encoding="utf-8")
+    urgent = set()
+    for block in source.split("notifier.set_condition(")[1:]:
+        head = block[:block.index(")\n")] if ")\n" in block else block[:2000]
+        if 'severity="critical"' in head:
+            urgent.add(re.search(r'"([a-z_]+)"', head).group(1))
+    assert urgent == {"hub_offline", "contact_open_while_away"}
 
 
 def test_every_alert_states_its_own_limit():

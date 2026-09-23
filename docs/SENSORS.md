@@ -527,6 +527,21 @@ idle house still does not poll.
 knocked off its frame.** Both read open for ever. The email says so, rather than
 sending somebody to the cabin certain of what they will find.
 
+**Open-while-away is the one alert that ignores quiet hours**, because the delay
+is the damage: you are leaving now, and by morning you are hours away with the
+anti-frost temperature holding an open room. It is also the one that needed a
+grace period, for a reason that only appears once it is installed — *the front
+door is open while you are walking out of it*, so firing the instant Away is set
+would cry wolf on every single departure, and a rule that cries wolf is a rule
+that gets switched off. Five minutes covers leaving.
+
+The grace is measured from when the contact opened rather than from when Away
+was set, which is what gives the right answer in both directions: a window open
+since breakfast alerts the moment you leave, while a door opened as you go gets
+its five minutes. Coming home clears the alert without sending anything — "you
+are back" is not news to somebody who has just walked in — but somebody going
+and shutting it does send the recovery.
+
 Two things make that age trustworthy:
 
 **It is the device's timestamp, not ours.** With `last_seen: ISO_8601` set in
