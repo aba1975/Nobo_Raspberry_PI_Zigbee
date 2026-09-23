@@ -634,6 +634,18 @@ press **Save alerts**. Use **Send a test email** first — if the mail server
 refuses, you get its actual words back, because "authentication failed" and "no
 such host" need different fixes.
 
+**The From address is a request, not an instruction.** This application puts
+whatever you type there on the message, but the provider sending it has the
+last word, and Gmail in particular replaces it with the account you signed in
+as. Gmail will honour another address only if you have added and verified it
+under *Settings → Accounts → Send mail as* — and [from January
+2027](https://support.google.com/mail/answer/22370) it stops offering that for
+addresses outside your own domain, so an address like `alerts@yourdomain.com`
+sent through a personal Gmail is a dead end rather than a configuration
+problem. If the From address matters to you, send through the provider that
+hosts that domain. If it does not, leaving the field empty is honest: the mail
+then comes from the account it really came from.
+
 | Event | What it means |
 | --- | --- |
 | **Hub goes offline** | The Pi has lost contact with the hub — hub power, or the network. Noticed within about half a minute. **The only fault this hardware genuinely reports.** |

@@ -342,3 +342,54 @@ def test_the_quiet_threshold_matches_the_one_on_screen():
     ).read_text(encoding="utf-8")
     hours = server.SENSOR_QUIET_SECONDS // 3600
     assert f"SENSOR_QUIET_HOURS = {hours}" in cabin
+
+
+# -- the From address ------------------------------------------------------
+
+
+def test_the_configured_from_address_is_the_one_sent():
+    """It reached the message correctly all along — the confusion came from
+    Gmail rewriting it, not from this code — so pin it."""
+    import notifications
+
+    captured = {}
+
+    class _FakeServer:
+        def ehlo(self): pass
+        def starttls(self, context=None): pass
+        def login(self, u, p): pass
+        def send_message(self, msg): captured["from"] = msg["From"]
+        def quit(self): pass
+
+    original = notifications.smtplib.SMTP
+    notifications.smtplib.SMTP = lambda *a, **k: _FakeServer()
+    try:
+        notifications._send_email_blocking(
+            {"email": {
+                "host": "smtp.example.com", "port": 587,
+                "to_addrs": ["someone@example.com"],
+                "from_addr": "alerts@example.com",
+                "username": "account@gmail.com", "password": "x",
+                "security": "starttls",
+            }},
+            "Subject", "Body",
+        )
+    finally:
+        notifications.smtplib.SMTP = original
+
+    assert captured["from"] == "alerts@example.com", (
+        "the address the user typed must be the address on the message"
+    )
+
+
+def test_the_from_field_warns_that_a_provider_may_overrule_it():
+    """The field had no hint at all, so it silently promised something the
+    provider can ignore — which is exactly how it was reported."""
+    cabin = (
+        server.Path(server.__file__).resolve().parent
+        / "static" / "ui" / "cabin" / "cabin.js"
+    ).read_text(encoding="utf-8")
+    hint = cabin[cabin.index('id="ntFrom"'):]
+    hint = hint[:hint.index("</label>")]
+    assert "may overrule this" in hint
+    assert "Send mail as" in hint

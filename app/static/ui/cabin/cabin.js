@@ -4815,6 +4815,10 @@
           <span>From</span>
           <input type="text" id="ntFrom" value="${esc(n.email.from_addr || '')}"
                  placeholder="pi@example.com" autocomplete="off" ${dis}>
+          <small class="field-hint">Your provider may overrule this. Gmail replaces it
+          with the account you signed in as unless the address is verified under
+          <em>Send mail as</em> — and from January 2027 Gmail stops allowing that for
+          addresses outside your own domain.</small>
         </label>
       </div>
 
