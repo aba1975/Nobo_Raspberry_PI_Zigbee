@@ -105,7 +105,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
-| **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
+| **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app, and — with contact sensors — when a window is left open, when one is still open a day later, and when a sensor goes quiet or runs low on battery. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
 | **Contact sensors** | Optional and hidden until an administrator enables it. Real Zigbee door and window sensors, or simulated ones in demo mode, with prominent left-open warnings and conservative delayed heating actions. See [Contact sensors](#contact-sensors). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
@@ -640,6 +640,28 @@ such host" need different fixes.
 | **Hub comes back** | Sent after an offline alert, so you know it fixed itself. |
 | **Something changed from another app** | A zone changed and it was not this system that did it. |
 | **An away period starts or ends** | Confirms a planned trip actually took effect. |
+
+With [contact sensors](#door-and-window-sensors) switched on, six more appear.
+They are the only alerts here whose subject is the *equipment* rather than the
+house, and that is not an accident: a Nobø component's status field is
+permanently 0, so a heater cannot say it is unwell, while a Zigbee contact can
+say when it last spoke and roughly what charge it has left. On a Nobø-only
+installation these are hidden rather than shown greyed out — an alert that
+could never fire is worse than no alert.
+
+| Event | What it means |
+| --- | --- |
+| **A door or window is left open** | After that zone's warning delay. |
+| **The door or window is closed again** | Every contact in a warned zone reports closed. |
+| **A door or window is still open a day later** | An escalation, not a repeat. The first says you left something open; this says nobody has dealt with it — usually a different person, on a different day. |
+| **A sensor stops reporting** | Six hours of silence. These speak only when something changes, so silence is normal — but a flat battery looks identical, and **whatever it last said is still being believed** by the left-open warning and any heating rule. Zigbee2MQTT will not call one offline for 25 hours, which is far too late. |
+| **A sensor battery is low** | At or below 20%. Weeks of notice, not hours: a level arrives only when the device volunteers one, which can be a day after pairing, and it cannot be asked for. |
+| **Every sensor stops reporting** | All of them at once is one fault, not many — Zigbee2MQTT or the broker has stopped, or the stick has been unplugged. Sent as a single alert, with the individual ones held back, and it says plainly that the heating is unaffected. |
+
+A note on the last one, because the obvious implementation is wrong: nineteen
+silent sensors is not nineteen flat batteries. Reporting it per sensor would
+fill an inbox with the wrong diagnosis at the moment somebody most needs the
+right one.
 
 Each condition speaks **once** when it starts and once when it clears, never
 repeatedly while it persists. **Quiet hours** holds back routine news overnight

@@ -501,6 +501,32 @@ offline: past six hours a sensor says *"nothing heard since ..."* rather than
 sitting there looking healthy. Six hours is chosen against measured behaviour,
 not taste.
 
+The same six hours is what the **A sensor stops reporting** alert uses, so the
+screen and the email cannot disagree about when silence becomes news — and the
+same 20% threshold backs the low-battery badge and the low-battery alert. Two
+places grading one number differently would be worse than either grading alone.
+
+Three points about those alerts belong here rather than in the README, because
+they are consequences of how the hardware behaves:
+
+**All of them quiet at once is one fault.** Nineteen silent sensors is not
+nineteen flat batteries; it is Zigbee2MQTT or the broker having stopped, or the
+stick having been unplugged. So the individual alerts are held back and a single
+*Every sensor stops reporting* is sent instead, which also says the heating is
+unaffected — it runs over a separate connection to the hub, and somebody reading
+that subject line at midnight should not fear for the pipes.
+
+**The time-based alerts have to schedule their own wake-up.** The automation
+loop sleeps until something *reports*, and a window left open in an empty cabin
+reports nothing at all — which is exactly the case the 24-hour escalation exists
+for. Each condition therefore returns the earliest moment it could next become
+true and the loop merges that into its sleep, which keeps the property that an
+idle house still does not poll.
+
+**A left-open escalation cannot distinguish a real open window from a sensor
+knocked off its frame.** Both read open for ever. The email says so, rather than
+sending somebody to the cabin certain of what they will find.
+
 Two things make that age trustworthy:
 
 **It is the device's timestamp, not ours.** With `last_seen: ISO_8601` set in
