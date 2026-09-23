@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import smtplib
 import ssl
 import threading
@@ -95,7 +96,7 @@ from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import formatdate
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -358,12 +359,135 @@ def public_settings(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return out
 
 
+
+# ---------------------------------------------------------------------------
+# What the message looks like
+# ---------------------------------------------------------------------------
+# Plain text was honest and unreadable: every alert arrived looking like every
+# other one, and the room it was about was a word in the middle of a sentence.
+# These are read on a telephone, usually while doing something else, so the
+# thing that is wrong and the place it is wrong need to land together.
+#
+# Mail is not the web. The rules this is written to:
+#
+#   - inline styles only. There is no <style> block, because Gmail strips one.
+#   - no images. Remote images are blocked by default in most clients, and one
+#     that did load would report back the moment the mail was opened.
+#   - no layout. A single column of block elements survives everywhere; float,
+#     flex and grid do not.
+#   - colour on text, never behind it. A client in dark mode re-colours
+#     backgrounds and leaves text alone, so a coloured banner can end up dark
+#     red on near-black. Nothing here has a background to invert.
+#
+# Sent as multipart/alternative with the plain text kept underneath, so a
+# client that refuses HTML loses nothing.
+
+SEVERITY_STYLES = {
+    "critical": ("Urgent", "#b3261e"),
+    "warning": ("Warning", "#9a6b00"),
+    "info": ("Information", "#4a7c59"),
+}
+
+
+def _esc(text: Any) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def _emphasise(text: str, highlight: Sequence[str], colour: str) -> str:
+    """Colour the names of rooms and sensors wherever they appear.
+
+    Escaped first and marked up afterwards, so a room called ``<loft>`` cannot
+    inject anything: by the time the markers go in, every angle bracket in the
+    text is already an entity.
+
+    One pass, with the names tried longest first. Both halves of that matter.
+    Longest first so "Large Bathroom Window" wins over "Large Bathroom"; one
+    pass so the markup just inserted is never scanned again — replacing name by
+    name looked correct and nested a second span inside the first, because the
+    shorter name is still sitting there inside the tag that was wrapped around
+    it.
+    """
+    out = _esc(text)
+    names = sorted({_esc(h) for h in highlight if h}, key=len, reverse=True)
+    if not names:
+        return out
+    pattern = "|".join(re.escape(name) for name in names)
+    return re.sub(
+        pattern,
+        lambda m: f'<span style="color:{colour};font-weight:800;">{m.group(0)}</span>',
+        out,
+    )
+
+
+def render_html(subject: str, body: str, severity: str, site_name: str,
+                highlight: Sequence[str] = (),
+                facts: Sequence[tuple] = ()) -> str:
+    """One alert, as the telephone will draw it."""
+    label, colour = SEVERITY_STYLES.get(severity, SEVERITY_STYLES["info"])
+
+    # The first paragraph carries the weight; the rest is explanation, so it is
+    # set smaller and greyer rather than competing with it.
+    paragraphs = [para.strip() for para in body.split("\n\n") if para.strip()]
+    lead = paragraphs[0] if paragraphs else ""
+    rest = paragraphs[1:]
+
+    fact_rows = "".join(
+        f'<tr>'
+        f'<td style="padding:5px 14px 5px 0;color:#777;font-size:14px;'
+        f'vertical-align:top;white-space:nowrap;">{_esc(label_)}</td>'
+        f'<td style="padding:5px 0;font-size:16px;font-weight:700;'
+        f'color:#1c1c1c;">{_emphasise(str(value), highlight, colour)}</td>'
+        f'</tr>'
+        for label_, value in facts
+    )
+
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#ffffff;">
+<div style="max-width:600px;margin:0 auto;padding:26px 22px 30px;
+            font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+            Helvetica,Arial,sans-serif;color:#2b2b2b;">
+
+  <div style="font-size:13px;font-weight:700;color:{colour};
+              text-transform:uppercase;letter-spacing:.1em;">{_esc(label)}</div>
+
+  <div style="font-size:26px;line-height:1.25;font-weight:800;margin:10px 0 0;
+              color:#1c1c1c;">{_emphasise(subject, highlight, colour)}</div>
+
+  {f'<table style="border-collapse:collapse;margin:20px 0 0;">{fact_rows}</table>'
+    if fact_rows else ''}
+
+  <p style="margin:18px 0 0;font-size:16px;line-height:1.55;">
+    {_emphasise(lead, highlight, colour)}</p>
+
+  {''.join(
+      f'<p style="margin:13px 0 0;font-size:14px;line-height:1.5;color:#666;">'
+      f'{_emphasise(para, highlight, colour)}</p>'
+      for para in rest
+  )}
+
+  <div style="height:1px;background:#e3e1dc;margin:26px 0 14px;"></div>
+  <div style="font-size:12px;line-height:1.5;color:#999;">
+    Sent by your Nobø heating system ({_esc(site_name)}).<br>
+    Change what it reports under Settings &rarr; Alerts.
+  </div>
+</div>
+</body></html>"""
+
+
 # ---------------------------------------------------------------------------
 # Sending
 # ---------------------------------------------------------------------------
 
-def _send_email_blocking(cfg: Dict[str, Any], subject: str, body: str) -> None:
-    """Actually talk to the mail server. Runs on a worker thread, never the loop."""
+def _send_email_blocking(cfg: Dict[str, Any], subject: str, body: str,
+                         html: Optional[str] = None) -> None:
+    """Actually talk to the mail server. Runs on a worker thread, never the loop.
+
+    ``html`` is optional so that anything calling this with the old three
+    arguments — a test, a script — still sends a perfectly good plain message.
+    """
     email = cfg["email"]
     host, port = email["host"], _clean_port(email["port"])
     to_addrs = email["to_addrs"]
@@ -375,6 +499,11 @@ def _send_email_blocking(cfg: Dict[str, Any], subject: str, body: str) -> None:
     msg["To"] = ", ".join(to_addrs)
     msg["Date"] = formatdate(localtime=True)
     msg.set_content(body)
+    if html:
+        # multipart/alternative. The plain part stays first and stays the
+        # version of record: a client that refuses HTML, or a person reading
+        # over a phone connection that will not load it, loses nothing.
+        msg.add_alternative(html, subtype="html")
 
     security = email.get("security", "starttls")
     if security == "ssl":
@@ -485,7 +614,9 @@ class Notifier:
     # -- the two ways to raise something ----------------------------------
 
     def notify(self, event_type: str, subject: str, body: str,
-               severity: str = "info", key: Optional[str] = None) -> bool:
+               severity: str = "info", key: Optional[str] = None,
+               highlight: Sequence[str] = (),
+               facts: Sequence[tuple] = ()) -> bool:
         """
         A one-off thing happened. Send it, unless it is muted or too soon.
 
@@ -510,14 +641,16 @@ class Notifier:
                 return False
             cond.last_sent = now
 
-        self._dispatch(subject, body, severity, event_type)
+        self._dispatch(subject, body, severity, event_type, highlight, facts)
         return True
 
     def set_condition(self, event_type: str, key: str, raised: bool,
                       subject: str = "", body: str = "",
                       severity: str = "warning",
                       recovery_subject: str = "", recovery_body: str = "",
-                      recovery_event_type: Optional[str] = None) -> bool:
+                      recovery_event_type: Optional[str] = None,
+                      highlight: Sequence[str] = (),
+                      facts: Sequence[tuple] = ()) -> bool:
         """
         A *continuing* state changed.
 
@@ -537,11 +670,16 @@ class Notifier:
             cond.active = raised
 
         if raised:
-            return self.notify(event_type, subject, body, severity=severity, key=key + ":on")
+            return self.notify(event_type, subject, body, severity=severity,
+                               key=key + ":on", highlight=highlight, facts=facts)
         if recovery_subject:
+            # The recovery carries the same names but not the facts: those
+            # described the fault, and repeating them beside "it is fixed"
+            # reads as though it still is.
             return self.notify(recovery_event_type or event_type,
                                recovery_subject, recovery_body,
-                               severity="info", key=key + ":off")
+                               severity="info", key=key + ":off",
+                               highlight=highlight)
         return False
 
     def is_raised(self, key: str) -> bool:
@@ -557,7 +695,9 @@ class Notifier:
 
     # -- delivery ---------------------------------------------------------
 
-    def _dispatch(self, subject: str, body: str, severity: str, event_type: str) -> None:
+    def _dispatch(self, subject: str, body: str, severity: str, event_type: str,
+                  highlight: Sequence[str] = (),
+                  facts: Sequence[tuple] = ()) -> None:
         prefix = {"critical": "⚠ ", "warning": "", "info": ""}.get(severity, "")
         full_subject = f"[{self.site_name}] {prefix}{subject}"
         footer = (
@@ -565,7 +705,15 @@ class Notifier:
             f"Sent by your Nobø heating system ({self.site_name}).\n"
             "Turn this off or change what it reports under Settings → Notifications.\n"
         )
-        full_body = body + footer
+        if facts:
+            width = max(len(str(label)) for label, _ in facts)
+            table = "\n".join(f"{str(label) + ':':<{width + 2}}{value}" for label, value in facts)
+            full_body = f"{table}\n\n{body}{footer}"
+        else:
+            full_body = body + footer
+        full_html = render_html(
+            subject, body, severity, self.site_name, highlight, facts
+        )
 
         if self.log_hook:
             try:
@@ -578,7 +726,7 @@ class Notifier:
 
         def run():
             try:
-                sender(cfg, full_subject, full_body)
+                sender(cfg, full_subject, full_body, full_html)
                 logger.info("Notification sent: %s", subject)
             except Exception as exc:
                 # Deliberately swallowed. A mail server being down must never

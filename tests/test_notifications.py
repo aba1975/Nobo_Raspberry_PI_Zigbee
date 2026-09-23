@@ -68,7 +68,7 @@ def notifier(sent):
         "events": {k: True for k in notifications.EVENT_TYPES},
         "min_minutes_between": 0,
     }))
-    n.send_impl = lambda cfg, subject, body: sent.append((subject, body))
+    n.send_impl = lambda cfg, subject, body, html=None: sent.append((subject, body, html))
     return n
 
 
@@ -371,7 +371,7 @@ def test_quiet_hours_wrap_around_midnight(notifier):
 # ---------------------------------------------------------------------------
 
 def test_a_failing_mail_server_does_not_raise(notifier):
-    def explode(cfg, subject, body):
+    def explode(cfg, subject, body, html=None):
         raise RuntimeError("connection refused")
 
     notifier.send_impl = explode

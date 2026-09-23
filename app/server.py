@@ -2266,6 +2266,15 @@ def _evaluate_sensor_alerts(
             recovery_subject="Everything is shut again",
             recovery_body="Every contact sensor reports closed again.",
             recovery_event_type="contact_open_while_away",
+            highlight=open_rooms,
+            facts=(
+                ("Open", rooms),
+                ("House", "Away"),
+                ("Since", local_time_text(min(
+                    a.open_started_at for a in result.zones.values()
+                    if a.open_started_at is not None
+                ))),
+            ),
         )
     elif not away:
         # Coming home clears it without an email. "You are back" is not news to
@@ -2309,6 +2318,12 @@ def _evaluate_sensor_alerts(
                 f"read open for ever, which looks identical from here."
             ),
             severity="warning",
+            highlight=[name],
+            facts=(
+                ("Room", name),
+                ("Open since", local_time_text(started)),
+                ("That is", f"{hours} hours"),
+            ),
         )
 
     # --- the sensors' own health -------------------------------------------
@@ -2344,6 +2359,8 @@ def _evaluate_sensor_alerts(
         recovery_subject="The sensors are reporting again",
         recovery_body="At least one contact sensor has been heard from again.",
         recovery_event_type="sensor_all_quiet",
+        facts=(("Sensors", f"{len(sensors)} paired, none reporting"),
+               ("Heating", "unaffected")),
     )
 
     for sensor in sensors:
@@ -2367,6 +2384,11 @@ def _evaluate_sensor_alerts(
             recovery_subject=f"{sensor.name} is reporting again",
             recovery_body=f"{where} has been heard from again.",
             recovery_event_type="sensor_quiet",
+            highlight=[sensor.name] + ([room] if room else []),
+            facts=(("Sensor", sensor.name),
+                   ("Room", room or "not assigned"),
+                   ("Last heard", local_time_text(sensor.last_seen_at.timestamp())),
+                   ("Still reads", sensor.state.value)),
         )
 
         low = sensor.battery is not None and sensor.battery <= SENSOR_BATTERY_LOW_PERCENT
@@ -2384,6 +2406,10 @@ def _evaluate_sensor_alerts(
             recovery_subject=f"{sensor.name} battery has been changed",
             recovery_body=f"{where} is reporting a healthy battery again.",
             recovery_event_type="sensor_battery_low",
+            highlight=[sensor.name] + ([room] if room else []),
+            facts=(("Sensor", sensor.name),
+                   ("Room", room or "not assigned"),
+                   ("Battery", f"{sensor.battery}%")),
         )
 
     future = [deadline for deadline in deadlines if deadline > now]

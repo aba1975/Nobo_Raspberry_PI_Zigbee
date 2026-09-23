@@ -24,10 +24,12 @@ def sent(monkeypatch):
     """Capture what would have been emailed, without a mail server."""
     posted = []
 
-    def fake_notify(event_type, subject, body, severity="warning", key=None):
+    def fake_notify(event_type, subject, body, severity="warning", key=None,
+                    highlight=(), facts=()):
         posted.append({
-            "type": event_type, "subject": subject,
-            "body": body, "severity": severity,
+            "type": event_type, "subject": subject, "body": body,
+            "severity": severity, "highlight": list(highlight),
+            "facts": list(facts),
         })
         return True
 
@@ -608,3 +610,46 @@ def test_an_unavailable_alert_is_drawn_dimmed_and_cannot_be_ticked():
     ).read_text(encoding="utf-8")
     assert "types[key].unavailable ? 'disabled'" in cabin
     assert ".notify-row.is-unavailable" in css
+
+
+# -- what the renderer is given --------------------------------------------
+
+
+def test_the_away_alert_names_the_rooms_for_the_renderer(sent, monkeypatch, away):
+    """The email design picks the place out of the headline, which only works
+    if the alert says which words are the place."""
+    monkeypatch.setattr(server, "sensor_snapshots", [])
+
+    server._evaluate_sensor_alerts(
+        _result({"1": _aggregate(open_started_at=time.time() - 600)}),
+        {"1": "Kitchen"},
+    )
+
+    alert = [m for m in sent if m["type"] == "contact_open_while_away"][0]
+    assert "Kitchen" in alert["highlight"]
+    assert dict(alert["facts"])["House"] == "Away"
+
+
+def test_a_quiet_sensor_names_both_itself_and_its_room(sent, monkeypatch):
+    monkeypatch.setattr(
+        server, "sensor_snapshots",
+        [_snapshot(last_seen=time.time() - 7 * 3600)],
+    )
+
+    server._evaluate_sensor_alerts(_result({}), {"1": "Large Bathroom"})
+
+    alert = [m for m in sent if m["type"] == "sensor_quiet"][0]
+    assert "Kitchen Window" in alert["highlight"]
+    assert "Large Bathroom" in alert["highlight"]
+    facts = dict(alert["facts"])
+    assert facts["Room"] == "Large Bathroom"
+    assert facts["Still reads"] == "closed"
+
+
+def test_the_battery_alert_carries_the_level_as_a_fact(sent, monkeypatch):
+    monkeypatch.setattr(server, "sensor_snapshots", [_snapshot(battery=12)])
+
+    server._evaluate_sensor_alerts(_result({}), {})
+
+    alert = [m for m in sent if m["type"] == "sensor_battery_low"][0]
+    assert dict(alert["facts"])["Battery"] == "12%"

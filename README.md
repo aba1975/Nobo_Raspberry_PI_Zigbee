@@ -677,6 +677,15 @@ silent sensors is not nineteen flat batteries. Reporting it per sensor would
 fill an inbox with the wrong diagnosis at the moment somebody most needs the
 right one.
 
+Alerts arrive as **HTML with the plain text kept underneath**, so a client that
+refuses HTML loses nothing and the plain version stays the one of record. The
+design is deliberately plain: the severity is named in words as well as colour,
+the room or sensor is picked out of the headline so what-and-where land
+together, and there are no images and no coloured panels — remote images are
+blocked by default in most clients, and a client in dark mode re-colours
+backgrounds while leaving text alone, which is how a red banner becomes dark red
+on near-black.
+
 Each condition speaks **once** when it starts and once when it clears, never
 repeatedly while it persists. **Quiet hours** holds back routine news overnight
 but never something urgent.
