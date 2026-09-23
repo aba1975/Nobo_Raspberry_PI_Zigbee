@@ -128,6 +128,22 @@ def test_settings_can_be_turned_on(client):
     assert r.json()["enabled"] is True
 
 
+@pytest.mark.parametrize("port", [0, 65536, 99999])
+def test_an_unusable_port_is_refused_rather_than_replaced(client, port):
+    """Quietly saving 587 instead made the Port field look as though it did nothing."""
+    client.put("/api/notifications", json={"email": GOOD_EMAIL})
+    r = client.put("/api/notifications", json={"email": {**GOOD_EMAIL, "port": port}})
+    assert r.status_code == 400
+    assert "65535" in r.json()["detail"]
+    assert notifications.load_settings()["email"]["port"] == 587
+
+
+def test_a_typed_port_is_kept(client):
+    r = client.put("/api/notifications", json={"email": {**GOOD_EMAIL, "port": 2525}})
+    assert r.status_code == 200
+    assert notifications.load_settings()["email"]["port"] == 2525
+
+
 def test_turning_it_on_without_a_mail_server_is_refused(client):
     """Otherwise it looks enabled and silently never sends anything."""
     r = client.put("/api/notifications", json={"enabled": True})

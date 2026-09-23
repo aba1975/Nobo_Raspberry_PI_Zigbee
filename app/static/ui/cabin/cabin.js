@@ -4732,10 +4732,18 @@
    * ---------------------------------------------------------------- */
 
   const NOTIFY_SECURITY = [
-    ['starttls', 'STARTTLS (port 587)'],
-    ['ssl', 'SSL/TLS (port 465)'],
+    ['starttls', 'STARTTLS (usually port 587)'],
+    ['ssl', 'SSL/TLS (usually port 465)'],
     ['none', 'None (not recommended)'],
   ];
+  /* The port each kind of encryption normally uses. The two used to be
+     independent, so choosing SSL/TLS left the port at 587 and the test email
+     then failed against a port speaking the other protocol - which read as
+     the Port field doing nothing. Choosing encryption now moves a port that is
+     still on one of these standard values; a port somebody typed themselves
+     is theirs and is left alone. */
+  const NOTIFY_PORTS = { starttls: 587, ssl: 465, none: 25 };
+  const NOTIFY_STANDARD_PORTS = new Set(Object.values(NOTIFY_PORTS));
 
   async function loadNotifications(isAdmin) {
     const box = $('#notifyBox');
@@ -4827,7 +4835,11 @@
         </label>
         <label class="field">
           <span>Port</span>
-          <input type="number" id="ntPort" value="${esc(String(n.email.port || 587))}" ${dis}>
+          <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="5"
+                 id="ntPort" value="${esc(String(n.email.port || 587))}"
+                 autocomplete="off" ${dis}>
+          <small class="field-hint">Follows the encryption choice. Change it only if
+          your mail provider gives a different one.</small>
         </label>
         <label class="field">
           <span>Encryption</span>
@@ -4876,15 +4888,45 @@
     if (!isAdmin) return;
     box.querySelector('[data-act="save-notify"]').onclick = () => saveNotifications();
     box.querySelector('[data-act="test-notify"]').onclick = testNotifications;
+    wireNotifyPort(box);
+  }
+
+  function wireNotifyPort(box) {
+    const sec = box.querySelector('#ntSec');
+    const port = box.querySelector('#ntPort');
+    if (!sec || !port) return;
+    sec.onchange = () => {
+      const typed = port.value.trim();
+      if (!typed || NOTIFY_STANDARD_PORTS.has(Number(typed))) {
+        port.value = String(NOTIFY_PORTS[sec.value] || 587);
+      }
+    };
+    // The reverse for the two ports that only mean one thing. 25 is left
+    // alone: it is used with STARTTLS as often as without, and switching
+    // somebody to no encryption because of a port number would be a quiet
+    // downgrade.
+    port.oninput = () => {
+      const typed = Number(port.value.trim());
+      if (typed === 465 && sec.value !== 'ssl') sec.value = 'ssl';
+      else if (typed === 587 && sec.value === 'ssl') sec.value = 'starttls';
+    };
+  }
+
+  function readNotifyPort() {
+    const el = $('#ntPort');
+    const raw = el ? el.value.trim() : '';
+    if (!raw) return 587;
+    // Refused here rather than sent: the server used to swap a port it could
+    // not use for 587 without a word, which is the other way a typed port
+    // could appear to do nothing.
+    if (!/^[0-9]+$/.test(raw) || Number(raw) < 1 || Number(raw) > 65535) {
+      throw new Error('The port must be a whole number from 1 to 65535.');
+    }
+    return Number(raw);
   }
 
   function readNotifyForm() {
     const val = (id) => { const el = $(id); return el ? el.value.trim() : ''; };
-    const num = (id, fallback) => {
-      const el = $(id);
-      const v = el ? Number(el.value) : NaN;
-      return Number.isFinite(v) ? v : fallback;
-    };
     const n = state.notify;
     const events = {};
     document.querySelectorAll('#notifyBox [data-ev]').forEach(cb => {
@@ -4899,7 +4941,7 @@
       quiet_hours: { ...n.quiet_hours, enabled: !!($('#ntQuiet') && $('#ntQuiet').checked) },
       email: {
         host: val('#ntHost'),
-        port: num('#ntPort', 587),
+        port: readNotifyPort(),
         security: val('#ntSec') || 'starttls',
         username: val('#ntUser'),
         from_addr: val('#ntFrom'),
@@ -4914,12 +4956,12 @@
   }
 
   async function saveNotifications(enabledOverride) {
-    const body = readNotifyForm();
-    // Saving from the expanded form means "I want these on", which is the only
-    // way to enable them: the toggle alone cannot, because the server rightly
-    // refuses a configuration that could not deliver.
-    body.enabled = enabledOverride !== undefined ? enabledOverride : true;
     try {
+      const body = readNotifyForm();
+      // Saving from the expanded form means "I want these on", which is the
+      // only way to enable them: the toggle alone cannot, because the server
+      // rightly refuses a configuration that could not deliver.
+      body.enabled = enabledOverride !== undefined ? enabledOverride : true;
       state.notify = await Nobo.api.setNotifications(body);
       state.notifyExpanded = !!state.notify.enabled;
       Nobo.toast(state.notify.enabled ? 'Alerts are on' : 'Alerts are off');

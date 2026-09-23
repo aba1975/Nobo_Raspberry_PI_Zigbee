@@ -3674,6 +3674,14 @@ def _merge_notification_body(body: NotificationUpdate) -> Dict[str, Any]:
     if body.quiet_hours is not None:
         current["quiet_hours"] = body.quiet_hours
     if body.email is not None:
+        # Refused rather than cleaned: the stored settings fall back to 587 for
+        # a port they cannot use, and doing that to a port somebody has just
+        # typed made the field look as though it did nothing.
+        if body.email.port is not None and not 1 <= body.email.port <= 65535:
+            raise HTTPException(
+                status_code=400,
+                detail="The port must be a whole number from 1 to 65535.",
+            )
         for field_name in ("host", "port", "security", "username", "from_addr", "to_addrs"):
             value = getattr(body.email, field_name)
             if value is not None:
