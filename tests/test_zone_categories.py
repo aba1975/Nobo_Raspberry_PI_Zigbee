@@ -22,6 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 CABIN = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CSS = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
+CORE = (ROOT / "app" / "static" / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
 SERVER = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
 PERSIST = (ROOT / "app" / "config_persistence.py").read_text(encoding="utf-8")
 
@@ -257,8 +258,8 @@ class TestItIsStoredLikeTheIcon:
 
     def test_both_branches_of_the_update_write_it(self):
         """The fault this caught during development: the icon is stored two
-        different ways — on the demo zone in demo mode, in ``zone_icons``
-        otherwise — so the category was added to the real-hub branch only. It
+        different ways â€” on the demo zone in demo mode, in ``zone_icons``
+        otherwise â€” so the category was added to the real-hub branch only. It
         looked right on a real hub and silently did nothing in demo, which is
         the harder direction to notice.
         """
@@ -282,3 +283,117 @@ def test_the_category_is_offered_with_the_ones_already_in_use():
     body = CABIN[start:CABIN.index("\n  }\n", start)]
     assert "datalist" in body
     assert "toLowerCase() === typed.toLowerCase()" in body
+
+
+# ---------------------------------------------------------------------------
+# Managing the groups
+# ---------------------------------------------------------------------------
+#
+# The first version of this feature could group rooms and gave no way to
+# organise them: the only editor was behind a button labelled "Rename zone",
+# one room at a time, with no way to create, rename or remove a group at all.
+# Setting up eleven rooms meant eleven trips through eleven screens, so in
+# practice nobody would.
+
+
+class TestThereIsOneScreenThatDoesTheWholeHouse:
+    def test_settings_carries_a_rooms_and_groups_card(self):
+        assert "function renderZoneGroupsCard" in CABIN
+        assert "renderZoneGroupsCard(isAdmin)" in CABIN, "the card is never rendered"
+        assert "wireZoneGroups(root)" in CABIN, "the card is never wired up"
+
+    def test_every_room_is_listed_with_a_picker(self):
+        """The bulk job. One pass down one screen, rather than opening each
+        room in turn."""
+        start = CABIN.index("function renderZoneGroupsCard")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert "state.zones.map(zone =>" in body
+        assert "data-assign-zone" in body
+
+    def test_a_room_can_always_be_taken_out_of_its_group(self):
+        """Ungrouped is a legitimate state, so every picker offers it."""
+        start = CABIN.index("function renderZoneGroupsCard")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert '<option value="">\u2014 Other \u2014</option>' in body
+
+    def test_groups_can_be_renamed_and_removed(self):
+        assert "data-rename-group" in CABIN
+        assert "data-delete-group" in CABIN
+
+
+class TestBulkEditsGoInOneRequest:
+    def test_the_api_takes_the_whole_map(self):
+        """Renaming a group moves every room in it. Sending that as one
+        request per room would leave the house half-renamed if one failed."""
+        assert '@app.put("/api/zone-categories")' in SERVER
+        assert "class ZoneCategoriesUpdate(BaseModel):" in SERVER
+
+    def test_it_is_not_a_sibling_of_the_zone_id_route(self):
+        """/api/zones/ already ends in a {zone_id} catch-all, so a route below
+        it would be matched as a zone called "categories" depending on which
+        was declared first."""
+        assert '@app.put("/api/zones/categories")' not in SERVER
+
+    def test_unknown_zones_are_refused(self):
+        start = SERVER.index('@app.put("/api/zone-categories")')
+        body = SERVER[start:SERVER.index("\n\n\n", start)]
+        assert "Unknown zone ids" in body
+
+    def test_a_blank_group_clears_rather_than_stores(self):
+        start = SERVER.index('@app.put("/api/zone-categories")')
+        body = SERVER[start:SERVER.index("\n\n\n", start)]
+        assert "if name and name.strip()" in body
+
+    def test_the_client_sends_it_as_one_call(self):
+        assert "setZoneCategories" in CORE
+        assert "/api/zone-categories" in CORE
+
+
+class TestRemovingAGroupIsNotDestructive:
+    def test_it_ungroups_the_rooms_rather_than_warning_about_them(self):
+        """Nothing about a room is stored in its group, so there is no data to
+        lose. Dressing it as destructive would teach people to fear a button
+        that cannot hurt them."""
+        start = CABIN.index("data-delete-group]').forEach")
+        body = CABIN[start:start + 1400]
+        assert "moves to \"Other\"" in body or 'to "Other"' in body
+        assert "btn-danger" not in body
+        assert "map[zoneId] = ''" in body
+
+
+class TestTheOneRoomCaseIsStillThere:
+    def test_the_button_says_what_the_sheet_does(self):
+        """It was labelled "Rename zone" while the sheet behind it also set the
+        group, which is why nobody found the setting. A label is the only
+        documentation most people read."""
+        assert ">Edit this room</button>" in CABIN
+        assert ">Rename zone</button>" not in CABIN
+
+
+class TestTheWayInIsQuietAndConditional:
+    def test_the_front_page_offers_a_link_only_when_it_would_help(self):
+        """Enough rooms to want grouping, and none grouped yet. It goes as soon
+        as the first group exists, so it cannot become furniture."""
+        start = CABIN.index("function renderZones")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert "state.zones.length >= GROUPING_MIN_ZONES" in body
+        assert "!groups.some(([name]) => name)" in body
+        assert "Group them" in body
+
+    def test_it_is_a_link_rather_than_another_button(self):
+        """The Zones heading already carries Add a zone, which is the action
+        people came for. A second button there would compete with it."""
+        assert ".linkish" in CSS
+        start = CABIN.index("function renderZones")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert 'class="linkish"' in body
+
+
+def test_an_empty_group_is_not_persisted():
+    """A group is the name its rooms share, not an object in its own right.
+    Keeping a second list of names would need migrating, and would drift out
+    of step with the rooms the moment anything went wrong."""
+    assert "draftGroups" in CABIN
+    start = SERVER.index('@app.put("/api/zone-categories")')
+    body = SERVER[start:SERVER.index("\n\n\n", start)]
+    assert "groups" not in body.split("categories")[0].split("def ")[-1]

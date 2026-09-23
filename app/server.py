@@ -3727,6 +3727,43 @@ async def add_zone(zone: ZoneAdd):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ZoneCategoriesUpdate(BaseModel):
+    categories: Dict[str, str]
+
+
+@app.put("/api/zone-categories")
+async def update_zone_categories(body: ZoneCategoriesUpdate):
+    """Replace the whole zone-to-group map in one write.
+
+    Renaming a group and deleting one are bulk edits by nature — "Bedrooms"
+    becomes "Upstairs" for five rooms at once — and doing that as five separate
+    requests would leave the house half-renamed if one of them failed. The
+    editor holds the whole map on screen anyway, so it sends the whole map and
+    the file is replaced atomically.
+
+    Deliberately not under ``/api/zones/``: that path already ends in a
+    ``{zone_id}`` catch-all, and a sibling route there would be matched as a
+    zone called "categories" depending on declaration order.
+    """
+    global zone_categories
+    known = {str(zone["zone_id"]) for zone in _build_zones_data()}
+    unknown = sorted(set(body.categories) - known)
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown zone ids: {', '.join(unknown)}"
+        )
+    # A blank group is how the editor says "take this room out of its group",
+    # and is stored as the absence of a key rather than an empty string.
+    zone_categories = {
+        zone_id: name.strip()
+        for zone_id, name in body.categories.items()
+        if name and name.strip()
+    }
+    config_persistence.save_zone_categories(zone_categories)
+    logger.info("Zone groups updated: %d assigned", len(zone_categories))
+    return {"status": "success", "categories": zone_categories}
+
+
 def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
     """Record which part of the building a zone is in.
 

@@ -334,6 +334,34 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .grp-cold { color: var(--m-away); font-weight: 600; }
 .grp-warn { color: var(--amber); font-weight: 600; }
 
+/* A link that looks like a link, for the one quiet way into group setup. It
+   lives in the Zones note, which is already small print, so it must not look
+   like another button competing with "Add a zone". */
+.linkish {
+  background: none; border: 0; padding: 0; font: inherit; font-size: inherit;
+  color: var(--pine); text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Settings > Rooms and groups */
+.group-list { margin: .2rem 0 .1rem; }
+.group-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem 0; border-bottom: 1px solid var(--rule);
+}
+.group-row:last-child { border-bottom: 0; }
+.group-name { font-weight: 650; }
+.group-count { font-size: .79rem; color: var(--ink-faint); margin-left: auto; }
+.group-subhead { margin: 1.3rem 0 .1rem; font-size: .95rem; }
+.group-assign { display: grid; gap: .1rem; }
+.assign-row {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .38rem 0; border-bottom: 1px solid var(--rule);
+}
+.assign-row:last-child { border-bottom: 0; }
+.assign-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign-row select { max-width: 11.5rem; }
+
 .zone {
   position: relative;
   display: grid;

@@ -146,6 +146,11 @@ const Nobo = (() => {
     updateZone:   (zoneId, body) => req(`/api/zones/${encodeURIComponent(zoneId)}`, {
                                      method: 'PUT', body: JSON.stringify(body) }),
     removeZone:   (zoneId)       => req(`/api/zones/${encodeURIComponent(zoneId)}`, { method: 'DELETE' }),
+    /* The whole zone-to-group map at once. Renaming or deleting a group moves
+       every room in it, and sending that as one request stops the house being
+       left half-renamed if one of several had failed. */
+    setZoneCategories: (categories) => req('/api/zone-categories', {
+                                     method: 'PUT', body: JSON.stringify({ categories }) }),
 
     weekProfiles:      ()              => req('/api/week_profiles').then(r => r.week_profiles || r),
     createWeekProfile: (body)          => req('/api/week_profiles', {

@@ -2131,9 +2131,19 @@
       : state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
     const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'zone' : 'zones'}`;
-    $('#roomsNote').textContent = manual
+    const note = $('#roomsNote');
+    note.textContent = manual
       ? `${zoneCount} · ${manual} with a dial-only heater`
       : zoneCount;
+    /* One quiet way in, and only while it would help: enough rooms to want
+       grouping and not one of them grouped yet. It goes the moment the first
+       group exists, so it can never settle into being furniture. */
+    if (state.zones.length >= GROUPING_MIN_ZONES && !groups.some(([name]) => name)) {
+      note.insertAdjacentHTML('beforeend',
+        ' · <button class="linkish" type="button" data-act="group-zones">Group them</button>');
+      const link = note.querySelector('[data-act="group-zones"]');
+      if (link) link.onclick = () => showSettings();
+    }
 
     list.querySelectorAll('[data-open]').forEach(b => {
       b.onclick = () => showZone(b.dataset.open);
@@ -2459,7 +2469,7 @@
       <section class="card">
         <h2>Zone settings</h2>
         <div class="sheet-actions">
-          <button class="btn" type="button" data-act="rename-zone">Rename zone</button>
+          <button class="btn" type="button" data-act="rename-zone">Edit this room</button>
           <button class="btn btn-danger" type="button" data-act="delete-zone">Delete zone</button>
         </div>
       </section>`;
@@ -4079,6 +4089,202 @@
     } catch (_) { /* the static render is already correct enough */ }
   }
 
+  /* ------------------------------------------------------------------
+   * Settings: rooms and groups
+   *
+   * Setting the house up is a job you do once and it touches every room, so
+   * it happens on one screen rather than across eleven zone pages. The
+   * per-zone editor stays for the one-room case; this is the bulk one.
+   *
+   * A group is not an object you create and then fill: it is the name its
+   * rooms share. "New group" only adds a name to every picker on this screen
+   * so rooms can be put in it; an empty group is never persisted, because
+   * there is nothing to persist. That keeps the stored shape a plain
+   * zone-to-name map with no second list to be migrated or fall out of step.
+   * ---------------------------------------------------------------- */
+
+  /* Names offered in the pickers: the ones in use, plus any just invented on
+     this screen and not yet given a room. */
+  let draftGroups = [];
+
+  function knownGroupNames() {
+    const used = state.zones.map(z => String(z.category || '').trim()).filter(Boolean);
+    return [...new Set([...used, ...draftGroups])].sort((a, b) => a.localeCompare(b));
+  }
+
+  function renderZoneGroupsCard(isAdmin) {
+    if (!state.zones.length) return '';
+    const names = knownGroupNames();
+    const countIn = name => state.zones.filter(z => String(z.category || '').trim() === name).length;
+    const ungrouped = state.zones.filter(z => !String(z.category || '').trim()).length;
+
+    return `
+      <section class="card" id="zoneGroupsCard">
+        <h2>Rooms and groups</h2>
+        <p class="zd-sub">Rooms in the same group are shown together on the front page, once
+        there are enough of them to be worth it. Everything here is this app's own — the hub
+        does not know about groups.</p>
+
+        ${names.length ? `
+          <div class="group-list">
+            ${names.map(name => `
+              <div class="group-row">
+                <span class="group-name">${esc(name)}</span>
+                <span class="group-count">${countIn(name)} ${countIn(name) === 1 ? 'room' : 'rooms'}${
+                  countIn(name) ? '' : ' · not saved until one joins'}</span>
+                <span class="dev-actions">
+                  <button class="icon-btn act-rename" type="button" data-rename-group="${esc(name)}"
+                    title="Rename this group" aria-label="Rename ${esc(name)}"
+                    ${isAdmin ? '' : 'disabled'}>${Nobo.icon('rename')}</button>
+                  <button class="icon-btn act-remove" type="button" data-delete-group="${esc(name)}"
+                    title="Remove this group" aria-label="Remove ${esc(name)}"
+                    ${isAdmin ? '' : 'disabled'}>${Nobo.icon('remove')}</button>
+                </span>
+              </div>`).join('')}
+          </div>` : `
+          <div class="note">No groups yet. Give a room a group below, or start one here.</div>`}
+
+        <button class="btn btn-add" type="button" data-act="new-group"
+          ${isAdmin ? '' : 'disabled'}>New group</button>
+
+        <h3 class="group-subhead">Which group each room is in</h3>
+        <p class="zd-sub">${ungrouped
+          ? `${ungrouped} ${ungrouped === 1 ? 'room is' : 'rooms are'} in no group. That is
+             fine — they appear under "Other".`
+          : 'Every room is in a group.'}</p>
+        <div class="group-assign">
+          ${state.zones.map(zone => `
+            <label class="assign-row">
+              <span class="assign-name">${esc(zone.name)}</span>
+              <select data-assign-zone="${esc(zone.zone_id)}" ${isAdmin ? '' : 'disabled'}>
+                <option value="">— Other —</option>
+                ${names.map(name => `<option value="${esc(name)}"
+                  ${String(zone.category || '').trim() === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+              </select>
+            </label>`).join('')}
+        </div>
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      </section>`;
+  }
+
+  /** Send the whole map. See the note on setZoneCategories. */
+  async function saveZoneCategories(mapping) {
+    await Nobo.api.setZoneCategories(mapping);
+    await refresh(true);
+    renderSettings();
+  }
+
+  function currentCategoryMap() {
+    const map = {};
+    for (const zone of state.zones) {
+      map[String(zone.zone_id)] = String(zone.category || '').trim();
+    }
+    return map;
+  }
+
+  function wireZoneGroups(root) {
+    const card = root.querySelector('#zoneGroupsCard');
+    if (!card) return;
+
+    card.querySelectorAll('[data-assign-zone]').forEach(select => {
+      select.onchange = async () => {
+        const map = currentCategoryMap();
+        map[select.dataset.assignZone] = select.value;
+        try {
+          await saveZoneCategories(map);
+          Nobo.toast(select.value ? `Moved to ${select.value}` : 'Removed from its group');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+
+    const addBtn = card.querySelector('[data-act="new-group"]');
+    if (addBtn) addBtn.onclick = () => {
+      openSheet('New group', `
+        <label class="field"><span>Group name
+          <small class="field-hint">A part of the building — "Bathrooms", "Upstairs",
+          "Boathouse". It is saved once a room is put in it.</small></span>
+          <input type="text" id="ngName" autocomplete="off" placeholder="Upstairs"></label>
+        <div class="sheet-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" data-act="ok" type="button">Add</button>
+        </div>`, (sheet) => {
+        sheet.querySelector('[data-act="cancel"]').onclick = closeSheet;
+        sheet.querySelector('[data-act="ok"]').onclick = () => {
+          const name = sheet.querySelector('#ngName').value.trim();
+          if (!name) { Nobo.toast('Give the group a name', 'error'); return; }
+          if (knownGroupNames().some(n => n.toLowerCase() === name.toLowerCase())) {
+            Nobo.toast('There is already a group with that name', 'error'); return;
+          }
+          draftGroups.push(name);
+          closeSheet();
+          renderSettings();
+          Nobo.toast('Group added — now put a room in it');
+        };
+      });
+    };
+
+    card.querySelectorAll('[data-rename-group]').forEach(button => {
+      button.onclick = () => {
+        const was = button.dataset.renameGroup;
+        const moving = state.zones.filter(z => String(z.category || '').trim() === was).length;
+        openSheet('Rename group', `
+          <label class="field"><span>Group name
+            <small class="field-hint">${moving
+              ? `${moving} ${moving === 1 ? 'room moves' : 'rooms move'} with it.`
+              : 'No rooms are in this group yet.'}</small></span>
+            <input type="text" id="rgName" autocomplete="off" value="${esc(was)}"></label>
+          <div class="sheet-actions">
+            <button class="btn" data-act="cancel" type="button">Cancel</button>
+            <button class="btn btn-primary" data-act="ok" type="button">Save</button>
+          </div>`, (sheet) => {
+          sheet.querySelector('[data-act="cancel"]').onclick = closeSheet;
+          sheet.querySelector('[data-act="ok"]').onclick = async () => {
+            const now = sheet.querySelector('#rgName').value.trim();
+            if (!now) { Nobo.toast('Give the group a name', 'error'); return; }
+            if (now === was) { closeSheet(); return; }
+            draftGroups = draftGroups.filter(n => n !== was);
+            if (!moving) { draftGroups.push(now); closeSheet(); renderSettings(); return; }
+            const map = currentCategoryMap();
+            for (const [zoneId, name] of Object.entries(map)) {
+              if (name === was) map[zoneId] = now;
+            }
+            try {
+              await saveZoneCategories(map);
+              closeSheet();
+              Nobo.toast(`Renamed to ${now}`);
+            } catch (e) { Nobo.toast(e.message, 'error'); }
+          };
+        });
+      };
+    });
+
+    card.querySelectorAll('[data-delete-group]').forEach(button => {
+      button.onclick = () => {
+        const name = button.dataset.deleteGroup;
+        const losing = state.zones.filter(z => String(z.category || '').trim() === name).length;
+        /* Not a destructive action, and not dressed as one: nothing about a
+           room is stored in its group, so removing one ungroups its rooms and
+           loses nothing. Saying so is kinder than a red warning. */
+        confirmSheet('Remove group', losing
+          ? `${losing} ${losing === 1 ? 'room moves' : 'rooms move'} to "Other". Nothing else about ${
+              losing === 1 ? 'it' : 'them'} changes.`
+          : 'Nothing is in this group.',
+          'Remove', async () => {
+            draftGroups = draftGroups.filter(n => n !== name);
+            if (!losing) { renderSettings(); return; }
+            const map = currentCategoryMap();
+            for (const [zoneId, value] of Object.entries(map)) {
+              if (value === name) map[zoneId] = '';
+            }
+            try {
+              await saveZoneCategories(map);
+              Nobo.toast(`${name} removed`);
+            } catch (e) { Nobo.toast(e.message, 'error'); }
+          });
+      };
+    });
+  }
+
   function renderSettings(me = state.me) {
     const hub = state.hub || {};
     const site = state.site || {};
@@ -4131,6 +4337,8 @@
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       </section>
+
+      ${renderZoneGroupsCard(isAdmin)}
 
       ${renderSensorSettingsCard(isAdmin)}
 
@@ -4289,6 +4497,7 @@
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
     loadNotifications(isAdmin);
     wireSensorSettings(root);
+    wireZoneGroups(root);
   }
 
   function renderScheduleSettings() {
