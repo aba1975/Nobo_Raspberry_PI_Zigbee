@@ -163,3 +163,90 @@ class TestItLooksLikeTheRestOfTheApp:
         "SET TO" above a big number and wrong for a sentence."""
         block = re.search(r"\.opt-label strong\s*\{([^}]*)\}", CSS, re.S).group(1)
         assert "text-transform: none" in block
+
+
+# ---------------------------------------------------------------------------
+# Names and marks
+# ---------------------------------------------------------------------------
+
+CORE = (ROOT / "app" / "static" / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
+
+# Capitalised unless they begin the name. The usual English set.
+SMALL_WORDS = {
+    "a", "an", "the", "and", "or", "but", "for", "nor",
+    "of", "in", "on", "at", "to", "by", "with",
+}
+
+
+def _topic_names():
+    return [name for _id, name in re.findall(
+        r"settingsSection\('([a-z]+)',\s*'([^']+)'", CABIN)]
+
+
+class TestTheTopicsAreNamedConsistently:
+    """They were in two voices - Schedules and Diagnostics beside "Zones that
+    must not get cold" - so you could not predict where anything was."""
+
+    def test_every_topic_is_title_case(self):
+        for name in _topic_names():
+            words = name.split()
+            for index, word in enumerate(words):
+                first_or_last = index in (0, len(words) - 1)
+                if not first_or_last and word.lower() in SMALL_WORDS:
+                    assert word.islower(), f"{name!r}: {word!r} should stay small"
+                else:
+                    assert word[0].isupper(), f"{name!r}: {word!r} should be capitalised"
+
+    def test_the_binding_words_are_left_small(self):
+        """"Rooms And Groups" is the failure mode of a blunt title-caser."""
+        names = _topic_names()
+        assert "Rooms and Groups" in names
+        assert "Door and Window Sensor Configuration" in names
+
+    def test_the_names_that_were_asked_for(self):
+        names = _topic_names()
+        for wanted in ("My Home", "Nobø Eco Hub Configuration",
+                       "Door and Window Sensor Configuration"):
+            assert wanted in names, wanted
+        for old in ("This place", "Where the data comes from", "Door and window sensors"):
+            assert old not in CABIN, old
+
+
+class TestEachTopicCarriesAMark:
+    def test_every_topic_has_an_icon(self):
+        ids = re.findall(r"settingsSection\('([a-z]+)',", CABIN)
+        icons = re.findall(r"\{\s*icon:\s*'([a-z]+)'", CABIN)
+        assert len(icons) >= len(ids), f"{len(ids)} topics but {len(icons)} icons"
+
+    def test_the_icons_exist_in_the_shared_set(self):
+        """A name with no drawing behind it renders as nothing: Nobo.icon
+        returns an empty string rather than complaining."""
+        for name in re.findall(r"\{\s*icon:\s*'([a-z]+)'", CABIN):
+            assert re.search(rf"^\s+{name}:\s", CORE, re.M), f"no icon drawn for {name!r}"
+
+    def test_they_are_drawn_on_the_same_grid_as_the_mode_icons(self):
+        """They sit a few pixels from Home, Comfort, Eco and Away, so another
+        weight or viewBox would look borrowed."""
+        assert 'viewBox="0 0 24 24"' in CORE
+        assert 'stroke-width="1.7"' in CORE
+
+    def test_two_topics_reuse_a_mode_icon_rather_than_redrawing_it(self):
+        """My Home is the house from Home; Schedules is the calendar already
+        drawn for the Schedule mode. A second drawing of one idea would make
+        it look like two."""
+        assert re.search(r"settingsSection\('place'.*?icon: 'home'", CABIN, re.S)
+        assert re.search(r"settingsSection\('schedules'.*?icon: 'normal'", CABIN, re.S)
+
+    def test_the_mark_never_carries_a_state_colour(self):
+        """The summary beside it does the reporting. A red or amber icon would
+        be a second and quieter status saying something different."""
+        block = re.search(r"\.sec-icon\s*\{([^}]*)\}", CSS, re.S).group(1)
+        assert "var(--pine)" in block
+        for state in ("--danger", "--amber", "--m-comfort"):
+            assert state not in block
+
+
+def test_a_long_topic_name_does_not_squeeze_its_state_away():
+    """"Door and Window Sensor Configuration" is wider than a phone."""
+    block = re.search(r"\.sec-name\s*\{([^}]*)\}", CSS, re.S).group(1)
+    assert "flex: 1 1 auto" in block and "min-width: 0" in block

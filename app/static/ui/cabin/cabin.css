@@ -398,12 +398,19 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   transition: transform .15s ease;
 }
 .sec[open] .caret { transform: rotate(90deg); }
-.sec-name { flex: none; }
+/* The topic's mark. Always pine, never a state colour: the mark labels the
+   topic and the summary beside it does the reporting, so a red or amber icon
+   would be a second and quieter status saying something else. */
+.sec-icon { flex: none; display: inline-flex; color: var(--pine); }
+/* "Door and Window Sensor Configuration" does not fit a phone beside its
+   state, so the name wraps and the state keeps its own line rather than
+   either of them being truncated to nothing. */
+.sec-name { flex: 1 1 auto; min-width: 0; }
 /* The state, not the heading, is the reason the row is readable while shut. */
 .sec-state {
   margin-left: auto; font-size: .79rem; color: var(--ink-faint); font-weight: 400;
   text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  min-width: 0;
+  min-width: 0; flex: 0 1 auto; padding-left: .5rem;
 }
 .sec-state b { color: var(--pine); font-weight: 600; }
 .sec-state.is-alert { color: var(--amber); font-weight: 600; }

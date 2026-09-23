@@ -3883,7 +3883,7 @@
         settings.simulated ? 'simulated' : 'zigbee2mqtt',
         { label: 'Where sensor data comes from', disabled: !settings.demo_mode }));
 
-    return settingsSection('sensors', 'Door and window sensors',
+    return settingsSection('sensors', 'Door and Window Sensor Configuration',
       !settings.enabled ? '<b>Off</b>'
         : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired`, `
         <p class="zd-sub">Optional contact monitoring.</p>
@@ -3914,7 +3914,7 @@
                 </li>`).join('')}</ul>
             </div>` : ''}`
           : '<div class="note">Nothing sensor-related is shown elsewhere while this is off.</div>'}
-      `);
+      `, { icon: 'contact' });
   }
 
   async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
@@ -4092,7 +4092,7 @@
     const countIn = name => state.zones.filter(z => String(z.category || '').trim() === name).length;
     const ungrouped = state.zones.filter(z => !String(z.category || '').trim()).length;
 
-    return settingsSection('rooms', 'Rooms and groups',
+    return settingsSection('rooms', 'Rooms and Groups',
       `${state.zones.length} rooms · ${names.length ? `<b>${names.length}</b> ${names.length === 1 ? 'group' : 'groups'}` : '<b>no groups</b>'}`, `
         <p class="zd-sub">Rooms in the same group are shown together on the front page, once
         there are enough of them to be worth it. Everything here is this app's own — the hub
@@ -4137,7 +4137,7 @@
             </label>`).join('')}
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      `);
+      `, { icon: 'rooms' });
   }
 
   /** Send the whole map. See the note on setZoneCategories. */
@@ -4294,6 +4294,11 @@
    *  remembered — collapsing must never be able to hide a fault, and the one
    *  moment somebody would rather not be interrupted is the one moment they
    *  need to be.
+   *
+   *  `opts.icon` is the topic's mark. Always pine, never a state colour: the
+   *  mark labels the topic and the summary beside it does the reporting, so a
+   *  red or amber icon would be a second, quieter status saying something
+   *  different.
    */
   function settingsSection(id, name, summary, body, opts = {}) {
     const open = opts.alert === true || settingsOpenMap()[id] === true;
@@ -4301,6 +4306,7 @@
       <details class="sec" data-section="${esc(id)}" ${open ? 'open' : ''}>
         <summary>
           <span class="caret" aria-hidden="true">&rsaquo;</span>
+          ${opts.icon ? `<span class="sec-icon">${Nobo.icon(opts.icon)}</span>` : ''}
           <span class="sec-name">${esc(name)}</span>
           <span class="sec-state${opts.alert ? ' is-alert' : ''}">${summary || ''}</span>
         </summary>
@@ -4387,7 +4393,7 @@
     $('#topSub').textContent = 'Name, hub, schedules and users';
 
     $('#viewSettings').innerHTML = `
-      ${settingsSection('place', 'This place',
+      ${settingsSection('place', 'My Home',
         `<b>${esc(site.name || 'Cabin')}</b>`, `
         <p class="zd-sub">Used across the app and on the sign-in page. A nickname,
         a street address, whatever you call it — "The Lodge", "Lakeside",
@@ -4430,13 +4436,13 @@
             ${isAdmin ? '' : 'disabled'}>Save</button>
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      `)}
+      `, { icon: 'home' })}
 
       ${renderZoneGroupsCard(isAdmin)}
 
       ${renderSensorSettingsCard(isAdmin)}
 
-      ${settingsSection('hub', 'Where the data comes from',
+      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
         hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
         <p class="zd-sub">Demo invents a house so you can look around straight away, and nothing
         it does can reach a real heater.</p>
@@ -4460,9 +4466,9 @@
         </div>
         <div class="note">Changing between demo mode and a real hub signs you out, so the app
         reloads cleanly against the new source.</div>
-      `)}
+      `, { icon: 'hub' })}
 
-      ${settingsSection('frost', 'Frost protection', '<span id="excState"></span>', `
+      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
         <p class="zd-sub">${AWAY_EXPLAINER()} Pick the zones that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
         goes Away — a bathroom with pipes, a workshop, a wine store.</p>
@@ -4474,7 +4480,7 @@
         </div>
         <small class="field-hint">This applies both when you press Away and when a
         planned away period starts while nobody is looking at the app.</small>
-      `)}
+      `, { icon: 'frost' })}
 
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
@@ -4484,7 +4490,7 @@
         <p class="zd-sub">Schedules can be shared by several zones. Open one here to
         see and edit the week it contains.</p>
         ${renderScheduleSettings()}
-      `)}
+      `, { icon: 'normal' })}
 
       ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
         <p class="zd-sub">Optional email alerts. The Nobø hub reports very little
@@ -4507,7 +4513,7 @@
         </div>
 
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      `)}
+      `, { icon: 'bell' })}
 
       ${settingsSection('account', 'Account',
         me && me.using_default_password
@@ -4523,7 +4529,7 @@
         </div>
         <small class="field-hint">User management opens the classic interface, which
         still has the full user administration screen.</small>
-      `, { alert: !!(me && me.using_default_password) })}
+      `, { icon: 'person', alert: !!(me && me.using_default_password) })}
 
       ${settingsSection('diagnostics', 'Diagnostics', '', `
         <p class="zd-sub">A record of every change made through this app, everything
@@ -4532,14 +4538,14 @@
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="open-log">Open the activity log</button>
         </div>
-      `)}
+      `, { icon: 'pulse' })}
 
       ${settingsSection('about', 'About', 'Cabin', `
         <p class="zd-sub">This is the Cabin interface. The previous one is still
         installed and is always reachable at <a href="/classic">/classic</a> — nothing
         was removed. To make it the default again, set <code>NOBO_UI=classic</code> in
         the server's <code>.env</code> file and restart.</p>
-      `)}`;
+      `, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
     wireSettingsSections(root);

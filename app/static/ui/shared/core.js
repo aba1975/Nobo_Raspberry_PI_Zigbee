@@ -222,6 +222,38 @@ const Nobo = (() => {
     signal:  '<path d="M12 19.2h.01" stroke-width="2.4"/>' +
              '<path d="M8.6 15.4a4.8 4.8 0 0 1 6.8 0"/>' +
              '<path d="M5.6 12.1a9.1 9.1 0 0 1 12.8 0"/>',
+
+    /* ---- Settings topic marks -------------------------------------------
+       One per topic in Settings, so the closed list can be found by shape
+       rather than read word by word. Drawn on the same grid at the same
+       weight as the mode icons, because they sit a few pixels away from them.
+
+       Two topics deliberately have no mark of their own: My Home reuses the
+       house from Home, and Schedules reuses the calendar from the Schedule
+       mode. A second drawing of the same idea would make it look like two
+       different ideas. */
+    rooms:   '<rect x="3.3" y="3.3" width="7.6" height="7.6" rx="1.5"/>' +
+             '<rect x="13.1" y="3.3" width="7.6" height="7.6" rx="1.5"/>' +
+             '<rect x="3.3" y="13.1" width="7.6" height="7.6" rx="1.5"/>' +
+             '<rect x="13.1" y="13.1" width="7.6" height="7.6" rx="1.5"/>',
+    /* A contact sensor - body and magnet - rather than a door, because the
+       topic is doors and windows and this is what both of them carry. */
+    contact: '<rect x="3.4" y="4.4" width="9" height="15.2" rx="1.6"/>' +
+             '<circle cx="9.7" cy="12" r=".8" fill="currentColor" stroke="none"/>' +
+             '<rect x="15.4" y="8.2" width="5.2" height="7.6" rx="1.4"/>',
+    hub:     '<rect x="3.4" y="13.6" width="17.2" height="7" rx="1.9"/>' +
+             '<circle cx="7.4" cy="17.1" r=".85" fill="currentColor" stroke="none"/>' +
+             '<path d="M11.4 17.1h5.4"/>' +
+             '<path d="M8.9 9.7a4.4 4.4 0 0 1 6.2 0"/>' +
+             '<path d="M6.3 6.8a8.1 8.1 0 0 1 11.4 0"/>',
+    frost:   '<path d="M12 3v18"/><path d="m4.2 7.5 15.6 9"/><path d="m19.8 7.5-15.6 9"/>' +
+             '<path d="m9.6 4.8 2.4 2.2 2.4-2.2M9.6 19.2l2.4-2.2 2.4 2.2"/>',
+    bell:    '<path d="M18.2 9.6a6.2 6.2 0 1 0-12.4 0c0 5.1-2.1 6.5-2.1 6.5h16.6s-2.1-1.4-2.1-6.5z"/>' +
+             '<path d="M13.8 19.6a2.1 2.1 0 0 1-3.6 0"/>',
+    person:  '<circle cx="12" cy="8.1" r="3.8"/><path d="M4.9 20.5a7.3 7.3 0 0 1 14.2 0"/>',
+    pulse:   '<path d="M2.8 12.3h4.3l2.6-6.6 3.9 12.6 2.5-6h5.1"/>',
+    info:    '<circle cx="12" cy="12" r="8.8"/><path d="M12 11.2v5.4"/>' +
+             '<circle cx="12" cy="7.8" r=".95" fill="currentColor" stroke="none"/>',
   };
 
   /** An inline SVG for `name`, sized in ems so it follows the button's text. */
