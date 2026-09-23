@@ -122,6 +122,8 @@ def redirect_persistence(tmp_path, monkeypatch):
     # DATA_DIR alone leaves them pointing at the real data directory. Each one
     # a test can write has to be redirected by name.
     monkeypatch.setattr(config_persistence, "SITE_FILE", tmp_path / "site.json")
+    monkeypatch.setattr(config_persistence, "ZONE_CATEGORIES_FILE", tmp_path / "zone_categories.json")
+    monkeypatch.setattr(config_persistence, "ZONE_GROUP_ORDER_FILE", tmp_path / "zone_group_order.json")
     monkeypatch.setattr(sensor_persistence, "DATA_DIR", tmp_path)
     monkeypatch.setattr(sensor_persistence, "SENSOR_SETTINGS_FILE", tmp_path / "sensor_settings.json")
     monkeypatch.setattr(

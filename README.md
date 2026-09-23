@@ -385,6 +385,12 @@ that starts read-only and keeps every step reversible.
   message, so the request is refused with a clear explanation instead.
 - **Zone icons are stored on the Pi, not on the hub.** The hub has no icon
   field. They live in `data/zone_icons.json` and are included in a backup.
+- **Zone groups are stored on the Pi too.** Which group each room is in lives
+  in `data/zone_categories.json`, and the order the groups are shown in — set
+  with the up and down arrows under Settings → Rooms and Groups — in
+  `data/zone_group_order.json`. Until you reorder anything, groups follow the
+  order the hub lists their rooms in. Rooms in no group always come last, under
+  "Other".
 - **Names are stored with non-breaking spaces.** That is how the protocol
   encodes a space. The application converts in both directions, so what you
   type is what you see; if you read the hub with another tool you will see
@@ -2087,7 +2093,8 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 
 - `.env` — your hub configuration (serial, IP)
 - `data/` volume — user accounts, away schedules, demo zone state, zone icons
-  (`zone_icons.json`), the system name (`site.json`), the intended set points
+  (`zone_icons.json`), zone groups and their order (`zone_categories.json`,
+  `zone_group_order.json`), the system name (`site.json`), the intended set points
   (`intended_setpoints.json`, see [When somebody turns a dial](#when-somebody-turns-a-dial))
   and server state
 - `caddy-data` volume — TLS certificates and, if you use Caddy's own CA, its

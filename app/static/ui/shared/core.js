@@ -151,8 +151,9 @@ const Nobo = (() => {
     /* The whole zone-to-group map at once. Renaming or deleting a group moves
        every room in it, and sending that as one request stops the house being
        left half-renamed if one of several had failed. */
-    setZoneCategories: (categories) => req('/api/zone-categories', {
-                                     method: 'PUT', body: JSON.stringify({ categories }) }),
+    setZoneCategories: (categories, order) => req('/api/zone-categories', {
+                                     method: 'PUT',
+                                     body: JSON.stringify(order ? { categories, order } : { categories }) }),
 
     weekProfiles:      ()              => req('/api/week_profiles').then(r => r.week_profiles || r),
     createWeekProfile: (body)          => req('/api/week_profiles', {
@@ -212,6 +213,8 @@ const Nobo = (() => {
     move:    '<rect x="13.2" y="4.2" width="7.4" height="15.6" rx="1.8"/>' +
              '<path d="M3.4 12h7.2M7.6 8.4 11.2 12l-3.6 3.6"/>',
     replace: '<path d="M4 8.4h13.2l-3.6-3.6"/><path d="M20 15.6H6.8l3.6 3.6"/>',
+    up:      '<path d="M6 14.8 12 8.8l6 6"/>',
+    down:    '<path d="M6 9.2l6 6 6-6"/>',
     remove:  '<path d="M4.6 7h14.8"/><path d="M9.6 7V4.9h4.8V7"/>' +
              '<path d="M6.6 7l1 12.1a1.8 1.8 0 0 0 1.8 1.7h5.2a1.8 1.8 0 0 0 1.8-1.7L17.4 7"/>' +
              '<path d="M10.5 11v6.2M13.5 11v6.2"/>',

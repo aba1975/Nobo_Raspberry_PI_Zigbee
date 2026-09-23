@@ -2038,21 +2038,30 @@
      would be chrome around something nobody was struggling with. */
   const GROUPING_MIN_ZONES = 6;
 
-  /** Zones bucketed by category, in the order the categories first appear.
+  /** Zones bucketed by category, in the order chosen under Settings.
    *
-   *  Order is inherited rather than chosen: the first zone of a category fixes
-   *  where that category sits. That keeps the groups in the same order as the
-   *  zone list they came from, and means no reordering UI has to exist.
-   *  Uncategorised zones always come last, whenever they turned up.
+   *  The chosen order arrives as `category_rank` on each zone. A group that
+   *  has not been placed - nobody has reordered anything yet, or it is new -
+   *  follows the placed ones, in the order its first zone appears, which is
+   *  how every group was ordered before there was a choice. Uncategorised
+   *  zones always come last, whenever they turned up.
    */
   function zoneGroups(zones) {
     const buckets = new Map();
+    const rank = new Map();
     for (const zone of zones) {
       const key = String(zone.category || '').trim();
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(zone);
+      if (key && !rank.has(key) && Number.isFinite(zone.category_rank)) {
+        rank.set(key, zone.category_rank);
+      }
     }
-    const named = [...buckets.keys()].filter(Boolean).map(key => [key, buckets.get(key)]);
+    const placed = (key) => rank.has(key) ? rank.get(key) : Number.MAX_SAFE_INTEGER;
+    // Array sort is stable, so unplaced groups keep their first-seen order.
+    const named = [...buckets.keys()].filter(Boolean)
+      .sort((a, b) => placed(a) - placed(b))
+      .map(key => [key, buckets.get(key)]);
     if (buckets.has('')) named.push(['', buckets.get('')]);
     return named;
   }
@@ -4089,31 +4098,52 @@
      this screen and not yet given a room. */
   let draftGroups = [];
 
+  /* In the order the front page shows them, so this list is also the place
+     to change that order. Names not yet given a room go last; they have no
+     position to keep until one joins. */
+  function savedGroupOrder() {
+    return zoneGroups(state.zones).map(([name]) => name).filter(Boolean);
+  }
+
   function knownGroupNames() {
-    const used = state.zones.map(z => String(z.category || '').trim()).filter(Boolean);
-    return [...new Set([...used, ...draftGroups])].sort((a, b) => a.localeCompare(b));
+    const saved = savedGroupOrder();
+    return [...saved, ...draftGroups.filter(name => !saved.includes(name))];
   }
 
   function renderZoneGroupsCard(isAdmin) {
     if (!state.zones.length) return '';
     const names = knownGroupNames();
+    const saved = savedGroupOrder();
     const countIn = name => state.zones.filter(z => String(z.category || '').trim() === name).length;
     const ungrouped = state.zones.filter(z => !String(z.category || '').trim()).length;
 
     return settingsSection('rooms', 'Rooms and Groups',
       `${state.zones.length} rooms · ${names.length ? `<b>${names.length}</b> ${names.length === 1 ? 'group' : 'groups'}` : '<b>no groups</b>'}`, `
         <p class="zd-sub">Rooms in the same group are shown together on the front page, once
-        there are enough of them to be worth it. Everything here is this app's own — the hub
+        there are enough of them to be worth it, in the order listed here. Rooms in no group
+        come last, under "Other". Everything here is this app's own — the hub
         does not know about groups.</p>
 
         ${names.length ? `
           <div class="group-list">
-            ${names.map(name => `
+            ${names.map(name => {
+              const at = saved.indexOf(name);
+              const canUp = isAdmin && at > 0;
+              const canDown = isAdmin && at >= 0 && at < saved.length - 1;
+              return `
               <div class="group-row">
-                <span class="group-name">${esc(name)}</span>
-                <span class="group-count">${countIn(name)} ${countIn(name) === 1 ? 'room' : 'rooms'}${
-                  countIn(name) ? '' : ' · not saved until one joins'}</span>
-                <span class="dev-actions">
+                <span class="group-label">
+                  <span class="group-name">${esc(name)}</span>
+                  <span class="group-count">${countIn(name)} ${countIn(name) === 1 ? 'room' : 'rooms'}${
+                    countIn(name) ? '' : ' · not saved until one joins'}</span>
+                </span>
+                <span class="dev-actions group-actions">
+                  <button class="icon-btn act-move" type="button" data-move-group="${esc(name)}"
+                    data-dir="up" title="Show this group earlier"
+                    aria-label="Move ${esc(name)} up" ${canUp ? '' : 'disabled'}>${Nobo.icon('up')}</button>
+                  <button class="icon-btn act-move" type="button" data-move-group="${esc(name)}"
+                    data-dir="down" title="Show this group later"
+                    aria-label="Move ${esc(name)} down" ${canDown ? '' : 'disabled'}>${Nobo.icon('down')}</button>
                   <button class="icon-btn act-rename" type="button" data-rename-group="${esc(name)}"
                     title="Rename this group" aria-label="Rename ${esc(name)}"
                     ${isAdmin ? '' : 'disabled'}>${Nobo.icon('rename')}</button>
@@ -4121,7 +4151,8 @@
                     title="Remove this group" aria-label="Remove ${esc(name)}"
                     ${isAdmin ? '' : 'disabled'}>${Nobo.icon('remove')}</button>
                 </span>
-              </div>`).join('')}
+              </div>`;
+            }).join('')}
           </div>` : `
           <div class="note">No groups yet. Give a room a group below, or start one here.</div>`}
 
@@ -4148,11 +4179,23 @@
       `, { icon: 'rooms' });
   }
 
-  /** Send the whole map. See the note on setZoneCategories. */
-  async function saveZoneCategories(mapping) {
-    await Nobo.api.setZoneCategories(mapping);
+  /** Send the whole map, and the order when it changes. See the note on
+      setZoneCategories. */
+  async function saveZoneCategories(mapping, order) {
+    await Nobo.api.setZoneCategories(mapping, order);
     await refresh(true);
     renderSettings();
+  }
+
+  /** The saved order with one group swapped with its neighbour, or null
+      when it is already at that end. */
+  function movedGroupOrder(order, name, dir) {
+    const at = order.indexOf(name);
+    const to = dir === 'up' ? at - 1 : at + 1;
+    if (at < 0 || to < 0 || to >= order.length) return null;
+    const next = order.slice();
+    [next[at], next[to]] = [next[to], next[at]];
+    return next;
   }
 
   function currentCategoryMap() {
@@ -4174,6 +4217,26 @@
         try {
           await saveZoneCategories(map);
           Nobo.toast(select.value ? `Moved to ${select.value}` : 'Removed from its group');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+
+    card.querySelectorAll('[data-move-group]').forEach(button => {
+      button.onclick = async () => {
+        const name = button.dataset.moveGroup;
+        const dir = button.dataset.dir;
+        const order = movedGroupOrder(savedGroupOrder(), name, dir);
+        if (!order) return;
+        try {
+          await saveZoneCategories(currentCategoryMap(), order);
+          /* The list is redrawn, so put focus back on the group that moved -
+             on the same arrow if it can go further, the other if it cannot -
+             so a keyboard can keep pressing without hunting for its place. */
+          const again = [...document.querySelectorAll('[data-move-group]')]
+            .filter(b => b.dataset.moveGroup === name);
+          const target = again.find(b => b.dataset.dir === dir && !b.disabled)
+            || again.find(b => !b.disabled);
+          if (target) target.focus();
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
     });
@@ -4229,8 +4292,10 @@
             for (const [zoneId, name] of Object.entries(map)) {
               if (name === was) map[zoneId] = now;
             }
+            // A renamed group keeps its place rather than dropping to the end.
+            const order = savedGroupOrder().map(name => name === was ? now : name);
             try {
-              await saveZoneCategories(map);
+              await saveZoneCategories(map, order);
               closeSheet();
               Nobo.toast(`Renamed to ${now}`);
             } catch (e) { Nobo.toast(e.message, 'error'); }

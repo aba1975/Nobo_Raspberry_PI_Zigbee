@@ -143,9 +143,9 @@ class TestItStaysOutOfTheWay:
 
 class TestWhereTheGroupsGo:
     def test_order_is_inherited_from_the_zone_list(self):
-        """The first zone of a category fixes where that category sits, so the
-        groups follow the order the zones were already in and no reordering
-        control has to exist."""
+        """Until an order is chosen under Settings, the first zone of a
+        category fixes where that category sits, so the groups follow the
+        order the zones were already in. See test_zone_group_order.py."""
         zones = [
             _zone("a", "Utility"), _zone("b", "Bathrooms"),
             _zone("c", "Utility"), _zone("d", "Bathrooms"),

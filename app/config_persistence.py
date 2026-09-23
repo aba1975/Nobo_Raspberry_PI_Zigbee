@@ -37,6 +37,7 @@ SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 ZONE_CATEGORIES_FILE = DATA_DIR / "zone_categories.json"
+ZONE_GROUP_ORDER_FILE = DATA_DIR / "zone_group_order.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
 # Which exception zones are *currently* held on a zone-level Eco override.
 #
@@ -282,6 +283,53 @@ def load_zone_categories() -> dict:
         )
         _backup_corrupt(ZONE_CATEGORIES_FILE)
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Zone group order
+# ---------------------------------------------------------------------------
+# The order the groups are shown in on the front page, as a list of group
+# names. Kept in its own file rather than folded into zone_categories.json so
+# that file stays the plain zone-to-name map it has always been, and an
+# installation that never reorders anything never has this file at all.
+#
+# A group missing from the list is not an error: it is shown after the ones
+# that are listed, in the order its rooms first appear.
+
+def save_zone_group_order(order: list) -> None:
+    """Persist the group *order* to ``data/zone_group_order.json`` atomically."""
+    try:
+        _atomic_write(ZONE_GROUP_ORDER_FILE, order)
+    except Exception as exc:
+        logger.error("Failed to save zone group order: %s", exc)
+
+
+def load_zone_group_order() -> list:
+    """
+    Load the group order from ``data/zone_group_order.json``.
+
+    Returns:
+        ``list`` of group names, first shown first.
+        Empty ``list`` when the file does not exist or is corrupt (backed up as .backup).
+    """
+    try:
+        with ZONE_GROUP_ORDER_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, list):
+            logger.warning(
+                "zone_group_order.json has unexpected format (expected list, got %s) — using empty list",
+                type(data).__name__,
+            )
+            return []
+        return [str(name) for name in data if isinstance(name, str) and name.strip()]
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "zone_group_order.json is corrupt: %s — backing up and using empty list", exc
+        )
+        _backup_corrupt(ZONE_GROUP_ORDER_FILE)
+        return []
 
 
 # ---------------------------------------------------------------------------

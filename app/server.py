@@ -387,6 +387,9 @@ zone_icons: Dict[str, str] = config_persistence.load_zone_icons()
 # Which part of the building a zone is in, so the front page can group the
 # cards. The hub has no such field either, so the same arrangement applies.
 zone_categories: Dict[str, str] = config_persistence.load_zone_categories()
+# The order the groups are shown in, first first. Groups not listed follow the
+# listed ones; see _category_rank.
+zone_group_order: List[str] = config_persistence.load_zone_group_order()
 
 # Optional contact sensors. The provider is started only when the persisted
 # master switch is on; disabled installations pay no runtime or UI cost.
@@ -2797,6 +2800,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'name': demo_zone['name'],
                 'icon': demo_zone.get('icon', ''),
                 'category': zone_categories.get(str(demo_zone['zone_id']), ''),
+                'category_rank': _category_rank(zone_categories.get(str(demo_zone['zone_id']), '')),
                 'rooms': demo_zone.get('rooms', []),
                 'components': demo_zone['components'],
                 'components_display': components_display,
@@ -2884,6 +2888,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'name': zone_name,
                 'icon': zone_icons.get(str(zone_id), ''),
                 'category': zone_categories.get(str(zone_id), ''),
+                'category_rank': _category_rank(zone_categories.get(str(zone_id), '')),
                 'rooms': [zone_name],  # Default to zone name
                 'components': zone_components,
                 'components_display': components_display,
@@ -4081,6 +4086,44 @@ async def add_zone(zone: ZoneAdd):
 
 class ZoneCategoriesUpdate(BaseModel):
     categories: Dict[str, str]
+    # The order the groups are shown in. Omitted means "keep the order you
+    # have", so moving one room between groups does not have to restate it.
+    order: Optional[List[str]] = None
+
+
+def _category_rank(category: str) -> Optional[int]:
+    """Where *category* sits in the chosen group order, or None if unplaced.
+
+    Sent on every zone rather than as a list of its own, so the order reaches
+    every open browser in the same ``zones_update`` that carries the groups,
+    and the two can never arrive out of step.
+    """
+    if not category:
+        return None
+    try:
+        return zone_group_order.index(category)
+    except ValueError:
+        return None
+
+
+def _prune_zone_group_order() -> None:
+    """Drop names no room is in any more, and duplicates, then persist.
+
+    A group is only the name its rooms share, so once the last room leaves it
+    there is nothing left to order - and a stale name left behind would hand a
+    brand-new group of the same name an old position nobody chose for it.
+    """
+    global zone_group_order
+    in_use = set(zone_categories.values())
+    seen = set()
+    pruned = []
+    for name in zone_group_order:
+        if name in in_use and name not in seen:
+            seen.add(name)
+            pruned.append(name)
+    if pruned != zone_group_order:
+        zone_group_order = pruned
+        config_persistence.save_zone_group_order(zone_group_order)
 
 
 @app.put("/api/zone-categories")
@@ -4097,7 +4140,7 @@ async def update_zone_categories(body: ZoneCategoriesUpdate):
     ``{zone_id}`` catch-all, and a sibling route there would be matched as a
     zone called "categories" depending on declaration order.
     """
-    global zone_categories
+    global zone_categories, zone_group_order
     known = {str(zone["zone_id"]) for zone in _build_zones_data()}
     unknown = sorted(set(body.categories) - known)
     if unknown:
@@ -4112,8 +4155,12 @@ async def update_zone_categories(body: ZoneCategoriesUpdate):
         if name and name.strip()
     }
     config_persistence.save_zone_categories(zone_categories)
+    if body.order is not None:
+        zone_group_order = [name.strip() for name in body.order if name and name.strip()]
+        config_persistence.save_zone_group_order(zone_group_order)
+    _prune_zone_group_order()
     logger.info("Zone groups updated: %d assigned", len(zone_categories))
-    return {"status": "success", "categories": zone_categories}
+    return {"status": "success", "categories": zone_categories, "order": zone_group_order}
 
 
 def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
@@ -4140,6 +4187,7 @@ def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
         # opened and left alone.
         zone_categories.pop(str(zone_id), None)
     config_persistence.save_zone_categories(zone_categories)
+    _prune_zone_group_order()
 
 
 @app.put("/api/zones/{zone_id}")
