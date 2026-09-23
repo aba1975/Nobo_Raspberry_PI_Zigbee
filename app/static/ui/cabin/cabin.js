@@ -2019,6 +2019,103 @@
       </li>`;
   }
 
+  /* ------------------------------------------------------------------
+   * Grouping the cards by category
+   *
+   * Categories are this application's own idea, kept beside the zone icon and
+   * unknown to the hub. They exist so a building with more rooms than fit on
+   * a screen can be scanned by part - bathrooms, upstairs - rather than read
+   * end to end.
+   *
+   * The whole design rests on grouping having to earn its pixels. Below the
+   * threshold, or when the categories do not actually divide the list, the
+   * page renders exactly as it did before: one grid, no headings, nothing to
+   * explain to somebody with four rooms.
+   * ---------------------------------------------------------------- */
+
+  /* Fewer than this and the list is short enough to read whole, so headings
+     would be chrome around something nobody was struggling with. */
+  const GROUPING_MIN_ZONES = 6;
+
+  /** Zones bucketed by category, in the order the categories first appear.
+   *
+   *  Order is inherited rather than chosen: the first zone of a category fixes
+   *  where that category sits. That keeps the groups in the same order as the
+   *  zone list they came from, and means no reordering UI has to exist.
+   *  Uncategorised zones always come last, whenever they turned up.
+   */
+  function zoneGroups(zones) {
+    const buckets = new Map();
+    for (const zone of zones) {
+      const key = String(zone.category || '').trim();
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(zone);
+    }
+    const named = [...buckets.keys()].filter(Boolean).map(key => [key, buckets.get(key)]);
+    if (buckets.has('')) named.push(['', buckets.get('')]);
+    return named;
+  }
+
+  /** Whether grouping those zones is worth the headings it costs. */
+  function groupingIsWorthIt(zones, groups) {
+    return zones.length >= GROUPING_MIN_ZONES
+      && groups.length >= 2
+      && groups.some(([name]) => name);
+  }
+
+  /* A room worth walking to: a contact sensor has raised a warning, or the
+     set point was changed on a heater behind the application's back. Both
+     already have a badge on the card; the group line only counts them. */
+  function zoneNeedsAttention(zone) {
+    return !!(zone.sensor_summary && zone.sensor_summary.warning_raised)
+      || !!zone.setpoint_changed_outside;
+  }
+
+  /** What a group heading says about itself.
+   *
+   *  The point of the heading. A line that only repeats the word you typed is
+   *  decoration; one that reports what the rooms under it are doing can answer
+   *  the question without the cards being read at all.
+   *
+   *  Every part of it degrades: most hubs report no room temperature whatever
+   *  - every component here has `tempsensor_for_zone_id = None` - so "coldest"
+   *  simply does not appear rather than inventing a number.
+   */
+  function groupSummary(zones) {
+    const parts = [`${zones.length} ${zones.length === 1 ? 'zone' : 'zones'}`];
+
+    const modes = new Set(zones.map(zone => Nobo.effectiveMode(zone)));
+    if (modes.size === 1) {
+      const only = [...modes][0];
+      parts.push(`all at ${(Nobo.MODES[only] || {}).label || only}`);
+    } else {
+      const measured = zones.filter(zone => zone.current_temperature != null);
+      if (measured.length) {
+        const coldest = measured.reduce((a, b) =>
+          b.current_temperature < a.current_temperature ? b : a);
+        parts.push(`coldest <span class="grp-cold">${Nobo.fmtTemp(coldest.current_temperature)}\u00B0</span>`);
+      }
+    }
+
+    const attention = zones.filter(zoneNeedsAttention).length;
+    if (attention) {
+      parts.push(`<span class="grp-warn">${attention} ${attention === 1 ? 'needs' : 'need'} attention</span>`);
+    }
+    return parts.join(' \u00B7 ');
+  }
+
+  /* A heading is a full-width row of the same grid the cards are in, so the
+     cards keep sharing their row heights and the layout stays one grid with
+     no breakpoints. Uncategorised zones are gathered under "Other" rather
+     than being nagged into a category they may not want. */
+  function groupHeadingRow(name, zones) {
+    return `
+      <li class="zone-group-head" role="presentation">
+        <h3 class="grp-name">${esc(name || 'Other')}</h3>
+        <span class="grp-sum">${groupSummary(zones)}</span>
+      </li>`;
+  }
+
   function renderZones() {
     const list = $('#zoneList');
     if (!state.zones.length) {
@@ -2027,12 +2124,26 @@
       $('#roomsNote').textContent = '';
       return;
     }
-    list.innerHTML = state.zones.map(zoneRow).join('');
+    const groups = zoneGroups(state.zones);
+    list.innerHTML = groupingIsWorthIt(state.zones, groups)
+      ? groups.map(([name, zones]) =>
+          groupHeadingRow(name, zones) + zones.map(zoneRow).join('')).join('')
+      : state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
     const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'zone' : 'zones'}`;
-    $('#roomsNote').textContent = manual
+    const note = $('#roomsNote');
+    note.textContent = manual
       ? `${zoneCount} · ${manual} with a dial-only heater`
       : zoneCount;
+    /* One quiet way in, and only while it would help: enough rooms to want
+       grouping and not one of them grouped yet. It goes the moment the first
+       group exists, so it can never settle into being furniture. */
+    if (state.zones.length >= GROUPING_MIN_ZONES && !groups.some(([name]) => name)) {
+      note.insertAdjacentHTML('beforeend',
+        ' · <button class="linkish" type="button" data-act="group-zones">Group them</button>');
+      const link = note.querySelector('[data-act="group-zones"]');
+      if (link) link.onclick = () => showSettings();
+    }
 
     list.querySelectorAll('[data-open]').forEach(b => {
       b.onclick = () => showZone(b.dataset.open);
@@ -2358,7 +2469,7 @@
       <section class="card">
         <h2>Zone settings</h2>
         <div class="sheet-actions">
-          <button class="btn" type="button" data-act="rename-zone">Rename zone</button>
+          <button class="btn" type="button" data-act="rename-zone">Edit this room</button>
           <button class="btn btn-danger" type="button" data-act="delete-zone">Delete zone</button>
         </div>
       </section>`;
@@ -3544,10 +3655,25 @@
     });
   }
 
+  /* Name and category in one sheet.
+   *
+   * The category is free text with the ones already in use offered beneath it:
+   * a picker would need a manager to add and rename entries, and a plain box
+   * invites "Upstairs" and "upstairs" to become two groups. The datalist is
+   * the smallest thing that avoids both. */
   function renameZone(zone) {
-    openSheet('Rename zone', `
+    const used = [...new Set(state.zones
+      .map(z => String(z.category || '').trim())
+      .filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    openSheet('Zone details', `
       <label class="field"><span>Zone name</span>
         <input type="text" id="rzName" value="${esc(zone.name)}" autocomplete="off"></label>
+      <label class="field"><span>Part of the building <small class="field-hint">Optional. Zones sharing a
+        category are grouped together on the front page, once there are enough to be worth it.</small></span>
+        <input type="text" id="rzCategory" list="rzCategories" autocomplete="off"
+          placeholder="Bathrooms, Upstairs, Boathouse\u2026"
+          value="${esc(zone.category || '')}"></label>
+      <datalist id="rzCategories">${used.map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Save</button>
@@ -3556,10 +3682,14 @@
       root.querySelector('[data-act="ok"]').onclick = async () => {
         const name = root.querySelector('#rzName').value.trim();
         if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
+        const typed = root.querySelector('#rzCategory').value.trim();
+        /* Match an existing category that differs only by case, so "upstairs"
+           joins "Upstairs" instead of starting a second group beside it. */
+        const category = used.find(c => c.toLowerCase() === typed.toLowerCase()) || typed;
         try {
-          await Nobo.api.updateZone(zone.zone_id, { name });
+          await Nobo.api.updateZone(zone.zone_id, { name, category });
           closeSheet();
-          Nobo.toast('Zone renamed');
+          Nobo.toast('Zone saved');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
@@ -3735,27 +3865,34 @@
     const unassigned = sensors.filter(sensor =>
       sensor.zone_id == null || !knownZones.has(String(sensor.zone_id))
     );
-    return `
-      <section class="card sensor-settings">
-        <div class="section-head">
-          <h2>Door and window sensors</h2>
-          ${settings.enabled
-            ? '<button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>'
-            : ''}
-        </div>
-        <p class="zd-sub">Optional contact monitoring.
-        ${settings.simulated
-          ? 'These sensors are <strong>simulated</strong>; no Zigbee hardware or broker is started, and their state is yours to set.'
-          : 'These are <strong>real Zigbee sensors</strong>, so their contact, battery and reachability are readings from the hardware.'}</p>
-        <div class="switch">
-          <div class="switch-text"><strong>Use contact sensors</strong>
-            <span>Show door and window state, left-open warnings and optional heating actions.</span>
-          </div>
-          <button class="btn" type="button" data-act="toggle-sensors"
-            aria-pressed="${settings.enabled ? 'true' : 'false'}">${settings.enabled ? 'On' : 'Off'}</button>
-        </div>
+    /* Two questions, not one. Whether to use contact sensors at all is a
+       different thing from which kind, and folding "off" in beside the two
+       sources made a three-way control that read as a mode switch. Off also
+       has no source to choose, so the second row simply is not there. */
+    const onOff = settingRow(
+      'Use contact sensors',
+      'Door and window state, left-open warnings and optional heating actions.',
+      segControl('sensor-enabled', [['off', 'Off'], ['on', 'On']],
+        settings.enabled ? 'on' : 'off', { label: 'Use contact sensors' }));
+
+    const sourceRow = !settings.enabled ? '' : settingRow(
+      'Source', settings.demo_mode
+        ? 'Demo sensors are invented and their state is yours to set.'
+        : 'Demo sensors are only offered while the heaters are in demo mode.',
+      segControl('sensor-source', [['simulated', 'Demo'], ['zigbee2mqtt', 'Zigbee']],
+        settings.simulated ? 'simulated' : 'zigbee2mqtt',
+        { label: 'Where sensor data comes from', disabled: !settings.demo_mode }));
+
+    return settingsSection('sensors', 'Door and Window Sensor Configuration',
+      !settings.enabled ? '<b>Off</b>'
+        : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired`, `
+        <p class="zd-sub">Optional contact monitoring.</p>
+        ${onOff}
+        ${sourceRow}
         ${settings.enabled ? `
-          ${sensorSourceRow(settings)}
+          <div class="section-head" style="margin-top:.9rem">
+            <button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>
+          </div>
           <div class="sensor-settings-summary">
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
             <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
@@ -3777,32 +3914,7 @@
                 </li>`).join('')}</ul>
             </div>` : ''}`
           : '<div class="note">Nothing sensor-related is shown elsewhere while this is off.</div>'}
-      </section>`;
-  }
-
-  /* Which kind of sensors this installation is running, and a way back.
-
-     The choice used to exist only at the moment of switching the feature on,
-     so anything already running one kind had no way to see or change which —
-     which is how it was reported: "there is no demo mode for sensors". The
-     answer was that there is, but only ever offered once, and by then invisible.
-
-     Shown even where there is nothing to change to, because "which am I
-     looking at?" is the question being asked, and it is worth answering
-     whether or not the answer can be acted on. */
-  function sensorSourceRow(settings) {
-    const simulated = !!settings.simulated;
-    return `
-      <div class="switch sensor-source">
-        <div class="switch-text"><strong>Sensor source</strong>
-          <span>${simulated
-            ? 'Demo sensors \u2014 invented, and their state is yours to set. Nothing reaches a heater.'
-            : 'Real Zigbee sensors \u2014 contact, battery and signal are readings from the hardware.'}</span>
-        </div>
-        ${settings.demo_mode
-          ? `<button class="btn" type="button" data-act="change-source">Change</button>`
-          : `<span class="field-hint">Demo sensors are only offered in demo mode.</span>`}
-      </div>`;
+      `, { icon: 'contact' });
   }
 
   async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
@@ -3923,17 +4035,9 @@
   }
 
   function wireSensorSettings(root) {
-    const toggle = root.querySelector('[data-act="toggle-sensors"]');
-    if (!toggle) return;
-    toggle.onclick = async () => {
-      if (!state.sensorSettings.enabled) { sensorProviderSheet(); return; }
-      try {
-        await saveSensorSettings(false);
-        Nobo.toast('Contact sensors disabled');
-      } catch (e) { Nobo.toast(e.message, 'error'); }
-    };
-    const changeSource = root.querySelector('[data-act="change-source"]');
-    if (changeSource) changeSource.onclick = () => sensorProviderSheet({ changing: true });
+    /* The source control replaced both the on/off toggle and the "Change"
+       button that used to open a sheet; it is wired with the other segmented
+       controls. What is left here is the sensor list itself. */
     const pair = root.querySelector('[data-act="pair-sensor"]');
     if (pair) pair.onclick = () => pairSensorSheet();
     wireZoneSensors(root);
@@ -3959,6 +4063,328 @@
     } catch (_) { /* the static render is already correct enough */ }
   }
 
+  /* ------------------------------------------------------------------
+   * Settings: rooms and groups
+   *
+   * Setting the house up is a job you do once and it touches every room, so
+   * it happens on one screen rather than across eleven zone pages. The
+   * per-zone editor stays for the one-room case; this is the bulk one.
+   *
+   * A group is not an object you create and then fill: it is the name its
+   * rooms share. "New group" only adds a name to every picker on this screen
+   * so rooms can be put in it; an empty group is never persisted, because
+   * there is nothing to persist. That keeps the stored shape a plain
+   * zone-to-name map with no second list to be migrated or fall out of step.
+   * ---------------------------------------------------------------- */
+
+  /* Names offered in the pickers: the ones in use, plus any just invented on
+     this screen and not yet given a room. */
+  let draftGroups = [];
+
+  function knownGroupNames() {
+    const used = state.zones.map(z => String(z.category || '').trim()).filter(Boolean);
+    return [...new Set([...used, ...draftGroups])].sort((a, b) => a.localeCompare(b));
+  }
+
+  function renderZoneGroupsCard(isAdmin) {
+    if (!state.zones.length) return '';
+    const names = knownGroupNames();
+    const countIn = name => state.zones.filter(z => String(z.category || '').trim() === name).length;
+    const ungrouped = state.zones.filter(z => !String(z.category || '').trim()).length;
+
+    return settingsSection('rooms', 'Rooms and Groups',
+      `${state.zones.length} rooms · ${names.length ? `<b>${names.length}</b> ${names.length === 1 ? 'group' : 'groups'}` : '<b>no groups</b>'}`, `
+        <p class="zd-sub">Rooms in the same group are shown together on the front page, once
+        there are enough of them to be worth it. Everything here is this app's own — the hub
+        does not know about groups.</p>
+
+        ${names.length ? `
+          <div class="group-list">
+            ${names.map(name => `
+              <div class="group-row">
+                <span class="group-name">${esc(name)}</span>
+                <span class="group-count">${countIn(name)} ${countIn(name) === 1 ? 'room' : 'rooms'}${
+                  countIn(name) ? '' : ' · not saved until one joins'}</span>
+                <span class="dev-actions">
+                  <button class="icon-btn act-rename" type="button" data-rename-group="${esc(name)}"
+                    title="Rename this group" aria-label="Rename ${esc(name)}"
+                    ${isAdmin ? '' : 'disabled'}>${Nobo.icon('rename')}</button>
+                  <button class="icon-btn act-remove" type="button" data-delete-group="${esc(name)}"
+                    title="Remove this group" aria-label="Remove ${esc(name)}"
+                    ${isAdmin ? '' : 'disabled'}>${Nobo.icon('remove')}</button>
+                </span>
+              </div>`).join('')}
+          </div>` : `
+          <div class="note">No groups yet. Give a room a group below, or start one here.</div>`}
+
+        <button class="btn btn-add" type="button" data-act="new-group"
+          ${isAdmin ? '' : 'disabled'}>New group</button>
+
+        <h3 class="group-subhead">Which group each room is in</h3>
+        <p class="zd-sub">${ungrouped
+          ? `${ungrouped} ${ungrouped === 1 ? 'room is' : 'rooms are'} in no group. That is
+             fine — they appear under "Other".`
+          : 'Every room is in a group.'}</p>
+        <div class="group-assign">
+          ${state.zones.map(zone => `
+            <label class="assign-row">
+              <span class="assign-name">${esc(zone.name)}</span>
+              <select data-assign-zone="${esc(zone.zone_id)}" ${isAdmin ? '' : 'disabled'}>
+                <option value="">— Other —</option>
+                ${names.map(name => `<option value="${esc(name)}"
+                  ${String(zone.category || '').trim() === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+              </select>
+            </label>`).join('')}
+        </div>
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      `, { icon: 'rooms' });
+  }
+
+  /** Send the whole map. See the note on setZoneCategories. */
+  async function saveZoneCategories(mapping) {
+    await Nobo.api.setZoneCategories(mapping);
+    await refresh(true);
+    renderSettings();
+  }
+
+  function currentCategoryMap() {
+    const map = {};
+    for (const zone of state.zones) {
+      map[String(zone.zone_id)] = String(zone.category || '').trim();
+    }
+    return map;
+  }
+
+  function wireZoneGroups(root) {
+    const card = root.querySelector('[data-section="rooms"]');
+    if (!card) return;
+
+    card.querySelectorAll('[data-assign-zone]').forEach(select => {
+      select.onchange = async () => {
+        const map = currentCategoryMap();
+        map[select.dataset.assignZone] = select.value;
+        try {
+          await saveZoneCategories(map);
+          Nobo.toast(select.value ? `Moved to ${select.value}` : 'Removed from its group');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+
+    const addBtn = card.querySelector('[data-act="new-group"]');
+    if (addBtn) addBtn.onclick = () => {
+      openSheet('New group', `
+        <label class="field"><span>Group name
+          <small class="field-hint">A part of the building — "Bathrooms", "Upstairs",
+          "Boathouse". It is saved once a room is put in it.</small></span>
+          <input type="text" id="ngName" autocomplete="off" placeholder="Upstairs"></label>
+        <div class="sheet-actions">
+          <button class="btn" data-act="cancel" type="button">Cancel</button>
+          <button class="btn btn-primary" data-act="ok" type="button">Add</button>
+        </div>`, (sheet) => {
+        sheet.querySelector('[data-act="cancel"]').onclick = closeSheet;
+        sheet.querySelector('[data-act="ok"]').onclick = () => {
+          const name = sheet.querySelector('#ngName').value.trim();
+          if (!name) { Nobo.toast('Give the group a name', 'error'); return; }
+          if (knownGroupNames().some(n => n.toLowerCase() === name.toLowerCase())) {
+            Nobo.toast('There is already a group with that name', 'error'); return;
+          }
+          draftGroups.push(name);
+          closeSheet();
+          renderSettings();
+          Nobo.toast('Group added — now put a room in it');
+        };
+      });
+    };
+
+    card.querySelectorAll('[data-rename-group]').forEach(button => {
+      button.onclick = () => {
+        const was = button.dataset.renameGroup;
+        const moving = state.zones.filter(z => String(z.category || '').trim() === was).length;
+        openSheet('Rename group', `
+          <label class="field"><span>Group name
+            <small class="field-hint">${moving
+              ? `${moving} ${moving === 1 ? 'room moves' : 'rooms move'} with it.`
+              : 'No rooms are in this group yet.'}</small></span>
+            <input type="text" id="rgName" autocomplete="off" value="${esc(was)}"></label>
+          <div class="sheet-actions">
+            <button class="btn" data-act="cancel" type="button">Cancel</button>
+            <button class="btn btn-primary" data-act="ok" type="button">Save</button>
+          </div>`, (sheet) => {
+          sheet.querySelector('[data-act="cancel"]').onclick = closeSheet;
+          sheet.querySelector('[data-act="ok"]').onclick = async () => {
+            const now = sheet.querySelector('#rgName').value.trim();
+            if (!now) { Nobo.toast('Give the group a name', 'error'); return; }
+            if (now === was) { closeSheet(); return; }
+            draftGroups = draftGroups.filter(n => n !== was);
+            if (!moving) { draftGroups.push(now); closeSheet(); renderSettings(); return; }
+            const map = currentCategoryMap();
+            for (const [zoneId, name] of Object.entries(map)) {
+              if (name === was) map[zoneId] = now;
+            }
+            try {
+              await saveZoneCategories(map);
+              closeSheet();
+              Nobo.toast(`Renamed to ${now}`);
+            } catch (e) { Nobo.toast(e.message, 'error'); }
+          };
+        });
+      };
+    });
+
+    card.querySelectorAll('[data-delete-group]').forEach(button => {
+      button.onclick = () => {
+        const name = button.dataset.deleteGroup;
+        const losing = state.zones.filter(z => String(z.category || '').trim() === name).length;
+        /* Not a destructive action, and not dressed as one: nothing about a
+           room is stored in its group, so removing one ungroups its rooms and
+           loses nothing. Saying so is kinder than a red warning. */
+        confirmSheet('Remove group', losing
+          ? `${losing} ${losing === 1 ? 'room moves' : 'rooms move'} to "Other". Nothing else about ${
+              losing === 1 ? 'it' : 'them'} changes.`
+          : 'Nothing is in this group.',
+          'Remove', async () => {
+            draftGroups = draftGroups.filter(n => n !== name);
+            if (!losing) { renderSettings(); return; }
+            const map = currentCategoryMap();
+            for (const [zoneId, value] of Object.entries(map)) {
+              if (value === name) map[zoneId] = '';
+            }
+            try {
+              await saveZoneCategories(map);
+              Nobo.toast(`${name} removed`);
+            } catch (e) { Nobo.toast(e.message, 'error'); }
+          });
+      };
+    });
+  }
+
+  /* ------------------------------------------------------------------
+   * Settings as collapsible topics
+   *
+   * Ten cards had grown into one scroll, and the only way to learn what the
+   * system was set to was to read all of it. Each topic now collapses, and
+   * says its own current state while shut — so the closed list is an index of
+   * the whole configuration rather than a table of contents.
+   *
+   * That is the whole justification for collapsing anything: a summary that
+   * only repeated the heading would have hidden the settings and given back
+   * nothing.
+   * ---------------------------------------------------------------- */
+
+  /* Which topics are left open is a habit of the device in your hand, not a
+     fact about the cabin, so it lives in local storage beside the interface
+     choice rather than on the hub. */
+  const SETTINGS_OPEN_KEY = 'nobo.settings.open';
+
+  function settingsOpenMap() {
+    try { return JSON.parse(localStorage.getItem(SETTINGS_OPEN_KEY) || '{}') || {}; }
+    catch (_) { return {}; }
+  }
+
+  function rememberSettingsOpen(id, open) {
+    const map = settingsOpenMap();
+    map[id] = open;
+    try { localStorage.setItem(SETTINGS_OPEN_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+
+  /** One collapsible topic.
+   *
+   *  `summary` is trusted HTML so a caller can emphasise the live value; every
+   *  caller escapes its own data. `alert` forces the topic open whatever was
+   *  remembered — collapsing must never be able to hide a fault, and the one
+   *  moment somebody would rather not be interrupted is the one moment they
+   *  need to be.
+   *
+   *  `opts.icon` is the topic's mark. Always pine, never a state colour: the
+   *  mark labels the topic and the summary beside it does the reporting, so a
+   *  red or amber icon would be a second, quieter status saying something
+   *  different.
+   */
+  function settingsSection(id, name, summary, body, opts = {}) {
+    const open = opts.alert === true || settingsOpenMap()[id] === true;
+    return `
+      <details class="sec" data-section="${esc(id)}" ${open ? 'open' : ''}>
+        <summary>
+          <span class="caret" aria-hidden="true">&rsaquo;</span>
+          ${opts.icon ? `<span class="sec-icon">${Nobo.icon(opts.icon)}</span>` : ''}
+          <span class="sec-name">${esc(name)}</span>
+          <span class="sec-state${opts.alert ? ' is-alert' : ''}">${summary || ''}</span>
+        </summary>
+        <div class="sec-body">${body}</div>
+      </details>`;
+  }
+
+  /** One of a few, as a segmented control.
+   *
+   *  The single answer to "which of these is it?", so that the same question
+   *  never gets a toggle in one place and a button opening a sheet in another.
+   *  `options` is [[value, label], …].
+   */
+  function segControl(action, options, current, opts = {}) {
+    return `<span class="choice" role="group"${opts.label ? ` aria-label="${esc(opts.label)}"` : ''}>${
+      options.map(([value, label]) => `
+        <button type="button" class="choice-btn" data-seg="${esc(action)}" data-value="${esc(value)}"
+          aria-pressed="${String(value) === String(current) ? 'true' : 'false'}"
+          ${opts.disabled ? 'disabled' : ''}>${esc(label)}</button>`).join('')}</span>`;
+  }
+
+  /** A labelled row with its control on the right. */
+  function settingRow(title, hint, control) {
+    return `
+      <div class="opt-row">
+        <span class="opt-label"><strong>${esc(title)}</strong>${
+          hint ? `<small>${esc(hint)}</small>` : ''}</span>
+        ${control}
+      </div>`;
+  }
+
+  function wireSettingsSections(root) {
+    root.querySelectorAll('details.sec').forEach(sec => {
+      sec.addEventListener('toggle', () => {
+        rememberSettingsOpen(sec.dataset.section, sec.open);
+      });
+    });
+  }
+
+  function wireSettingsSegments(root, hub) {
+    root.querySelectorAll('[data-seg="hub-source"]').forEach(button => {
+      button.onclick = () => {
+        const wantDemo = button.dataset.value === 'demo';
+        if (wantDemo === !!hub.demo_mode) return;
+        toggleDemo(wantDemo);
+      };
+    });
+    root.querySelectorAll('[data-seg="sensor-enabled"]').forEach(button => {
+      button.onclick = async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const on = button.dataset.value === 'on';
+        try {
+          if (!on) {
+            await saveSensorSettings(false);
+            Nobo.toast('Contact sensors turned off');
+            return;
+          }
+          /* Turning them on needs a source, and the one it had is the right
+             default: demo where demo is allowed, otherwise the radio. */
+          const settings = state.sensorSettings || {};
+          const provider = settings.demo_mode ? 'simulated' : 'zigbee2mqtt';
+          await saveSensorSettings(true, provider);
+          Nobo.toast(provider === 'simulated' ? 'Demo sensors on' : 'Zigbee sensors on');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+    root.querySelectorAll('[data-seg="sensor-source"]').forEach(button => {
+      button.onclick = async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        try {
+          await saveSensorSettings(true, button.dataset.value);
+          Nobo.toast(button.dataset.value === 'simulated'
+            ? 'Now using demo sensors' : 'Now using real Zigbee sensors');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      };
+    });
+  }
+
   function renderSettings(me = state.me) {
     const hub = state.hub || {};
     const site = state.site || {};
@@ -3967,8 +4393,8 @@
     $('#topSub').textContent = 'Name, hub, schedules and users';
 
     $('#viewSettings').innerHTML = `
-      <section class="card">
-        <h2>What this place is called</h2>
+      ${settingsSection('place', 'My Home',
+        `<b>${esc(site.name || 'Cabin')}</b>`, `
         <p class="zd-sub">Used across the app and on the sign-in page. A nickname,
         a street address, whatever you call it — "The Lodge", "Lakeside",
         "Main Street 12".</p>
@@ -4010,24 +4436,19 @@
             ${isAdmin ? '' : 'disabled'}>Save</button>
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      </section>
+      `, { icon: 'home' })}
+
+      ${renderZoneGroupsCard(isAdmin)}
 
       ${renderSensorSettingsCard(isAdmin)}
 
-      <section class="card">
-        <h2>Where the data comes from</h2>
-        <div class="switch">
-          <div class="switch-text">
-            <strong>Demo mode</strong>
-            <span>Example zones and heaters, so you can try the app without a hub.</span>
-          </div>
-          <button class="btn" type="button" data-act="toggle-demo"
-            aria-pressed="${hub.demo_mode ? 'true' : 'false'}">
-            ${hub.demo_mode ? 'On' : 'Off'}
-          </button>
-        </div>
-
-        ${hub.demo_mode ? `<div class="note">Nothing you change here reaches a real heater while demo mode is on.</div>` : ''}
+      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
+        hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
+        <p class="zd-sub">Demo invents a house so you can look around straight away, and nothing
+        it does can reach a real heater.</p>
+        ${settingRow('Heaters', 'Rooms, temperatures and schedules',
+          segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
+            hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
 
         <label class="field">
           <span>Hub serial number</span>
@@ -4045,10 +4466,9 @@
         </div>
         <div class="note">Changing between demo mode and a real hub signs you out, so the app
         reloads cleanly against the new source.</div>
-      </section>
+      `, { icon: 'hub' })}
 
-      <section class="card">
-        <h2>Zones that must not get cold</h2>
+      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
         <p class="zd-sub">${AWAY_EXPLAINER()} Pick the zones that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
         goes Away — a bathroom with pipes, a workshop, a wine store.</p>
@@ -4060,20 +4480,19 @@
         </div>
         <small class="field-hint">This applies both when you press Away and when a
         planned away period starts while nobody is looking at the app.</small>
-      </section>
+      `, { icon: 'frost' })}
 
-      <section class="card">
+      ${settingsSection('schedules', 'Schedules',
+        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
         <div class="section-head">
-          <h2>Schedules</h2>
           <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
         </div>
         <p class="zd-sub">Schedules can be shared by several zones. Open one here to
         see and edit the week it contains.</p>
         ${renderScheduleSettings()}
-      </section>
+      `, { icon: 'normal' })}
 
-      <section class="card">
-        <h2>Telling you when something is wrong</h2>
+      ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
         <p class="zd-sub">Optional email alerts. The Nobø hub reports very little
         about individual heaters, so this can tell you when the hub itself goes
         away and when settings are changed from another app — but it cannot see a
@@ -4094,10 +4513,12 @@
         </div>
 
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      </section>
+      `, { icon: 'bell' })}
 
-      <section class="card">
-        <h2>Your account</h2>
+      ${settingsSection('account', 'Account',
+        me && me.using_default_password
+          ? 'Default password'
+          : `<b>${esc((me && (me.username || me.name)) || 'Signed in')}</b>`, `
         <div class="user-row">
           <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
           <button class="btn" type="button" data-act="change-password">Change password</button>
@@ -4108,28 +4529,27 @@
         </div>
         <small class="field-hint">User management opens the classic interface, which
         still has the full user administration screen.</small>
-      </section>
+      `, { icon: 'person', alert: !!(me && me.using_default_password) })}
 
-      <section class="card">
-        <h2>Diagnostics</h2>
+      ${settingsSection('diagnostics', 'Diagnostics', '', `
         <p class="zd-sub">A record of every change made through this app, everything
         the away schedule did on its own, and the state of the connection to the hub.
         Worth opening when something has not behaved.</p>
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="open-log">Open the activity log</button>
         </div>
-      </section>
+      `, { icon: 'pulse' })}
 
-      <section class="card">
-        <h2>About this interface</h2>
+      ${settingsSection('about', 'About', 'Cabin', `
         <p class="zd-sub">This is the Cabin interface. The previous one is still
         installed and is always reachable at <a href="/classic">/classic</a> — nothing
         was removed. To make it the default again, set <code>NOBO_UI=classic</code> in
         the server's <code>.env</code> file and restart.</p>
-      </section>`;
+      `, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
-    root.querySelector('[data-act="toggle-demo"]').onclick = () => toggleDemo(!hub.demo_mode);
+    wireSettingsSections(root);
+    wireSettingsSegments(root, hub);
     root.querySelector('[data-act="save-hub"]').onclick = saveHub;
     root.querySelector('[data-act="save-site"]').onclick = saveSite;
     root.querySelector('[data-act="open-log"]').onclick = showLog;
@@ -4169,6 +4589,7 @@
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
     loadNotifications(isAdmin);
     wireSensorSettings(root);
+    wireZoneGroups(root);
   }
 
   function renderScheduleSettings() {
@@ -4291,8 +4712,11 @@
       renderNotifications(isAdmin);
     } catch (e) {
       // An ordinary user is not allowed to read these, which is not an error
-      // worth shouting about - just hide the panel.
-      box.closest('.card').hidden = true;
+      // worth shouting about - just hide the panel. The topic is a <details>
+      // now rather than a .card, so this looks for either and tolerates
+      // neither being there.
+      const panel = box.closest('.sec, .card');
+      if (panel) panel.hidden = true;
     }
   }
 
@@ -4306,6 +4730,14 @@
     if (toggle) {
       toggle.textContent = n.enabled ? 'On' : 'Off';
       toggle.setAttribute('aria-pressed', String(!!n.enabled));
+    }
+    /* Written here rather than in renderSettings, because the configuration
+       arrives after the page does. */
+    const summary = $('#notifyState');
+    if (summary) {
+      summary.innerHTML = n.enabled
+        ? `<b>On</b>${n.to ? ' · ' + esc(n.to) : ''}`
+        : '<b>Off</b>';
     }
 
     const types = n.event_types || {};
@@ -4517,6 +4949,15 @@
             ? `Eco ${esc(String(z.eco_temperature))}°C`
             : 'Eco temperature'}</span>
         </label>`).join('');
+      /* The section summary is written here, not in renderSettings: the
+         exceptions arrive after the page does, and a summary that said
+         "loading" for ever would be worse than none. */
+      const state_ = $('#excState');
+      if (state_) {
+        state_.innerHTML = chosen.size
+          ? `<b>${chosen.size}</b> kept above ${esc(AWAY_TEMP_LABEL())}`
+          : 'every zone follows Away';
+      }
     } catch (e) {
       box.innerHTML = `<p class="zd-sub">Could not load the zones: ${esc(e.message)}</p>`;
     }

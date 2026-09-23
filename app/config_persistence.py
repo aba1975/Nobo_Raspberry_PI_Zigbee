@@ -36,6 +36,7 @@ DEMO_WEEK_PROFILES_FILE = DATA_DIR / "demo_week_profiles.json"
 SERVER_STATE_FILE = DATA_DIR / "server_state.json"
 HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
+ZONE_CATEGORIES_FILE = DATA_DIR / "zone_categories.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
 # Which exception zones are *currently* held on a zone-level Eco override.
 #
@@ -232,6 +233,54 @@ def load_zone_icons() -> dict:
     except json.JSONDecodeError as exc:
         logger.warning("zone_icons.json is corrupt: %s — backing up and using empty dict", exc)
         _backup_corrupt(ZONE_ICONS_FILE)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Zone categories
+# ---------------------------------------------------------------------------
+# Which part of the building a zone belongs to — "Bathrooms", "Upstairs" —
+# purely so the front page can group the cards. The hub has no such field, so
+# like the icon this is the application's own setting, keyed by zone id.
+#
+# Free text rather than a fixed list on purpose: a cabin has a loft and a
+# boathouse, a house has an upstairs, and neither wants the other's vocabulary.
+# The empty string means uncategorised, which is a valid state and not a
+# prompt to finish anything.
+
+def save_zone_categories(categories: dict) -> None:
+    """Persist *categories* dict to ``data/zone_categories.json`` atomically."""
+    try:
+        _atomic_write(ZONE_CATEGORIES_FILE, categories)
+    except Exception as exc:
+        logger.error("Failed to save zone categories: %s", exc)
+
+
+def load_zone_categories() -> dict:
+    """
+    Load zone categories from ``data/zone_categories.json``.
+
+    Returns:
+        ``dict`` mapping zone id to category name.
+        Empty ``dict`` when the file does not exist or is corrupt (backed up as .backup).
+    """
+    try:
+        with ZONE_CATEGORIES_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            logger.warning(
+                "zone_categories.json has unexpected format (expected dict, got %s) — using empty dict",
+                type(data).__name__,
+            )
+            return {}
+        return {str(k): str(v) for k, v in data.items()}
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "zone_categories.json is corrupt: %s — backing up and using empty dict", exc
+        )
+        _backup_corrupt(ZONE_CATEGORIES_FILE)
         return {}
 
 

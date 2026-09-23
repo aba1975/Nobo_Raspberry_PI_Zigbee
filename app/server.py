@@ -23,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import RedirectResponse
 from pydantic import BaseModel, Field
 import copy
@@ -382,6 +383,10 @@ demo_schedules: Dict[str, dict] = config_persistence.load_demo_schedules()
 # Zone icons are this app's own idea — the hub does not store them — so they are
 # kept locally and apply in both demo and real-hub mode. Keyed by zone id.
 zone_icons: Dict[str, str] = config_persistence.load_zone_icons()
+
+# Which part of the building a zone is in, so the front page can group the
+# cards. The hub has no such field either, so the same arrangement applies.
+zone_categories: Dict[str, str] = config_persistence.load_zone_categories()
 
 # Optional contact sensors. The provider is started only when the persisted
 # master switch is on; disabled installations pay no runtime or UI cost.
@@ -1029,6 +1034,27 @@ class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(ZoneBroadcastMiddleware)
 
+# Compress what we send.
+#
+# Added last, so it sits outermost and compresses whatever the middleware
+# below it produced. The interface is ~340 kB of JavaScript and CSS in total
+# and was going out uncompressed: cabin.js alone is 228 kB, and gzip takes it
+# to 63 kB.
+#
+# It was easy to miss because the TLS proxy already does this. Anyone reaching
+# the Pi through Caddy — the documented arrangement — has had compressed
+# assets all along, so the only people paying for it were those on the plain
+# port, which is the default and what an installation without HTTPS uses.
+#
+# Static assets are served with Cache-Control: no-cache, so a browser
+# revalidates on every load and a 304 costs nothing. The full transfer happens
+# whenever the ETag changes, which is every update — exactly when somebody is
+# most likely to be watching the page and wondering why it is slow.
+#
+# GZipMiddleware only touches scope["type"] == "http", so the WebSocket that
+# carries live zone updates is unaffected.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 
 # ===== Pydantic Models =====
 class TemperatureUpdate(BaseModel):
@@ -1065,6 +1091,9 @@ class ZoneAdd(BaseModel):
 class ZoneUpdate(BaseModel):
     name: Optional[str] = None
     icon: Optional[str] = None
+    # Which part of the building this zone is in, used only to group the cards
+    # on the front page. Free text, and "" means uncategorised.
+    category: Optional[str] = None
     # The hub's own ``override_allowed`` flag, phrased the way it behaves.
     # True: Home, Away, Comfort and Eco from the front page apply to this zone.
     # False: the zone keeps whatever it was set to and ignores them.
@@ -2472,6 +2501,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'zone_id': demo_zone['zone_id'],
                 'name': demo_zone['name'],
                 'icon': demo_zone.get('icon', ''),
+                'category': zone_categories.get(str(demo_zone['zone_id']), ''),
                 'rooms': demo_zone.get('rooms', []),
                 'components': demo_zone['components'],
                 'components_display': components_display,
@@ -2558,6 +2588,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 'zone_id': str(zone_id),
                 'name': zone_name,
                 'icon': zone_icons.get(str(zone_id), ''),
+                'category': zone_categories.get(str(zone_id), ''),
                 'rooms': [zone_name],  # Default to zone name
                 'components': zone_components,
                 'components_display': components_display,
@@ -3718,6 +3749,69 @@ async def add_zone(zone: ZoneAdd):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ZoneCategoriesUpdate(BaseModel):
+    categories: Dict[str, str]
+
+
+@app.put("/api/zone-categories")
+async def update_zone_categories(body: ZoneCategoriesUpdate):
+    """Replace the whole zone-to-group map in one write.
+
+    Renaming a group and deleting one are bulk edits by nature — "Bedrooms"
+    becomes "Upstairs" for five rooms at once — and doing that as five separate
+    requests would leave the house half-renamed if one of them failed. The
+    editor holds the whole map on screen anyway, so it sends the whole map and
+    the file is replaced atomically.
+
+    Deliberately not under ``/api/zones/``: that path already ends in a
+    ``{zone_id}`` catch-all, and a sibling route there would be matched as a
+    zone called "categories" depending on declaration order.
+    """
+    global zone_categories
+    known = {str(zone["zone_id"]) for zone in _build_zones_data()}
+    unknown = sorted(set(body.categories) - known)
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown zone ids: {', '.join(unknown)}"
+        )
+    # A blank group is how the editor says "take this room out of its group",
+    # and is stored as the absence of a key rather than an empty string.
+    zone_categories = {
+        zone_id: name.strip()
+        for zone_id, name in body.categories.items()
+        if name and name.strip()
+    }
+    config_persistence.save_zone_categories(zone_categories)
+    logger.info("Zone groups updated: %d assigned", len(zone_categories))
+    return {"status": "success", "categories": zone_categories}
+
+
+def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
+    """Record which part of the building a zone is in.
+
+    Called from both the demo and the real-hub branch of ``update_zone``, and
+    written once here rather than twice there. The icon is stored two
+    different ways — on the demo zone in demo mode, in ``zone_icons``
+    otherwise — and adding the category to only one of those branches is
+    exactly the fault this shape prevents: it looked like it worked on a real
+    hub and did nothing in demo, which is the harder direction to notice.
+
+    The category is this application's own setting in both modes, so unlike
+    the icon it has one home.
+    """
+    if update.category is None:
+        return
+    category = update.category.strip()
+    if category:
+        zone_categories[str(zone_id)] = category
+    else:
+        # Uncategorised is the absence of a key rather than an empty one, so
+        # the file does not fill up with blanks for every zone somebody ever
+        # opened and left alone.
+        zone_categories.pop(str(zone_id), None)
+    config_persistence.save_zone_categories(zone_categories)
+
+
 @app.put("/api/zones/{zone_id}")
 async def update_zone(zone_id: str, update: ZoneUpdate):
     """Rename a zone and/or change its icon"""
@@ -3741,6 +3835,7 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
                 demo_zone['icon'] = update.icon.strip()
             if update.follow_global_mode is not None:
                 demo_zone['override_allowed'] = '1' if update.follow_global_mode else '0'
+            _apply_zone_category(zone_id, update)
 
             add_log_entry(
                 "sent",
@@ -3797,6 +3892,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
         if update.icon is not None:
             zone_icons[str(zone_id)] = update.icon.strip()
             config_persistence.save_zone_icons(zone_icons)
+
+        _apply_zone_category(zone_id, update)
 
         await asyncio.sleep(0.3)
         return {

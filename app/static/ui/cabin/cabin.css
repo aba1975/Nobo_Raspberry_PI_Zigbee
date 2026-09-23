@@ -307,6 +307,163 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   align-items: stretch;
 }
 
+/* A category heading is a full-width row of the same grid the cards are in,
+   rather than a separate list per group. One grid means the cards go on
+   sharing their row heights and the layout keeps working at every width with
+   no breakpoints to maintain.
+
+   Deliberately quiet: small, uppercase, pine, with a hairline under it. The
+   groups are there to be scanned past, not read, and anything heavier would
+   compete with the room names that people actually came for. */
+.zone-group-head {
+  grid-column: 1 / -1;
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem;
+  margin: .75rem 0 -.1rem;
+  padding-bottom: .3rem;
+  border-bottom: 1px solid var(--rule);
+}
+.zone-group-head:first-child { margin-top: .1rem; }
+.grp-name {
+  margin: 0;
+  font-size: .74rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--pine);
+}
+/* The summary is the reason the heading exists, so it sits on the same line
+   as the name rather than under it - one line per group, not two. */
+.grp-sum { font-size: .78rem; color: var(--ink-faint); }
+.grp-cold { color: var(--m-away); font-weight: 600; }
+.grp-warn { color: var(--amber); font-weight: 600; }
+
+/* A link that looks like a link, for the one quiet way into group setup. It
+   lives in the Zones note, which is already small print, so it must not look
+   like another button competing with "Add a zone". */
+.linkish {
+  background: none; border: 0; padding: 0; font: inherit; font-size: inherit;
+  color: var(--pine); text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Settings > Rooms and groups */
+.group-list { margin: .2rem 0 .1rem; }
+.group-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem 0; border-bottom: 1px solid var(--rule);
+}
+.group-row:last-child { border-bottom: 0; }
+.group-name { font-weight: 650; }
+.group-count { font-size: .79rem; color: var(--ink-faint); margin-left: auto; }
+.group-subhead { margin: 1.3rem 0 .1rem; font-size: .95rem; }
+.group-assign { display: grid; gap: .1rem; }
+.assign-row {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .38rem 0; border-bottom: 1px solid var(--rule);
+}
+.assign-row:last-child { border-bottom: 0; }
+.assign-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Controls outside .field used to fall through to the browser default, which
+   on this palette reads as a square grey box in a system font beside rounded
+   paper-coloured ones. Any select in a card gets the same treatment as one in
+   a labelled field. */
+.card select {
+  font: inherit; padding: .5rem .65rem; min-height: 40px;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink);
+}
+.sec select {
+  font: inherit; padding: .5rem .65rem; min-height: 40px;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink);
+}
+.assign-row select { max-width: 11.5rem; }
+/* --------------------------------------------------- settings sections */
+
+/* Settings had grown to ten cards and one long scroll. Each topic is now a
+   <details>, and its summary carries the live value — so the closed list is
+   an index of the whole configuration rather than a table of contents. That
+   is the only thing that makes collapsing worth doing: a summary repeating
+   its own heading would hide the settings and give nothing back. */
+.sec {
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  margin-bottom: .6rem; overflow: hidden;
+}
+.sec > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: .6rem;
+  padding: .85rem .95rem; font-weight: 650; min-height: 44px;
+}
+.sec > summary::-webkit-details-marker { display: none; }
+.sec > summary:focus-visible { outline: 2px solid var(--pine); outline-offset: -2px; }
+.sec .caret {
+  color: var(--ink-faint); font-size: 1.05rem; line-height: 1; flex: none;
+  transition: transform .15s ease;
+}
+.sec[open] .caret { transform: rotate(90deg); }
+/* The topic's mark. Always pine, never a state colour: the mark labels the
+   topic and the summary beside it does the reporting, so a red or amber icon
+   would be a second and quieter status saying something else. */
+.sec-icon { flex: none; display: inline-flex; color: var(--pine); }
+/* "Door and Window Sensor Configuration" does not fit a phone beside its
+   state, so the name wraps and the state keeps its own line rather than
+   either of them being truncated to nothing. */
+.sec-name { flex: 1 1 auto; min-width: 0; }
+/* The state, not the heading, is the reason the row is readable while shut. */
+.sec-state {
+  margin-left: auto; font-size: .79rem; color: var(--ink-faint); font-weight: 400;
+  text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 0 1 auto; padding-left: .5rem;
+}
+.sec-state b { color: var(--pine); font-weight: 600; }
+.sec-state.is-alert { color: var(--amber); font-weight: 600; }
+.sec-body { padding: 0 .95rem 1.05rem; border-top: 1px solid var(--rule); }
+.sec-body > .zd-sub:first-child,
+.sec-body > .section-head:first-child { margin-top: .8rem; }
+
+/* One of a few, everywhere. The same question used to get a toggle in one
+   place and a button opening a sheet in another.
+
+   Named "choice" rather than "seg": .seg and .seg-btn were already taken by
+   the away sheet's two-answer control, which is a grid of full-width boxes
+   and sits later in this file — so reusing the names silently redressed this
+   one as that one, which is what the screenshot showed. */
+.choice {
+  display: inline-flex; flex: none; background: var(--paper);
+  border: 1px solid var(--rule); border-radius: 999px; overflow: hidden;
+}
+.choice-btn {
+  border: 0; background: none; font: inherit; font-size: .82rem;
+  padding: .45rem .9rem; min-height: 38px; cursor: pointer; color: var(--ink-soft);
+  white-space: nowrap;
+}
+.choice-btn + .choice-btn { border-left: 1px solid var(--rule); }
+.choice-btn:hover:not([aria-pressed="true"]) { color: var(--ink); }
+.choice-btn[aria-pressed="true"] { background: var(--pine); color: #fff; font-weight: 600; }
+.choice-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* Likewise .set-row and .set-label already describe the zone card's "SET TO"
+   block, which is uppercase small-caps — which is why these labels came out
+   shouting. */
+.opt-row {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .6rem 0; border-bottom: 1px solid var(--rule);
+}
+.opt-row:last-child { border-bottom: 0; }
+.opt-label { flex: 1; min-width: 0; }
+.opt-label strong {
+  display: block; font-weight: 620; font-size: .95rem;
+  text-transform: none; letter-spacing: normal; color: var(--ink);
+}
+.opt-label small {
+  display: block; font-size: .78rem; color: var(--ink-faint);
+  text-transform: none; letter-spacing: normal; font-weight: 400;
+}
+
+@media (max-width: 30rem) {
+  /* A three-way control plus its label does not fit a narrow phone on one
+     line, and squeezing it makes 38px targets narrower than a thumb. */
+  .opt-row { flex-wrap: wrap; }
+  .opt-row .choice { margin-left: auto; }
+}
+
 .zone {
   position: relative;
   display: grid;

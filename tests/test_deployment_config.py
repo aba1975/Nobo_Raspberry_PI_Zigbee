@@ -468,3 +468,61 @@ class TestTheRadioIsConfigurableWithoutEditingTheVolume:
         assert "Wi-Fi" in block.group(0)
         assert "11" in block.group(0)
 
+
+
+class TestTheProxyDoesNotOfferQuicToAPi:
+    """Reported as "the webpage loads very slowly".
+
+    Caddy turns on HTTP/3 by default and advertises it in Alt-Svc, so a
+    browser moves to QUIC on its second visit and remembers to for thirty
+    days. QUIC asks for a 7 MB UDP receive buffer; a Raspberry Pi grants
+    208 kB, and Caddy says so at every start:
+
+        failed to sufficiently increase receive buffer size
+        (was: 208 kiB, wanted: 7168 kiB, got: 416 kiB)
+
+    Over that buffer HTTP/3 is slower than the HTTP/2 it replaced, sometimes
+    by enough to look like the Pi has stopped answering. It was invisible in
+    testing because curl stays on HTTP/1.1 and never takes the offer.
+    """
+
+    def test_both_caddyfiles_serve_tcp_only(self):
+        for path in (CADDYFILE, CADDYFILE_ACME):
+            text = path.read_text(encoding="utf-8")
+            assert re.search(r"servers\s*\{[^}]*protocols\s+h1\s+h2", text), (
+                f"{path.name} still lets Caddy offer HTTP/3"
+            )
+
+    def test_the_reason_is_written_down_where_it_would_be_undone(self):
+        """Somebody tidying this will delete it unless the comment explains
+        that it is load-bearing."""
+        text = CADDYFILE.read_text(encoding="utf-8")
+        assert "receive buffer" in text
+        assert "Alt-Svc" in text
+
+
+class TestTheInterfaceIsCompressed:
+    """Reported as "the webpage loads very slowly", on the plain port.
+
+    The TLS proxy has always compressed, so anyone reaching the Pi through
+    Caddy never saw this. The plain port is the default, and it was sending
+    the whole interface uncompressed: cabin.js alone is over 200 kB.
+    """
+
+    def test_the_application_compresses_what_it_sends(self):
+        source = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
+        assert "from starlette.middleware.gzip import GZipMiddleware" in source
+        assert "app.add_middleware(GZipMiddleware" in source
+
+    def test_it_is_outermost_so_it_sees_the_finished_response(self):
+        """Starlette runs the last-added middleware first, so compression has
+        to be registered after the ones whose output it compresses."""
+        source = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
+        assert source.index("app.add_middleware(ZoneBroadcastMiddleware)") < \
+               source.index("app.add_middleware(GZipMiddleware")
+        assert source.index("app.add_middleware(AuthMiddleware)") < \
+               source.index("app.add_middleware(GZipMiddleware")
+
+    def test_the_proxy_still_compresses_too(self):
+        """Both paths, because either can be the one somebody uses."""
+        assert "encode zstd gzip" in CADDYFILE.read_text(encoding="utf-8")
