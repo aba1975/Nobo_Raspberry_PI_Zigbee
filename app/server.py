@@ -3727,6 +3727,32 @@ async def add_zone(zone: ZoneAdd):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
+    """Record which part of the building a zone is in.
+
+    Called from both the demo and the real-hub branch of ``update_zone``, and
+    written once here rather than twice there. The icon is stored two
+    different ways — on the demo zone in demo mode, in ``zone_icons``
+    otherwise — and adding the category to only one of those branches is
+    exactly the fault this shape prevents: it looked like it worked on a real
+    hub and did nothing in demo, which is the harder direction to notice.
+
+    The category is this application's own setting in both modes, so unlike
+    the icon it has one home.
+    """
+    if update.category is None:
+        return
+    category = update.category.strip()
+    if category:
+        zone_categories[str(zone_id)] = category
+    else:
+        # Uncategorised is the absence of a key rather than an empty one, so
+        # the file does not fill up with blanks for every zone somebody ever
+        # opened and left alone.
+        zone_categories.pop(str(zone_id), None)
+    config_persistence.save_zone_categories(zone_categories)
+
+
 @app.put("/api/zones/{zone_id}")
 async def update_zone(zone_id: str, update: ZoneUpdate):
     """Rename a zone and/or change its icon"""
@@ -3750,6 +3776,7 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
                 demo_zone['icon'] = update.icon.strip()
             if update.follow_global_mode is not None:
                 demo_zone['override_allowed'] = '1' if update.follow_global_mode else '0'
+            _apply_zone_category(zone_id, update)
 
             add_log_entry(
                 "sent",
@@ -3807,16 +3834,7 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             zone_icons[str(zone_id)] = update.icon.strip()
             config_persistence.save_zone_icons(zone_icons)
 
-        if update.category is not None:
-            category = update.category.strip()
-            if category:
-                zone_categories[str(zone_id)] = category
-            else:
-                # Uncategorised is the absence of a key rather than an empty
-                # one, so the file does not fill up with blanks for every zone
-                # somebody ever opened and left alone.
-                zone_categories.pop(str(zone_id), None)
-            config_persistence.save_zone_categories(zone_categories)
+        _apply_zone_category(zone_id, update)
 
         await asyncio.sleep(0.3)
         return {

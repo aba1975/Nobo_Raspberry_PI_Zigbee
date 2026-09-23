@@ -251,9 +251,22 @@ class TestItIsStoredLikeTheIcon:
     def test_clearing_it_removes_the_key_rather_than_blanking_it(self):
         """Otherwise the file grows an empty entry for every zone anybody ever
         opened and left alone."""
-        start = SERVER.index("if update.category is not None:")
-        body = SERVER[start:start + 700]
+        start = SERVER.index("def _apply_zone_category")
+        body = SERVER[start:SERVER.index("\n\n\n", start)]
         assert "zone_categories.pop(str(zone_id), None)" in body
+
+    def test_both_branches_of_the_update_write_it(self):
+        """The fault this caught during development: the icon is stored two
+        different ways — on the demo zone in demo mode, in ``zone_icons``
+        otherwise — so the category was added to the real-hub branch only. It
+        looked right on a real hub and silently did nothing in demo, which is
+        the harder direction to notice.
+        """
+        start = SERVER.index("async def update_zone(")
+        handler = SERVER[start:SERVER.index("\n@app.", start)]
+        demo, real = handler.split("# Real hub mode", 1)
+        assert "_apply_zone_category(zone_id, update)" in demo, "demo mode does not store it"
+        assert "_apply_zone_category(zone_id, update)" in real, "real hub does not store it"
 
 
 def test_the_heading_is_a_row_of_the_same_grid():
