@@ -499,3 +499,30 @@ class TestTheProxyDoesNotOfferQuicToAPi:
         text = CADDYFILE.read_text(encoding="utf-8")
         assert "receive buffer" in text
         assert "Alt-Svc" in text
+
+
+class TestTheInterfaceIsCompressed:
+    """Reported as "the webpage loads very slowly", on the plain port.
+
+    The TLS proxy has always compressed, so anyone reaching the Pi through
+    Caddy never saw this. The plain port is the default, and it was sending
+    the whole interface uncompressed: cabin.js alone is over 200 kB.
+    """
+
+    def test_the_application_compresses_what_it_sends(self):
+        source = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
+        assert "from starlette.middleware.gzip import GZipMiddleware" in source
+        assert "app.add_middleware(GZipMiddleware" in source
+
+    def test_it_is_outermost_so_it_sees_the_finished_response(self):
+        """Starlette runs the last-added middleware first, so compression has
+        to be registered after the ones whose output it compresses."""
+        source = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
+        assert source.index("app.add_middleware(ZoneBroadcastMiddleware)") < \
+               source.index("app.add_middleware(GZipMiddleware")
+        assert source.index("app.add_middleware(AuthMiddleware)") < \
+               source.index("app.add_middleware(GZipMiddleware")
+
+    def test_the_proxy_still_compresses_too(self):
+        """Both paths, because either can be the one somebody uses."""
+        assert "encode zstd gzip" in CADDYFILE.read_text(encoding="utf-8")

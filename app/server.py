@@ -23,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import RedirectResponse
 from pydantic import BaseModel, Field
 import copy
@@ -1032,6 +1033,27 @@ class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(ZoneBroadcastMiddleware)
+
+# Compress what we send.
+#
+# Added last, so it sits outermost and compresses whatever the middleware
+# below it produced. The interface is ~340 kB of JavaScript and CSS in total
+# and was going out uncompressed: cabin.js alone is 228 kB, and gzip takes it
+# to 63 kB.
+#
+# It was easy to miss because the TLS proxy already does this. Anyone reaching
+# the Pi through Caddy — the documented arrangement — has had compressed
+# assets all along, so the only people paying for it were those on the plain
+# port, which is the default and what an installation without HTTPS uses.
+#
+# Static assets are served with Cache-Control: no-cache, so a browser
+# revalidates on every load and a 304 costs nothing. The full transfer happens
+# whenever the ETag changes, which is every update — exactly when somebody is
+# most likely to be watching the page and wondering why it is slow.
+#
+# GZipMiddleware only touches scope["type"] == "http", so the WebSocket that
+# carries live zone updates is unaffected.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # ===== Pydantic Models =====
