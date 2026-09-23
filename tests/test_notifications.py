@@ -125,10 +125,36 @@ def test_the_noisy_alerts_were_removed_too():
 
 
 def test_only_honest_alerts_remain():
+    """The set is pinned so a new alert has to be argued for, not just added.
+
+    The standard is that the condition must be genuinely detectable on this
+    hardware and its limits stated in its own help text. The four sensor
+    alerts qualify on a basis the hub's own components never could: a Nobø
+    component's ``Status`` is permanently 0, whereas a Zigbee contact reports
+    when it last spoke and roughly what charge it has left.
+
+    - ``contact_open_long`` — an escalation of the existing warning, from the
+      same ``open_started_at`` that already drives it.
+    - ``sensor_quiet`` — inferred from ``last_seen_at``, which is why the help
+      text says silence is normal before it says it is worth knowing.
+    - ``sensor_battery_low`` — a reading the device volunteers; the help text
+      says plainly that it is weeks of notice and cannot be asked for.
+    - ``sensor_all_quiet`` — the same evidence read as one fault, so a stopped
+      container does not arrive as one email per sensor.
+    """
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
-        "contact_left_open", "contact_closed",
+        "contact_left_open", "contact_closed", "contact_open_long",
+        "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
     }
+
+
+def test_every_alert_states_its_own_limit():
+    """The rule this module lives by: an alert that oversells what it can see
+    is worse than none, because the owner believes the cabin is watched."""
+    for key, spec in notifications.EVENT_TYPES.items():
+        assert spec["help"].strip(), f"{key} has no explanation"
+        assert len(spec["help"]) > 40, f"{key}'s explanation says too little"
 
 
 def test_everything_is_off_by_default():

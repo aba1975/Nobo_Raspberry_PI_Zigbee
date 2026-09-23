@@ -54,8 +54,18 @@ a heater running flat out, or anything at all about an individual thermostat.**
 What the Nobø hub itself leaves is four things: the hub going away and coming
 back, somebody changing a zone from another app, and an away period starting or
 ending. Optional independent contact sensors add one condition that the hub
-cannot provide: a door or window remaining open, plus its recovery. Hence the
-defaults.
+cannot provide: a door or window remaining open, plus its recovery.
+
+The sensors also report on *themselves*, which the hub's own components never
+do — a Nobø component's ``Status`` field is permanently 0, so a heater cannot
+say it is unwell, while a Zigbee contact can say when it last spoke and roughly
+how much battery it has left. That is the whole reason the sensor alerts are a
+larger set than the hub's: they are the only part of this installation capable
+of reporting its own health. The limits are still real and are written into
+each alert's help text — a battery percentage arrives when the device feels
+like sending one, and silence has to be inferred rather than announced.
+
+Hence the defaults.
 
 A periodic "still here" email was built and then removed at the owner's request,
 along with a room-left-off warning and a per-zone schedule diary. The judgement
@@ -150,6 +160,37 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
         "label": "The door or window is closed again",
         "default": False,
         "help": "Sent when every contact in a warned zone explicitly reports closed.",
+    },
+    "contact_open_long": {
+        "label": "A door or window is still open a day later",
+        "default": False,
+        "help": "An escalation, not a repeat: the warning above says you left something "
+                "open, this says nobody has dealt with it. Different message, usually a "
+                "different day. Sent once, 24 hours after it opened.",
+    },
+    "sensor_quiet": {
+        "label": "A sensor stops reporting",
+        "default": False,
+        "help": "A contact sensor has said nothing for six hours. It speaks only when "
+                "something changes, so silence is normal — but a flat battery looks "
+                "exactly the same, and whatever it last said is still being believed. "
+                "Zigbee2MQTT will not call one offline for 25 hours, which is too late "
+                "to be useful.",
+    },
+    "sensor_battery_low": {
+        "label": "A sensor battery is low",
+        "default": False,
+        "help": "At or below 20%. These sensors report a level only when they feel like "
+                "it — up to a day after pairing — so treat this as weeks of notice, not "
+                "hours. It is the one sensor fault you can act on before it happens.",
+    },
+    "sensor_all_quiet": {
+        "label": "Every sensor stops reporting",
+        "default": False,
+        "help": "All of them at once is not many failures, it is one: Zigbee2MQTT or the "
+                "broker has stopped, or the USB stick has gone. Sent as a single alert "
+                "instead of one per sensor, and the individual warnings are held back "
+                "while it is raised.",
     },
 }
 

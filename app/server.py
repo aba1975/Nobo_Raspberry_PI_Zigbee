@@ -396,6 +396,10 @@ sensor_unsubscribe = None
 sensor_snapshots: List[ContactSnapshot] = []
 sensor_zone_aggregates: Dict[str, Any] = {}
 sensor_wakeup: Optional[asyncio.Event] = None
+# When one of the time-based sensor alerts could next become true. Merged into
+# the automation loop's sleep so a house where nothing moves still wakes up to
+# notice that nothing has moved.
+sensor_alert_deadline: Optional[float] = None
 sensor_evaluation_lock = asyncio.Lock()
 
 # ---------------------------------------------------------------------------
@@ -460,6 +464,16 @@ def local_now() -> datetime:
 def local_timezone_name() -> str:
     """Human-readable name of the timezone the app is running in, e.g. 'CEST'."""
     return local_now().strftime("%Z") or "UTC"
+
+
+def local_time_text(epoch: float) -> str:
+    """An epoch instant written as local wall-clock time, for a human to read.
+
+    Used in alert bodies. Deliberately 24-hour and carrying the zone name: an
+    email is read somewhere else, often on a phone set to another region, and
+    "open since 19:40 CEST" is unambiguous where "7:40" is not.
+    """
+    return datetime.fromtimestamp(epoch).astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
 
 def add_log_entry(direction: str, description: str, command: str = "", source: str = "api"):
@@ -2152,11 +2166,164 @@ def _sensor_view_signature() -> tuple:
     )
 
 
+# How long an open contact may stay open before the alert escalates.
+#
+# The per-zone warning delay says "you have left something open". This says
+# "nobody has dealt with it" — a different message, usually read by a different
+# person on a different day, which is why it is a second alert rather than a
+# longer delay on the first one. Making the existing warning wait 24 hours
+# would also delay the on-screen warning, which is the one thing that must stay
+# prompt.
+SENSOR_OPEN_ESCALATE_SECONDS = 24 * 3600
+
+# How long a sensor may say nothing before its silence is worth an email.
+#
+# Six hours, matching the staleness the interface already shows, and chosen
+# against measured behaviour rather than picked: these sensors have gone two
+# and a half hours between reports on perfectly good batteries, so anything
+# tighter cries wolf. Zigbee2MQTT will not call a battery device offline for
+# twenty-five hours, which is correct for avoiding false alarms and useless for
+# noticing a flat battery — for most of a day a dead sensor looks exactly like
+# a healthy one, and whatever it last said is still being believed.
+SENSOR_QUIET_SECONDS = 6 * 3600
+
+# Matches the low-battery badge in the interface, so the email and the screen
+# cannot disagree about what "low" means.
+SENSOR_BATTERY_LOW_PERCENT = 20
+
+
+def _evaluate_sensor_alerts(
+    result: SensorAutomationResult, zones_by_id: Dict[str, str]
+) -> Optional[float]:
+    """Sensor conditions worth an email, and when one could next become true.
+
+    Returns the earliest future deadline among them so the automation loop can
+    sleep until then. That return value is the whole reason this is not a
+    simple pass over the snapshots: the loop sleeps until something *reports*,
+    and a window left open in an empty cabin reports nothing at all — which is
+    precisely the case these alerts exist for. Without a deadline the 24-hour
+    escalation would fire whenever the next unrelated thing happened to happen,
+    which could be days.
+    """
+    now = time.time()
+    deadlines: List[float] = []
+
+    # --- a door or window nobody has dealt with ----------------------------
+    for zone_id, aggregate in result.zones.items():
+        key = f"contact-open-long:{zone_id}"
+        started = aggregate.open_started_at
+        if started is None:
+            # Closed, or never opened. Clears the condition without sending:
+            # the existing contact_closed alert is what reports a recovery, and
+            # a second "it is shut now" from here would be the same news twice.
+            notifier.set_condition("contact_open_long", key, False)
+            continue
+        due = started + SENSOR_OPEN_ESCALATE_SECONDS
+        if now < due:
+            deadlines.append(due)
+            notifier.set_condition("contact_open_long", key, False)
+            continue
+        name = zones_by_id.get(zone_id, f"Zone {zone_id}")
+        hours = int((now - started) // 3600)
+        notifier.set_condition(
+            "contact_open_long", key, True,
+            subject=f"{name} has been open for {hours} hours",
+            body=(
+                f"A contact sensor in {name} has been open since "
+                f"{local_time_text(started)} — about {hours} hours — and nothing has "
+                f"closed it.\n\n"
+                f"If the cabin is empty this is worth a telephone call to somebody "
+                f"nearby. If the sensor has been moved or taken off its frame it will "
+                f"read open for ever, which looks identical from here."
+            ),
+            severity="warning",
+        )
+
+    # --- the sensors' own health -------------------------------------------
+    sensors = list(sensor_snapshots)
+    quiet: List[Any] = []
+    for sensor in sensors:
+        due = sensor.last_seen_at.timestamp() + SENSOR_QUIET_SECONDS
+        if now >= due:
+            quiet.append(sensor)
+        else:
+            deadlines.append(due)
+
+    # Every sensor at once is one fault, not many: Zigbee2MQTT has stopped, the
+    # broker has gone, or the USB stick has been unplugged. Reporting it per
+    # sensor would send nineteen emails about a container, and the individual
+    # alerts are held back while it is raised so the inbox says the true thing.
+    system_down = len(sensors) > 1 and len(quiet) == len(sensors)
+    notifier.set_condition(
+        "sensor_all_quiet", "sensor-all-quiet", system_down,
+        subject=f"No contact sensor has reported for {SENSOR_QUIET_SECONDS // 3600} hours",
+        body=(
+            f"None of the {len(sensors)} paired sensors has been heard from in "
+            f"{SENSOR_QUIET_SECONDS // 3600} hours.\n\n"
+            f"All of them failing at once is almost never {len(sensors)} flat "
+            f"batteries. It usually means Zigbee2MQTT or the broker has stopped, or "
+            f"the USB stick has been unplugged. Door and window state shown in the "
+            f"app is whatever was last heard and should not be relied on until this "
+            f"clears.\n\n"
+            f"The heating is unaffected: it runs over a separate connection to the "
+            f"Nobø hub."
+        ),
+        severity="warning",
+        recovery_subject="The sensors are reporting again",
+        recovery_body="At least one contact sensor has been heard from again.",
+        recovery_event_type="sensor_all_quiet",
+    )
+
+    for sensor in sensors:
+        room = zones_by_id.get(str(sensor.zone_id), None) if sensor.zone_id else None
+        where = f"{sensor.name} ({room})" if room else sensor.name
+
+        is_quiet = sensor in quiet and not system_down
+        notifier.set_condition(
+            "sensor_quiet", f"sensor-quiet:{sensor.sensor_id}", is_quiet,
+            subject=f"{sensor.name} has not reported for "
+                    f"{SENSOR_QUIET_SECONDS // 3600} hours",
+            body=(
+                f"{where} was last heard from {local_time_text(sensor.last_seen_at.timestamp())}.\n\n"
+                f"These sensors speak only when something changes, so a quiet one is "
+                f"usually just a door nobody has touched. A flat battery looks exactly "
+                f"the same from here, and until it is ruled out, whatever this sensor "
+                f"last reported — {sensor.state.value} — is being believed by the "
+                f"left-open warning and by any heating rule that depends on it."
+            ),
+            severity="warning",
+            recovery_subject=f"{sensor.name} is reporting again",
+            recovery_body=f"{where} has been heard from again.",
+            recovery_event_type="sensor_quiet",
+        )
+
+        low = sensor.battery is not None and sensor.battery <= SENSOR_BATTERY_LOW_PERCENT
+        notifier.set_condition(
+            "sensor_battery_low", f"sensor-battery:{sensor.sensor_id}", low,
+            subject=f"{sensor.name} battery is at {sensor.battery}%",
+            body=(
+                f"{where} reports {sensor.battery}% battery.\n\n"
+                f"There is no hurry — this is weeks of notice, not hours — but it "
+                f"cannot be checked on demand either: these sensors send a level only "
+                f"when they choose to, so the next reading may be a day away. It is "
+                f"the one sensor fault you can deal with before it happens."
+            ),
+            severity="warning",
+            recovery_subject=f"{sensor.name} battery has been changed",
+            recovery_body=f"{where} is reporting a healthy battery again.",
+            recovery_event_type="sensor_battery_low",
+        )
+
+    future = [deadline for deadline in deadlines if deadline > now]
+    return min(future) if future else None
+
+
 async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
     global sensor_snapshots, sensor_zone_aggregates
     if not sensor_settings.enabled or sensor_provider is None:
         sensor_snapshots = []
         sensor_zone_aggregates = {}
+        globals()["sensor_alert_deadline"] = None
         return None
 
     async with sensor_evaluation_lock:
@@ -2199,6 +2366,13 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
                 "Contact sensor automation could not %s for zone %s: %s",
                 action.kind.value, action.zone_id, action.error,
             )
+
+    # Time-based sensor alerts, and the earliest moment one of them could
+    # change. Kept here rather than inside the automation engine because none
+    # of them touches the heating — they only report — and the engine's job is
+    # deciding what to send to the hub.
+    global sensor_alert_deadline
+    sensor_alert_deadline = _evaluate_sensor_alerts(result, zones_by_id)
     return result
 
 
@@ -2221,6 +2395,16 @@ async def sensor_automation_loop() -> None:
                 await asyncio.sleep(1)
                 continue
             deadline = result.next_deadline if result is not None else None
+            # The alert deadlines are merged in rather than left to the engine:
+            # a cabin where nothing moves produces no engine deadline at all,
+            # so the loop would sleep until a sensor reported — and a window
+            # left open reports nothing. That is exactly when the 24-hour
+            # escalation and the gone-quiet alert have to fire.
+            if sensor_alert_deadline is not None:
+                deadline = (
+                    sensor_alert_deadline if deadline is None
+                    else min(deadline, sensor_alert_deadline)
+                )
             timeout = None if deadline is None else max(0.0, deadline - time.time())
             try:
                 await asyncio.wait_for(sensor_wakeup.wait(), timeout=timeout)
@@ -3416,7 +3600,10 @@ def _temperature_capability() -> Dict[str, Any]:
 def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
     if sensor_settings.enabled:
         return out
-    for key in ("contact_left_open", "contact_closed"):
+    for key in (
+        "contact_left_open", "contact_closed", "contact_open_long",
+        "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
+    ):
         out.get("events", {}).pop(key, None)
         out.get("event_types", {}).pop(key, None)
     return out
