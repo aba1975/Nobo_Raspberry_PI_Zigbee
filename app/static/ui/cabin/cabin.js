@@ -4537,10 +4537,6 @@
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       `, { icon: 'home' })}
 
-      ${renderZoneGroupsCard(isAdmin)}
-
-      ${renderSensorSettingsCard(isAdmin)}
-
       ${settingsSection('hub', 'Nobø Eco Hub Configuration',
         hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
         <p class="zd-sub">Demo invents a house so you can look around straight away, and nothing
@@ -4567,6 +4563,20 @@
         reloads cleanly against the new source.</div>
       `, { icon: 'hub' })}
 
+      ${renderZoneGroupsCard(isAdmin)}
+
+      ${renderSensorSettingsCard(isAdmin)}
+
+      ${settingsSection('schedules', 'Schedules',
+        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
+        <div class="section-head">
+          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
+        </div>
+        <p class="zd-sub">Schedules can be shared by several zones. Open one here to
+        see and edit the week it contains.</p>
+        ${renderScheduleSettings()}
+      `, { icon: 'normal' })}
+
       ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
         <p class="zd-sub">${AWAY_EXPLAINER()} Pick the zones that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
@@ -4580,16 +4590,6 @@
         <small class="field-hint">This applies both when you press Away and when a
         planned away period starts while nobody is looking at the app.</small>
       `, { icon: 'frost' })}
-
-      ${settingsSection('schedules', 'Schedules',
-        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
-        <div class="section-head">
-          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
-        </div>
-        <p class="zd-sub">Schedules can be shared by several zones. Open one here to
-        see and edit the week it contains.</p>
-        ${renderScheduleSettings()}
-      `, { icon: 'normal' })}
 
       ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
         <p class="zd-sub">Optional email alerts. The Nobø hub reports very little

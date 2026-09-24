@@ -250,3 +250,21 @@ def test_a_long_topic_name_does_not_squeeze_its_state_away():
     """"Door and Window Sensor Configuration" is wider than a phone."""
     block = re.search(r"\.sec-name\s*\{([^}]*)\}", CSS, re.S).group(1)
     assert "flex: 1 1 auto" in block and "min-width: 0" in block
+
+
+def test_the_topics_are_in_the_order_the_owner_chose():
+    """Setting up comes first - what the place is, where the heaters come from,
+    which rooms exist and what watches them - then the everyday topics, and
+    the reference material last. Frost Protection sits beside Schedules
+    because both decide what temperature a room holds when nobody is there."""
+    template = _settings_template()
+    tokens = re.findall(
+        r"settingsSection\('([a-z]+)'|render(ZoneGroups|SensorSettings)Card\(isAdmin\)",
+        template,
+    )
+    order = [section or {"ZoneGroups": "rooms", "SensorSettings": "sensors"}[card]
+             for section, card in tokens]
+    assert order == [
+        "place", "hub", "rooms", "sensors", "schedules", "frost",
+        "alerts", "account", "diagnostics", "about",
+    ], order
