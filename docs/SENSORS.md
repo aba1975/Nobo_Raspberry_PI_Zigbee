@@ -254,6 +254,20 @@ the bootloader, so it is worth reading the row rather than guessing.
 
 Reversible: write the coordinator image back and it is a coordinator again.
 
+**Run for real on 24 September 2026**, on the demo Pi, with the coordinator
+plugged in beside the spare. The script refused nothing it should not have,
+fetched `CC1352P2_CC2652P_launchpad_router_20250403.zip`, matched GitHub's
+digest, and wrote and CRC-verified 360,448 bytes. `cc2538-bsl` names the chip
+"CC1350 PG2.1" while doing it; that is its long-standing misreading of the
+CC2652P and not a sign of the wrong image. With the network open, the stick
+joined **by itself, while still plugged into the Pi** — it needs no unplugging
+to pair — and Zigbee2MQTT identified it as `ti.router`, build `20250403`.
+
+That first run also found a bug the tests could not: the flashing tool had
+become a package (`cc2538_bsl/cc2538_bsl.py`) before the commit it is pinned
+to, so the script's old path failed — after the download and checksum, and
+with nothing written. It now recognises both layouts.
+
 Worth knowing if the spares are also earmarked for building more installations:
 a dongle **ships as a coordinator**, so one straight out of the bag needs no
 flashing at all to run a Pi. Only a stick that has already been converted to a
@@ -272,8 +286,11 @@ docker exec nobo-mosquitto mosquitto_pub -h 127.0.0.1 \
   -t 'zigbee2mqtt/0x<its address>/set' -m '{"transmit_power": 20}'
 ```
 
-That comes from Zigbee2MQTT's device definition and the firmware's source, and
-has not yet been run here. Read it back with `/get` and `{"transmit_power": ""}`.
+Read it back by publishing `{"transmit_power": ""}` to `/get`. Done on the
+same stick, the same day: it read back 9 before and **20** after, and the 20 is
+the device's own read response, not Zigbee2MQTT echoing the request. That it
+survives losing power rests on the firmware storing it in non-volatile memory;
+read it back once after moving the stick to its charger to be sure.
 
 And **use a decent USB supply**: a cheap charger is a noisy thing to sit a
 2.4 GHz receiver on top of, which is the same reasoning that put the
@@ -297,9 +314,10 @@ neighbour table, the interface reads what arrives over MQTT. The neighbour
 table runs a little high and a little stale, so treat the two as agreeing
 rather than as one contradicting the other.
 
-What it still has not seen is **a network with a router in it**. Every device
-here is a battery end device, so "which parent did it choose" has so far only
-ever been answered "the coordinator".
+What it still has not seen is **a sensor routed through a router**. There is
+one in the network now (24 September 2026), but it sits beside the
+coordinator, and the two sensors were paired before it, so "which parent did it
+choose" has so far only ever been answered "the coordinator".
 
 **Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
 ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
