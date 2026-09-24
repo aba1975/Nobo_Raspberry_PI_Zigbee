@@ -247,10 +247,21 @@ If that commit has gone, set CC2538_BSL_REF to one you have checked yourself:
   CC2538_BSL_REF=main bash scripts/zigbee-flash-router.sh"
 git -C "$WORK/bsl" checkout -q FETCH_HEAD
 
+# The tool became a package (cc2538_bsl/cc2538_bsl.py) before the pinned
+# commit; older commits, reachable through CC2538_BSL_REF, had a top-level
+# cc2538-bsl.py. The first real flash found the script still calling the old
+# path, so both are recognised and anything else stops before writing.
+if [ -f "$WORK/bsl/cc2538_bsl/cc2538_bsl.py" ]; then
+    BSL=(env PYTHONPATH="$WORK/bsl" python3 -m cc2538_bsl.cc2538_bsl)
+elif [ -f "$WORK/bsl/cc2538-bsl.py" ]; then
+    BSL=(python3 "$WORK/bsl/cc2538-bsl.py")
+else
+    die "The flashing tool at $BSL_REF has neither layout this script knows. Nothing was written."
+fi
+
 # --bootloader-sonoff-usb toggles this adapter into its bootloader over the
 # serial line, so its enclosure never has to be opened for the boot button.
-python3 "$WORK/bsl/cc2538-bsl.py" \
-    --bootloader-sonoff-usb -e -w -v -p "$DEVICE" "$HEX"
+"${BSL[@]}" --bootloader-sonoff-usb -e -w -v -p "$DEVICE" "$HEX"
 
 say ""
 say "Done. Unplug it and power it from any USB supply, anywhere in the house —"

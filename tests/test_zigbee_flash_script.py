@@ -152,6 +152,15 @@ def test_it_writes_with_verification_and_the_sonoff_bootloader_toggle():
     assert "-e -w -v" in text
 
 
+def test_it_runs_the_tool_from_the_layout_the_pinned_commit_has():
+    """At the pinned commit the tool is a package, cc2538_bsl/cc2538_bsl.py,
+    and has no top-level cc2538-bsl.py. The first real flash stopped on
+    exactly that, having downloaded and verified the firmware first."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "cc2538_bsl/cc2538_bsl.py" in text
+    assert "python3 -m cc2538_bsl.cc2538_bsl" in text
+
+
 def test_it_says_the_result_needs_no_computer():
     """The whole reason for choosing a dongle over a smart plug is that it can
     be hidden on a charger, and "USB stick" implies otherwise."""
