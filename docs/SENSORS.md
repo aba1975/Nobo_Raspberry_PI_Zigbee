@@ -288,9 +288,9 @@ docker exec nobo-mosquitto mosquitto_pub -h 127.0.0.1 \
 
 Read it back by publishing `{"transmit_power": ""}` to `/get`. Done on the
 same stick, the same day: it read back 9 before and **20** after, and the 20 is
-the device's own read response, not Zigbee2MQTT echoing the request. That it
-survives losing power rests on the firmware storing it in non-volatile memory;
-read it back once after moving the stick to its charger to be sure.
+the device's own read response, not Zigbee2MQTT echoing the request. It **survives losing
+power**: unplugged from the Pi and moved to a phone charger, it answered the
+same read with 20.
 
 And **use a decent USB supply**: a cheap charger is a noisy thing to sit a
 2.4 GHz receiver on top of, which is the same reasoning that put the
