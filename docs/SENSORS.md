@@ -260,12 +260,24 @@ flashing at all to run a Pi. Only a stick that has already been converted to a
 router has to be put back, and that is the same procedure with the
 `_coordinator_` image.
 
-Two caveats. **A router's transmit power is whatever its firmware was built
-with** — `NOBO_ZIGBEE_TRANSMIT_POWER` configures the coordinator and nothing
-else, and there is no equivalent knob for a router. And **use a decent USB
-supply**: a cheap charger is a noisy thing to sit a 2.4 GHz receiver on top of,
-which is the same reasoning that put the coordinator on an extension lead in
-the first place.
+Two caveats. **A router starts at 9 dBm, not 20.** `NOBO_ZIGBEE_TRANSMIT_POWER`
+configures the coordinator and nothing else. The router firmware (from its
+20221102 build) takes its own setting over the air instead: Zigbee2MQTT knows a
+flashed ZBDongle-P as `ti.router` and exposes `transmit_power`, -20 to 20 dBm,
+which the firmware writes to its own non-volatile memory, so it survives a power
+cut. Once it has joined, from the Pi:
+
+```bash
+docker exec nobo-mosquitto mosquitto_pub -h 127.0.0.1 \
+  -t 'zigbee2mqtt/0x<its address>/set' -m '{"transmit_power": 20}'
+```
+
+That comes from Zigbee2MQTT's device definition and the firmware's source, and
+has not yet been run here. Read it back with `/get` and `{"transmit_power": ""}`.
+
+And **use a decent USB supply**: a cheap charger is a noisy thing to sit a
+2.4 GHz receiver on top of, which is the same reasoning that put the
+coordinator on an extension lead in the first place.
 
 `scripts/zigbee-map.sh` answers whether there is a router at all, and which
 parent each sensor actually chose. Link quality in the interface cannot: it
@@ -484,6 +496,13 @@ In order, for a Pi that is already running:
    `com.docker.compose.volume=zigbee2mqtt-data` so Compose treats it as its
    own. A Zigbee2MQTT that starts on an empty volume forms a *new* network on
    the stick, and the old one is gone.
+
+   Copy it **on the day of the move, with the old Zigbee2MQTT stopped**, not
+   weeks ahead. The database is only true as of the moment it was copied:
+   anything paired afterwards — a sensor, or a repeater — still holds the
+   network key and will keep talking, but the new Pi's Zigbee2MQTT has never
+   heard of it and it has to be paired again. A copy staged early is a rehearsal,
+   and should be replaced before the stick is plugged in.
 2. **Set `NOBO_ZIGBEE_ADAPTER`** in `.env`. The by-id name carries the stick's
    own serial number, so it is the same on every Pi.
 3. **Plug the stick in, then add `zigbee` to `COMPOSE_PROFILES`** — beside
