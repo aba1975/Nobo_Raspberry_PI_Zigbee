@@ -181,6 +181,15 @@ services:
       # Lower it to 5 for an adapter with no amplifier — a bare CC2652RB, or a
       # ZBDongle-E — which cannot reach 20 and will log the attempt as an error.
       - ZIGBEE2MQTT_CONFIG_ADVANCED_TRANSMIT_POWER=${NOBO_ZIGBEE_TRANSMIT_POWER:-20}
+      # Zigbee2MQTT's own web frontend, on the Pi only.
+      #
+      # It has no password unless one is configured, and it can pair, remove
+      # and rename devices and change the network. With host networking and no
+      # host set it listened on every interface, so anybody on the LAN could
+      # manage the sensors - while Mosquitto beside it is deliberately bound to
+      # loopback. This application never uses it; reach it for diagnostics
+      # with  ssh -L 8080:127.0.0.1:8080 <pi>  and open http://localhost:8080.
+      - ZIGBEE2MQTT_CONFIG_FRONTEND_HOST=127.0.0.1
 
 volumes:
   nobo-data:

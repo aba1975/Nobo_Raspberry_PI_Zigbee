@@ -473,7 +473,35 @@ Names, door/window types and rooms are keyed by IEEE address in
 `data/zigbee_sensor_metadata.json`. Carry that file across and re-paired sensors
 return to the rooms and names they already had instead of arriving anonymous —
 which is the difference between re-pairing ten sensors and re-pairing *and*
-re-describing them.
+re-describing them. Zone ids differ between installations, so map each
+sensor's `zone_id` to the room of the same name on the new Pi.
+
+In order, for a Pi that is already running:
+
+1. **Copy the `zigbee2mqtt-data` volume across before the stick is plugged in.**
+   Create it on the new Pi as `nobo-control_zigbee2mqtt-data`, with the labels
+   `com.docker.compose.project=nobo-control` and
+   `com.docker.compose.volume=zigbee2mqtt-data` so Compose treats it as its
+   own. A Zigbee2MQTT that starts on an empty volume forms a *new* network on
+   the stick, and the old one is gone.
+2. **Set `NOBO_ZIGBEE_ADAPTER`** in `.env`. The by-id name carries the stick's
+   own serial number, so it is the same on every Pi.
+3. **Plug the stick in, then add `zigbee` to `COMPOSE_PROFILES`** — beside
+   `tls`, not instead of it — and `sudo systemctl restart nobo-control`.
+   Not before: with the profile on and no stick, starting Zigbee2MQTT fails
+   with "error gathering device information". The heating carries on — checked
+   on the demo Pi on 24 September 2026, from a cold start — but the service
+   unit retries every ten seconds until the stick is back.
+4. **Choose Zigbee** under Settings → Door and Window Sensor Configuration.
+5. **Open and close each sensor once.** A sleeping contact sensor reports
+   nothing until it changes, so until then it shows as not heard from.
+6. **Retire the old volume** once the new Pi is working. Two coordinators with
+   the same network key and PAN id — the old volume restored onto a second
+   stick — would fight over the same mesh.
+
+`install.sh --reconfigure` also does step 3, but it asks every question again,
+the hub and the admin password included. On a Pi with a real hub and a
+password somebody knows, the steps above are the shorter way.
 
 ## Pairing and management
 

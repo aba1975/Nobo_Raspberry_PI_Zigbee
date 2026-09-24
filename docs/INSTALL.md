@@ -195,7 +195,16 @@ Only if you have the Zigbee stick.
 sudo bash /opt/nobo-control/scripts/install.sh --reconfigure
 ```
 
-Answer the questions again — it will find the stick this time.
+Answer the questions again — it will find the stick this time. It really does
+ask all of them again: on a Pi already connected to your hub, answer **yes** to
+the hub question and type the same serial number, or it goes back to demo
+mode, and the admin password is set again too. HTTPS, if you set it up, is
+kept.
+
+**If the stick has been used with another Pi**, its sensors are paired to a
+network whose key lives on that Pi. Follow *Moving the dongle to another
+installation* in [SENSORS.md](SENSORS.md) instead, or every sensor has to be
+paired again.
 
 **To pair a sensor:**
 

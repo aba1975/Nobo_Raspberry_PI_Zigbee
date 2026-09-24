@@ -73,9 +73,12 @@ def test_zigbee_is_optional_and_detected_rather_than_typed():
     assert "/dev/serial/by-id" in SOURCE
     # Never /dev/ttyUSB0: USB numbering is not stable across reboots.
     assert "ttyUSB0" not in SOURCE
-    assert "set_env COMPOSE_PROFILES zigbee" in SOURCE
-    # And skipping it must leave the profile empty, not unset-and-inherited.
-    assert 'set_env COMPOSE_PROFILES ""' in SOURCE
+    assert "set_profile zigbee on" in SOURCE
+    # And skipping it must switch the profile off, not leave it inherited.
+    assert "set_profile zigbee off" in SOURCE
+    # Never the whole list: that is what used to switch HTTPS off.
+    assert "set_env COMPOSE_PROFILES zigbee" not in SOURCE
+    assert 'set_env COMPOSE_PROFILES ""' not in SOURCE
 
 
 def test_it_asks_for_a_password_rather_than_shipping_a_known_one():
@@ -294,3 +297,36 @@ def test_every_internal_link_points_somewhere(name):
         if target not in headings
     })
     assert not dead, f"{name} links to headings that do not exist: {dead}"
+
+
+def _set_profile(tmp_path, initial, *calls):
+    start = SOURCE.index("set_env() {")
+    set_env = SOURCE[start:SOURCE.index("\n}\n", start) + 3]
+    start = SOURCE.index("set_profile() {")
+    set_profile = SOURCE[start:SOURCE.index("\n}\n", start) + 3]
+    (tmp_path / ".env").write_text(initial, encoding="utf-8")
+    script = "\n".join([
+        "set -euo pipefail",
+        f'INSTALL_DIR="{tmp_path}"',
+        set_env, set_profile,
+        *[f"set_profile {name} {state}" for name, state in calls],
+        'grep "^COMPOSE_PROFILES=" "$INSTALL_DIR/.env"',
+    ])
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is needed")
+@pytest.mark.parametrize("initial, calls, expected", [
+    # The case that locked a production Pi out of its own network.
+    ("COMPOSE_PROFILES=tls\n", [("zigbee", "on")], "COMPOSE_PROFILES=tls,zigbee"),
+    ("COMPOSE_PROFILES=tls,zigbee\n", [("zigbee", "off")], "COMPOSE_PROFILES=tls"),
+    ("COMPOSE_PROFILES=zigbee,tls\n", [("zigbee", "on")], "COMPOSE_PROFILES=tls,zigbee"),
+    ("COMPOSE_PROFILES=\n", [("zigbee", "on")], "COMPOSE_PROFILES=zigbee"),
+    ("COMPOSE_PROFILES=zigbee\n", [("zigbee", "off")], "COMPOSE_PROFILES="),
+    ("NOBO_DEMO=true\n", [("zigbee", "off")], "COMPOSE_PROFILES="),
+    ("COMPOSE_PROFILES=tls\n", [("zigbee", "on"), ("zigbee", "on")], "COMPOSE_PROFILES=tls,zigbee"),
+])
+def test_the_sensor_answer_changes_only_its_own_profile(tmp_path, initial, calls, expected):
+    assert _set_profile(tmp_path, initial, *calls) == expected

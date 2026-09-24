@@ -526,3 +526,12 @@ class TestTheInterfaceIsCompressed:
     def test_the_proxy_still_compresses_too(self):
         """Both paths, because either can be the one somebody uses."""
         assert "encode zstd gzip" in CADDYFILE.read_text(encoding="utf-8")
+
+
+def test_the_zigbee_frontend_answers_the_pi_only(compose):
+    """It can pair, remove and rename devices and has no password by default.
+    With host networking and no host it listened on the whole LAN, beside a
+    broker that is deliberately bound to loopback."""
+    env = compose["services"]["zigbee2mqtt"]["environment"]
+    assert "ZIGBEE2MQTT_CONFIG_FRONTEND_HOST=127.0.0.1" in env
+    assert compose["services"]["zigbee2mqtt"]["network_mode"] == "host"

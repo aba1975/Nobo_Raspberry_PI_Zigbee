@@ -85,6 +85,22 @@ set_env() {
     rm -f "$tmp"
 }
 
+# Switch one Compose profile on or off, leaving the others as they were.
+#
+# COMPOSE_PROFILES is a list, and this installer only owns one entry in it.
+# It used to write the whole value, so answering the sensor question on a Pi
+# with HTTPS set up replaced "tls" with "zigbee": Caddy stopped starting, and
+# with NOBO_BIND=127.0.0.1 nothing answered the network at all.
+set_profile() {
+    local name="$1" wanted="$2" current item out=""
+    current="$(grep -E '^COMPOSE_PROFILES=' "$INSTALL_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true)"
+    for item in ${current//,/ }; do
+        [ -n "$item" ] && [ "$item" != "$name" ] && out="${out:+$out,}$item"
+    done
+    [ "$wanted" = "on" ] && out="${out:+$out,}$name"
+    set_env COMPOSE_PROFILES "$out"
+}
+
 say "============================================"
 say "  Nobo Web Control — installation"
 say "============================================"
@@ -206,7 +222,7 @@ else
     if [ "${#ADAPTERS[@]}" -eq 0 ]; then
         say "    No USB serial device is plugged in, so sensors stay off."
         say "    Plug the stick in and run this again with --reconfigure."
-        set_env COMPOSE_PROFILES ""
+        set_profile zigbee off
     elif ask_yes_no "  Set up Zigbee sensors?" "y"; then
         adapter=""
         if [ "${#ADAPTERS[@]}" -eq 1 ]; then
@@ -223,10 +239,10 @@ else
             adapter="/dev/serial/by-id/${ADAPTERS[$((choice - 1))]}"
         fi
         set_env NOBO_ZIGBEE_ADAPTER "$adapter"
-        set_env COMPOSE_PROFILES zigbee
+        set_profile zigbee on
         say "    Sensors enabled."
     else
-        set_env COMPOSE_PROFILES ""
+        set_profile zigbee off
         say "    Skipped."
     fi
 
