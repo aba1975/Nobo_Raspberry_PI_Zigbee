@@ -637,7 +637,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px solid var(--rule); border-radius: var(--radius-sm);
   background: var(--paper);
 }
-.climate-fact span { font-size: .76rem; color: var(--ink-soft); }
+.climate-fact > span { font-size: .76rem; color: var(--ink-soft); }
 .climate-fact strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .climate-updated { margin: .1rem 0 .8rem; font-size: .8rem; }
 
@@ -1094,7 +1094,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border-radius: var(--radius); padding: 1.15rem 1.2rem;
   box-shadow: var(--shadow); margin-bottom: 1.3rem;
 }
-.card > h2 { margin: 0 0 .85rem; font-size: .74rem; font-weight: 700;
+.card > h2, .card-head.is-caps > h2 { margin: 0 0 .85rem; font-size: .74rem; font-weight: 700;
   letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint); }
 
 .dev-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; }
@@ -1250,6 +1250,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    real space under it - otherwise "Edit week" appears to be stuck to Monday. */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .card-head h2 { margin: 0; }
+/* A heading that shares its row with a button keeps the small-caps look. */
+.card-head.is-caps > h2 { margin: 0; }
 
 .day-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: .2rem 0 .9rem; }
 .day-tab {
@@ -1607,3 +1609,112 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    and says why, rather than removing it. */
 .notify-row.is-unavailable { opacity: .55; }
 .notify-row.is-unavailable input { cursor: not-allowed; }
+
+/* ------------------------------------------------ zone page on a phone
+
+   At phone width a heater's or sensor's row used to give its four action
+   icons and three status facts the room first, and the name got what was
+   left: one or two letters a line. Here each row is one line - picture or
+   icon, name, status - and ⋯ opens the same actions in a sheet, in words.
+   The desktop layout is untouched: both are rendered, and this picks. */
+.phone-only, .more-btn, .card-add, .fact-short { display: none; }
+
+.more-btn {
+  align-items: center; justify-content: center; flex: none;
+  width: 40px; height: 44px; padding: 0;
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+}
+.more-btn svg { width: 22px; height: 22px; }
+.more-btn:hover { background: var(--paper); }
+.more-btn:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+
+.card-add {
+  align-items: center; min-height: 44px; padding: 0 .2rem;
+  border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: .9rem; font-weight: 650; color: var(--pine);
+}
+.card-add:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; border-radius: 6px; }
+
+/* The ⋯ sheet: what the row left out, then the four actions. */
+.menu-head { display: flex; align-items: center; gap: .8rem; margin: 0 0 .7rem; }
+.menu-head .np-device { width: 84px; height: 44px; flex: none; }
+.menu-head-copy { display: grid; gap: .35rem; min-width: 0; }
+.menu-head-copy small { color: var(--ink-soft); font-size: .84rem; }
+.menu-head-copy small.is-alert { color: var(--amber); font-weight: 600; }
+.menu-head .sensor-facts { justify-content: flex-start; }
+.menu-head .sensor-health { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.menu-acts { display: grid; }
+.menu-acts .menu-act {
+  display: flex; align-items: center; gap: .85rem; width: 100%;
+  min-height: 52px; padding: .65rem .35rem;
+  border: 0; border-top: 1px solid var(--rule); border-radius: 0;
+  background: none; color: var(--ink); cursor: pointer;
+  font: inherit; text-align: left;
+}
+.menu-acts .menu-act:hover { background: var(--paper); border-color: var(--rule); }
+.menu-acts .menu-act:focus-visible { outline: 2px solid var(--pine); outline-offset: -2px; }
+.menu-act .icon { width: 20px; height: 20px; flex: none; }
+.menu-act small { display: block; margin-top: .1rem; color: var(--ink-soft); font-size: .78rem; }
+.menu-act.act-rename .icon { color: var(--frost); }
+.menu-act.act-move .icon { color: var(--pine); }
+.menu-act.act-replace .icon { color: var(--amber); }
+.menu-acts .menu-act.act-remove { color: var(--danger); }
+
+.sensor-health { display: contents; }
+
+@media (max-width: 560px) {
+  .phone-only { display: inline; }
+  .dev-brief.phone-only { display: block; }
+  .more-btn, .card-add { display: inline-flex; }
+  .card-add-row { display: none; }
+  .card-head:has(.card-add) .sensor-count { display: none; }
+  .card-head { flex-wrap: nowrap; }
+
+  .dev {
+    grid-template-columns: auto minmax(0, 1fr) auto; gap: .65rem;
+    padding: .5rem .15rem .5rem .6rem;
+  }
+  .dev .np-device { width: 64px; height: 34px; }
+  .dev .dev-meta, .dev .dev-tags, .dev .dev-actions { display: none; }
+  .dev-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dev-brief { margin-top: .1rem; font-size: .78rem; color: var(--ink-soft); }
+
+  /* Name over battery and signal, the state beside them, then ⋯. */
+  .sensor-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: .15rem .65rem; padding: .5rem .15rem .5rem .6rem;
+  }
+  .sensor-row .sensor-actions { display: none; }
+  .sensor-row .sensor-facts { display: contents; }
+  .sensor-row .sensor-visual { grid-column: 1; grid-row: 1 / span 2; }
+  .sensor-row .sensor-copy { grid-column: 2; grid-row: 1; }
+  .sensor-row .sensor-state { grid-column: 3; grid-row: 1; justify-self: end; }
+  .sensor-row .more-btn { grid-column: 4; grid-row: 1 / span 2; }
+  .sensor-row .sensor-health {
+    grid-column: 2 / 4; grid-row: 2;
+    display: flex; flex-wrap: wrap; align-items: center; gap: .15rem .5rem;
+  }
+  .sensor-row .sensor-copy strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The kind and readings are in the card already; only a sensor that has
+     gone quiet keeps its line, because that is news. */
+  .sensor-row .sensor-copy small:not(.is-alert) { display: none; }
+  .sensor-row .sensor-copy small.is-alert { color: var(--amber); font-weight: 600; }
+
+  .climate-facts {
+    grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+    gap: 0; overflow: hidden;
+    border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper);
+  }
+  .climate-fact { padding: .6rem .65rem; border: 0; border-radius: 0; background: none; }
+  .climate-fact + .climate-fact { border-left: 1px solid var(--rule); }
+  .climate-fact > span {
+    font-size: .66rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .climate-fact strong { font-size: 1.2rem; white-space: nowrap; }
+  .climate-fact.is-actual > span, .climate-fact.is-actual strong { color: var(--frost); }
+  .fact-long { display: none; }
+  .fact-short { display: inline; }
+  .fact-unit { font-size: .62em; font-weight: 600; }
+}

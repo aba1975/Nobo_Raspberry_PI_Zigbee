@@ -132,6 +132,38 @@
   function onSheetKey(e) { if (e.key === 'Escape') closeSheet(); }
   scrimEl.addEventListener('click', closeSheet);
 
+  /* On a phone, a heater's or sensor's four icon buttons took the width its
+     name needed, which ended up one letter per line. There, the row keeps
+     one line and ⋯ opens the same four actions, in words. The icons stay on
+     wider screens, so both are rendered and the stylesheet picks one. */
+  const MORE_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+    + '<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>';
+
+  function moreButton(attrs, name) {
+    return `<button class="more-btn" type="button" ${attrs}
+      aria-label="Manage ${esc(name)}">${MORE_ICON}</button>`;
+  }
+
+  /* Each action runs exactly what its icon button runs. The menu closes
+     first, so the action's own sheet opens in its place and focus returns to
+     the ⋯ it came from. */
+  function actionMenuSheet(title, head, actions) {
+    openSheet(title, `${head}
+      <div class="menu-acts">${actions.map((action, i) => `
+        <button class="menu-act ${action.cls}" type="button" data-menu-act="${i}">
+          ${Nobo.icon(action.icon)}
+          <span>${esc(action.label)}${action.hint ? `<small>${esc(action.hint)}</small>` : ''}</span>
+        </button>`).join('')}
+      </div>`, body => {
+      body.querySelectorAll('[data-menu-act]').forEach(button => {
+        button.onclick = () => {
+          closeSheet();
+          actions[Number(button.dataset.menuAct)].run();
+        };
+      });
+    });
+  }
+
   /** Ask before anything that changes the whole cabin or destroys data. */
   function confirmSheet(title, message, confirmLabel, onConfirm, danger = false) {
     openSheet(title, `
@@ -1251,8 +1283,8 @@
       ? `<span class="sensor-batt is-unknown"
            title="This sensor has not reported its battery level yet. It cannot be asked for it — battery devices send it on their own schedule, usually within an hour of pairing.">Battery not reported yet</span>`
       : `<span class="sensor-batt ${low ? 'is-low' : ''}"
-           title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%${
-             low ? ' low' : ''}</span>`;
+           title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%<span
+           class="phone-only"> battery</span>${low ? ' low' : ''}</span>`;
     /* Offline means the Pi is no longer hearing from the sensor, which is a
        different worry from a window being open — so it says when it was last
        heard from rather than leaving you to guess how stale the state is. */
@@ -1265,9 +1297,11 @@
        anything is willing to call it offline. */
     const extras = climate ? climateExtras(sensor) : '';
     const kindText = extras ? `${sensorKindLabel(sensor)} · ${extras}` : sensorKindLabel(sensor);
+    const quiet = sensor.available
+      && (climate ? climateReadingIsStale(sensor) : sensorIsStale(sensor));
     const detail = !sensor.available
       ? `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`
-      : (climate ? climateReadingIsStale(sensor) : sensorIsStale(sensor))
+      : quiet
         ? `${kindText} · nothing heard since ${Nobo.fmtAgo(sensor.last_seen_at)}`
         : kindText;
     return `
@@ -1275,12 +1309,14 @@
         ${sensorIcon(sensor)}
         <span class="sensor-copy">
           <strong>${esc(sensor.name)}</strong>
-          <small>${esc(detail)}</small>
+          <small class="${!sensor.available || quiet ? 'is-alert' : ''}">${esc(detail)}</small>
         </span>
         <span class="sensor-facts">
           <span class="sensor-state sensor-${esc(stateClass)}">${esc(label)}</span>
+          <span class="sensor-health">
           ${battery}
           ${sensorSignal(sensor)}
+          </span>
         </span>
         ${admin ? `<span class="dev-actions sensor-actions">
           <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
@@ -1291,7 +1327,8 @@
             title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>
           <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
             title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
-        </span>` : ''}
+        </span>
+        ${moreButton(`data-sensor-menu="${esc(sensor.sensor_id)}"`, sensor.name)}` : ''}
       </li>`;
   }
 
@@ -1369,6 +1406,8 @@
         <div class="card-head">
           <h2>Doors and windows</h2>
           <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+          ${admin ? `<button class="card-add phone-only" type="button"
+            data-add-sensor="${esc(zone.zone_id)}">+ Add</button>` : ''}
         </div>
         <div aria-live="polite">${warning}${offline}</div>
         ${rule && !summary.warning_raised
@@ -1377,7 +1416,7 @@
           ? `<ul class="sensor-list">${items.map(item => sensorRow(item, admin)).join('')}</ul>`
           : '<p class="zd-sub">No contact sensors are assigned to this room yet.</p>'}
         ${sensorRuleSummary(zone)}
-        ${admin ? `<div class="sheet-actions">
+        ${admin ? `<div class="sheet-actions card-add-row">
           <button class="btn" type="button" data-add-sensor="${esc(zone.zone_id)}">Add sensor</button>
         </div>` : ''}
       </section>`;
@@ -1625,9 +1664,12 @@
       ...climateAlerts(climate).map(alert => warningBox(alert.icon, alert.title, alert.detail)),
     ].join('');
 
-    const fact = (label, value) => `
-      <div class="climate-fact">
-        <span>${esc(label)}</span>
+    /* On a phone the three sit in one strip, a third of the width each, so
+       the label shortens and the unit shrinks rather than the strip breaking
+       two and one. */
+    const fact = (label, value, short = label, cls = '') => `
+      <div class="climate-fact ${cls}">
+        <span><span class="fact-long">${esc(label)}</span><span class="fact-short">${esc(short)}</span></span>
         <strong>${value}</strong>
       </div>`;
     const readings = climate.temperature == null
@@ -1638,9 +1680,10 @@
              temperature rule is not acting on it.</small>
          </div>`
       : `<div class="climate-facts">
-           ${fact('Actual temperature', `${esc(Nobo.fmtTemp(climate.temperature))}\u00B0C`)}
+           ${fact('Actual temperature', `${esc(Nobo.fmtTemp(climate.temperature))}\u00B0C`, 'Actual', 'is-actual')}
            ${climate.humidity != null ? fact('Humidity', esc(fmtHumidity(climate.humidity))) : ''}
-           ${climate.pressure != null ? fact('Pressure', esc(fmtPressure(climate.pressure))) : ''}
+           ${climate.pressure != null ? fact('Pressure',
+             `${esc(Math.round(climate.pressure))}<span class="fact-unit">\u00A0hPa</span>`) : ''}
          </div>
          <p class="zd-sub climate-updated">${esc([
            climate.updated_at ? `Updated ${Nobo.fmtAgo(climate.updated_at)}` : '',
@@ -1658,6 +1701,8 @@
         <div class="card-head">
           <h2>Temperature and humidity</h2>
           <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+          ${admin ? `<button class="card-add phone-only" type="button"
+            data-add-sensor="${esc(zone.zone_id)}">+ Add</button>` : ''}
         </div>
         <div aria-live="polite">${warning}</div>
         ${readings}
@@ -2660,9 +2705,42 @@
     });
   }
 
+  function sensorMenuSheet(sensorId) {
+    const sensor = configuredSensor(sensorId);
+    if (!sensor) return;
+    /* The row on a phone is name and state only; the rest is here. */
+    const row = document.createElement('ul');
+    row.innerHTML = sensorRow(sensor, false);
+    const copy = row.querySelector('.sensor-copy small');
+    const facts = row.querySelector('.sensor-facts');
+    actionMenuSheet(sensor.name, `
+      <div class="menu-head">
+        ${sensorIcon(sensor)}
+        <span class="menu-head-copy">
+          <small class="${copy.className}">${copy.innerHTML}</small>
+          <span class="sensor-facts">${facts.innerHTML}</span>
+        </span>
+      </div>`, [
+      { icon: 'rename', cls: 'act-rename', label: 'Edit',
+        hint: sensor.kind === 'climate' ? 'Its name'
+          : 'Its name, and whether it is a door or a window',
+        run: () => editSensorSheet(sensorId) },
+      { icon: 'move', cls: 'act-move', label: 'Move to another room',
+        run: () => moveSensorSheet(sensorId) },
+      { icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
+        hint: 'Pair a new one in its place',
+        run: () => pairSensorSheet('', configuredSensor(sensorId)) },
+      { icon: 'remove', cls: 'act-remove', label: 'Remove this sensor',
+        run: () => removeSensor(sensorId) },
+    ]);
+  }
+
   function wireZoneSensors(root) {
     root.querySelectorAll('[data-add-sensor]').forEach(button => {
       button.onclick = () => pairSensorSheet(button.dataset.addSensor);
+    });
+    root.querySelectorAll('[data-sensor-menu]').forEach(button => {
+      button.onclick = () => sensorMenuSheet(button.dataset.sensorMenu);
     });
     root.querySelectorAll('[data-edit-sensor]').forEach(button => {
       button.onclick = () => editSensorSheet(button.dataset.editSensor);
@@ -3264,11 +3342,14 @@
       ${climateStatus(zone)}
 
       <section class="card">
-        <h2>Heaters in this zone (${devices.length})</h2>
+        <div class="card-head is-caps">
+          <h2>Heaters in this zone (${devices.length})</h2>
+          <button class="card-add phone-only" type="button" data-add-device>+ Add</button>
+        </div>
         ${devices.length ? `<ul class="dev-list">${devices.map(devRow).join('')}</ul>`
           : `<p class="zd-sub">No heaters are assigned to this zone. Add one by typing the
              12-digit serial printed on it.</p>`}
-        <div class="sheet-actions">
+        <div class="sheet-actions card-add-row">
           <button class="btn" type="button" data-act="add-device">Add a heater</button>
         </div>
       </section>
@@ -3328,8 +3409,12 @@
       b.onclick = () => replaceDevice(b.dataset.replaceDevice);
     });
     wireZoneSensors(root);
-    const addBtn = root.querySelector('[data-act="add-device"]');
-    if (addBtn) addBtn.onclick = () => addDeviceSheet(zone);
+    root.querySelectorAll('[data-act="add-device"], [data-add-device]').forEach(b => {
+      b.onclick = () => addDeviceSheet(zone);
+    });
+    root.querySelectorAll('[data-device-menu]').forEach(b => {
+      b.onclick = () => deviceMenuSheet(b.dataset.deviceMenu);
+    });
     root.querySelector('[data-act="rename-zone"]').onclick = () => renameZone(zone);
     root.querySelector('[data-act="delete-zone"]').onclick = () => deleteZone(zone);
     const weekBtn = root.querySelector('[data-act="edit-week"]');
@@ -3358,6 +3443,8 @@
           <div class="dev-name">${esc(name)}</div>
           <div class="dev-meta">${esc(d.device_type || 'Unknown model')} &middot; ${esc(d.serial_display || d.serial)}</div>
           <div class="dev-tags">${tags}</div>
+          <div class="dev-brief phone-only">${esc(d.device_type || 'Unknown model')} &middot; ${
+            manual ? 'dial on heater' : 'adjustable'}</div>
         </div>
         <div class="dev-actions">
           <button class="icon-btn act-rename" type="button" data-rename-device="${esc(d.serial)}"
@@ -3369,7 +3456,30 @@
           <button class="icon-btn act-remove" type="button" data-remove-device="${esc(d.serial)}"
             title="Remove from the hub" aria-label="Remove ${esc(name)}">${Nobo.icon('remove')}</button>
         </div>
+        ${moreButton(`data-device-menu="${esc(d.serial)}"`, name)}
       </li>`;
+  }
+
+  function deviceMenuSheet(serial) {
+    const d = state.devices.find(x => x.serial === serial);
+    if (!d) { Nobo.toast('That heater is no longer here', 'error'); return; }
+    const name = d.display_name || d.name || d.device_type || 'Heater';
+    actionMenuSheet(name, `
+      <div class="menu-head">
+        <span class="np-device">${Nobo.deviceImg(d.serial, '', name + ' - ' + (d.device_type || 'heating device'))}</span>
+        <span class="menu-head-copy">
+          <small>${esc(d.device_type || 'Unknown model')} &middot; ${esc(d.serial_display || d.serial)}</small>
+          <small>${Nobo.isManualDevice(d)
+            ? 'No remote temperature control: turn the dial on the heater.'
+            : 'Its temperature is set from here.'}</small>
+        </span>
+      </div>`, [
+      { icon: 'rename', cls: 'act-rename', label: 'Rename', run: () => renameDevice(serial) },
+      { icon: 'move', cls: 'act-move', label: 'Move to another zone', run: () => moveDevice(serial) },
+      { icon: 'replace', cls: 'act-replace', label: 'Replace with a different heater',
+        hint: 'Keeps its name and zone', run: () => replaceDevice(serial) },
+      { icon: 'remove', cls: 'act-remove', label: 'Remove from the hub', run: () => removeDevice(serial) },
+    ]);
   }
 
   /* Monday first: the week starts on Monday everywhere this is sold, and a

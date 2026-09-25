@@ -244,6 +244,20 @@ whole card is the tap target that opens the room; the stepper is layered above i
 temperature does not navigate. Stacked, each half of the stepper is 48 × 38 px under touch, a little
 under the 44 px used elsewhere — the trade for a shorter card (September 2026).
 
+### A room's page on a phone
+
+At 375 px each heater and sensor used to give its four action icons and its status facts the
+width first, which squeezed the name to a letter or two a line and made one heater's row 250 px
+tall. On a phone (560 px and under) each row is now one line: picture or icon, name, a short line
+under it (model and "dial on heater", or battery and signal), the state, and **⋯**. The ⋯ opens a
+sheet with the same four actions in words, plus what the row left out: the serial, or the sensor's
+kind and readings. A sensor that has gone offline or quiet keeps its "last heard" line on the row,
+because that is news. Temperature, humidity and pressure share one strip, and each card's add
+button moves into its header as **+ Add**.
+
+Wider screens keep the icons unchanged. Both layouts are rendered and the stylesheet picks one, so
+the actions run the same code either way (September 2026).
+
 ### Adding a room
 
 The Rooms heading carries an **Add a room** button â€” the only action on the home screen that is not
