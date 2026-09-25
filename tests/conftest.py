@@ -136,6 +136,17 @@ def redirect_persistence(tmp_path, monkeypatch):
         "SENSOR_AUTOMATION_STATE_FILE",
         tmp_path / "sensor_automation_state.json",
     )
+    monkeypatch.setattr(
+        sensor_persistence, "CLIMATE_HISTORY_FILE", tmp_path / "climate_history.json",
+    )
+    # A module-level history would carry one test's readings into the next.
+    server_module = sys.modules.get("server")
+    if server_module is not None and hasattr(server_module, "climate_history"):
+        from climate_history import ClimateHistory
+
+        monkeypatch.setattr(server_module, "climate_history", ClimateHistory(
+            save=sensor_persistence.save_climate_history,
+        ))
     # The account store too. It was left out, and a test that changed a
     # password or a role therefore rewrote the real users.json and broke every
     # test after it — the whole suite failing on an admin check because one

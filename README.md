@@ -87,7 +87,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Left-open warnings** | A room says which of its openings is open, and how many. After a delay you choose — immediately, or up to an hour — it becomes a warning you cannot miss. Offline is shown as its own state, because "I cannot tell you" is not the same as "it is shut". |
 | **Heating when something is open** | Optionally put the room into Away, Eco or Comfort, or hand it back to its schedule, while a contact stays open. Only an override this feature applied is ever released, and Comfort is never sent to "put things back". |
 | **Leaving with something open** | If the house is on Away and anything is open, the front page says so and names the rooms, with no delay — being away is what changes the stakes. |
-| **Room thermometers** | Aqara temperature, humidity and pressure sensors pair the same way. A room with one shows its temperature where the heater reports none, and humidity and pressure in the room. Each room can have a maximum and a minimum: warn only, or warn and hold Eco or Away while too warm, or Eco or Comfort while too cold, until it is half a degree back inside. See [Room thermometers](docs/SENSORS.md#room-thermometers). Not yet tested with a real thermometer. |
+| **Room thermometers** | Aqara temperature, humidity and pressure sensors pair the same way. A room with one shows its temperature where the heater reports none, and humidity and pressure in the room. The measured value is always labelled **Actual**, beside what the room is set to. Each room can have a maximum and a minimum: warn only, or warn and hold Eco or Away while too warm, or Eco or Comfort while too cold, until it is half a degree back inside. It also warns about air that stays damp (a humidity maximum, after a delay so a shower is not an alarm), and about any room below 5 °C, and shows the last 24 hours' lowest and highest. See [Room thermometers](docs/SENSORS.md#room-thermometers). Not yet tested with a real thermometer. |
 | **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. |
 
 ### Heating control
@@ -795,9 +795,10 @@ person has access, and an **away period starting or ending** confirms a planned
 trip actually took effect.
 
 That is the honest list. It will not tell you a pipe is freezing — unless
-the room has a Zigbee thermometer, in which case the optional **A room gets too
-cold** and **A room gets too warm** alerts do exactly that, from the sensor
-rather than the hub. See [Room thermometers](docs/SENSORS.md#room-thermometers).
+the room has a Zigbee thermometer, in which case the optional **A room is close
+to freezing** alert does exactly that — at once, even in quiet hours — and
+**A room gets too cold**, **A room gets too warm** and **A room stays too
+humid** cover the rest, from the sensor rather than the hub. See [Room thermometers](docs/SENSORS.md#room-thermometers).
 
 **And there is no good workaround on this hardware.** A smart plug with a local
 API would give the "running constantly" and "lost power" signals — but only for
@@ -2270,6 +2271,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `GET /api/status` | Connection status, demo mode, away schedule and the timezone in use |
 | `GET /api/capabilities` | Which features work in the current mode (see [What works with a real hub](#what-works-with-a-real-hub-and-what-does-not)) |
 | `GET /api/zones` | All zones with current status |
+| `GET /api/display` | A compact summary for a wall display: status, open contacts, and each room's mode, set and actual temperature and warnings (see [Wall display](docs/SENSORS.md#wall-display)) |
 | `GET /api/zones/{zone_id}/schedule` | One zone's weekly schedule, the schedule's name, and which other zones share it |
 | `GET /api/week_profiles` | Every schedule on the hub: its decoded week, the zones using it, and whether it can be edited or deleted |
 | `GET /api/hub` | What the hub says about itself: name, firmware, hardware version, production date, protocol version, serial |

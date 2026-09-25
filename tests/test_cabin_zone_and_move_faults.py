@@ -205,10 +205,42 @@ def test_a_room_thermometer_fills_in_the_missing_temperature():
         climate={"sensor_count": 1, "humidity": 45.2, "stale_after_seconds": 10800},
     ))
 
-    assert "now 21.3" in markup, markup
+    assert "Actual" in markup, markup
+    assert "21.3" in markup
+    assert "now 21.3" not in markup
     assert "45 %" in markup
     assert "No sensor" not in markup
     assert "room thermometer" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_heaters_own_reading_is_also_labelled_actual():
+    """The set point is the big number and the measurement sits under it, so
+    the measurement says what it is in words rather than by size alone."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+        current_temperature=19.5, temperature_source="hub",
+    ))
+    assert "Set to" in markup
+    assert 'class="set-actual"' in markup
+    assert "Actual" in markup and "19.5" in markup
+    assert "measured by the heater" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_monitoring_room_leads_with_its_actual_temperature():
+    """A room with no heater has nothing to be set to, so the reading is the
+    headline there, still called Actual."""
+    markup = _render_zone(_zone(
+        current_temperature=16.2, temperature_source="sensor",
+        climate_sensors=[{"sensor_id": "t1"}],
+        climate={"sensor_count": 1, "humidity": 55.0, "stale_after_seconds": 10800},
+    ))
+    assert "Monitoring only" in markup, markup
+    assert '<span class="set-label">Actual</span>' in markup
+    assert "set-value-actual" in markup and "16.2" in markup
+    assert "Set to" not in markup
+    assert "1 sensor" in markup and "55 %" in markup
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")

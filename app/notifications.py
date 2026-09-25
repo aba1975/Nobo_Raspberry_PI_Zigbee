@@ -221,12 +221,31 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
                 "than three hours old is not used, so a flat battery ends this quietly "
                 "rather than claiming the room has warmed up.",
     },
+    "room_near_freezing": {
+        "label": "A room is close to freezing",
+        "default": False,
+        "help": "A room thermometer reads below 5 °C, where pipes in walls and floors are "
+                "at risk. Independent of any minimum set for the room, and on for every "
+                "room with a thermometer unless that room is marked as meant to be cold. "
+                "Sent at once, even in quiet hours, because waiting until morning is how "
+                "a pipe bursts. Needs a temperature sensor in the room.",
+    },
+    "humidity_high": {
+        "label": "A room stays too humid",
+        "default": False,
+        "help": "A room thermometer has read above the humidity maximum set for its room "
+                "for the whole delay chosen there — an hour unless changed. A shower "
+                "raises a bathroom's humidity for a while, and a room that dries out "
+                "again inside the delay never warns. Warns only; the heating is not "
+                "changed. Needs a temperature and humidity sensor in the room.",
+    },
     "temperature_back_in_range": {
         "label": "The room is back within its limits",
         "default": False,
-        "help": "Sent after a too-warm or too-cold alert, once a fresh reading is half a "
-                "degree back inside the limit. Not sent when the reading simply stops "
-                "arriving, because that is not news that the room is fine.",
+        "help": "Sent after a too-warm, too-cold, near-freezing or humidity alert, once a "
+                "fresh reading is back inside the limit by its margin. Not sent when the "
+                "reading simply stops arriving, because that is not news that the room "
+                "is fine.",
     },
 }
 

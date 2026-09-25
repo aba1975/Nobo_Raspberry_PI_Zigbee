@@ -1007,6 +1007,9 @@
       action_when_too_warm: policy.action_when_too_warm || 'nothing',
       temperature_min: policy.temperature_min ?? null,
       action_when_too_cold: policy.action_when_too_cold || 'nothing',
+      humidity_max: policy.humidity_max ?? null,
+      humidity_delay_seconds: policy.humidity_delay_seconds ?? 3600,
+      frost_warning: policy.frost_warning !== false,
     };
   }
 
@@ -1017,6 +1020,7 @@
     'warning_delay_seconds', 'action_when_open', 'action_delay_seconds',
     'override_all_modes', 'temperature_max', 'action_when_too_warm',
     'temperature_min', 'action_when_too_cold',
+    'humidity_max', 'humidity_delay_seconds', 'frost_warning',
   ];
 
   function sensorPolicyBody(zoneId) {
@@ -1453,7 +1457,7 @@
 
   function climateConditionDetail(climate) {
     const now = climate.temperature == null
-      ? '' : `${Nobo.fmtTemp(climate.temperature)}\u00B0 now · `;
+      ? '' : `Actual ${Nobo.fmtTemp(climate.temperature)}\u00B0 · `;
     return climate.condition === 'too_warm'
       ? `${now}maximum ${fmtLimit(climate.temperature_max)}\u00B0`
       : `${now}minimum ${fmtLimit(climate.temperature_min)}\u00B0`;
@@ -1497,13 +1501,47 @@
     return null;
   }
 
-  /* The strip on the front-page card: only when the room is out of range.
-     A reading that is fine is already on the card as "now 21°". */
+  /* Near freezing and damp air are warnings of their own, beside whatever
+     the room's temperature rule says. Frost outranks "too cold": it is the
+     same direction and the more urgent of the two. */
+  function climateAlerts(climate) {
+    const alerts = [];
+    if (climate.frost) {
+      alerts.push({
+        key: 'frost', icon: 'frost', title: 'Near freezing',
+        detail: `${climate.temperature == null ? '' : `Actual ${Nobo.fmtTemp(climate.temperature)}\u00B0 · `}warns below ${fmtLimit(climate.frost_temperature)}\u00B0`,
+      });
+    }
+    if (climate.humidity_raised) {
+      alerts.push({
+        key: 'humid', icon: 'drop', title: 'Damp air',
+        detail: `${climate.humidity == null ? '' : `${fmtHumidity(climate.humidity)} now · `}maximum ${fmtHumidity(climate.humidity_max)}`,
+      });
+    }
+    return alerts;
+  }
+
+  /* The strips on the front-page card: only when the room is out of range.
+     A reading that is fine is already on the card as "Actual 21°". */
   function climateZoneHeadline(zone) {
+    return climateStrips(zone).join('');
+  }
+
+  function climateStrips(zone) {
     const climate = climateOf(zone);
-    if (!climate || !climate.condition) return '';
-    const rule = climateRuleLine(zone);
-    return `<div class="zsensor zsensor-warning zclimate zclimate-${esc(climate.condition)}">
+    if (!climate) return [];
+    const alerts = climateAlerts(climate);
+    const strips = alerts.map(alert => `<div class="zsensor zsensor-warning zclimate zclimate-${esc(alert.key)}">
+      <span class="sensor-visual" aria-hidden="true">${Nobo.icon(alert.icon)}</span>
+      <span class="zsensor-copy">
+        <strong>${esc(alert.title)}</strong>
+        <small>${esc(alert.detail)}</small>
+      </span>
+    </div>`);
+    const coveredByFrost = climate.condition === 'too_cold' && climate.frost;
+    if (climate.condition && !coveredByFrost) {
+      const rule = climateRuleLine(zone);
+      strips.unshift(`<div class="zsensor zsensor-warning zclimate zclimate-${esc(climate.condition)}">
       <span class="sensor-visual" aria-hidden="true">${Nobo.icon(
         climate.condition === 'too_cold' ? 'frost' : 'thermo')}</span>
       <span class="zsensor-copy">
@@ -1511,18 +1549,20 @@
         <small>${esc(climateConditionDetail(climate))}</small>
       </span>
       ${rule ? `<small class="zsensor-rule">${esc(rule.text)}</small>` : ''}
-    </div>`;
+    </div>`);
+    }
+    return strips;
   }
 
   /* Contacts and thermometers share one place on the card. When a room has
      something to say about both, they stack rather than overlap. */
   function zoneSensorStrips(zone) {
     const contact = sensorStatus(zone);
-    const climate = zone.sensor_summary ? climateZoneHeadline(zone) : '';
-    if (contact && climate) {
-      return `<div class="zsensor-stack">${contact}${climate}</div>`;
+    const strips = [contact, ...(zone.sensor_summary ? climateStrips(zone) : [])].filter(Boolean);
+    if (strips.length > 1) {
+      return `<div class="zsensor-stack">${strips.join('')}</div>`;
     }
-    return contact || climate;
+    return strips.join('');
   }
 
   function climateRuleSummary(zone) {
@@ -1538,10 +1578,16 @@
       ? 'no minimum'
       : `below ${fmtLimit(policy.temperature_min)}\u00B0: ${
           climateActionLabel(policy.action_when_too_cold).toLowerCase()}`);
+    parts.push(policy.humidity_max == null
+      ? 'no humidity limit'
+      : `damp above ${fmtHumidity(policy.humidity_max)}${
+          policy.humidity_delay_seconds ? ` for ${Nobo.fmtDuration(policy.humidity_delay_seconds)}` : ''}: warn`);
+    parts.push(policy.frost_warning === false
+      ? 'no frost warning' : 'warns near freezing');
     return `
       <div class="sensor-rule">
         <span class="sensor-rule-copy">
-          <strong>When it gets too warm or too cold</strong>
+          <strong>Limits for this room</strong>
           <small>${esc(parts.join(' · '))}</small>
         </span>
         ${admin ? `<button class="btn btn-small" type="button"
@@ -1561,17 +1607,23 @@
     const admin = state.me && state.me.role === 'admin';
     const rule = climateRuleLine(zone);
 
-    const warning = climate.condition
-      ? `<div class="sensor-warning climate-warning">
-           <span class="sensor-warning-icon" aria-hidden="true">${Nobo.icon(
-             climate.condition === 'too_cold' ? 'frost' : 'thermo')}</span>
+    const warningBox = (icon, title, detail) => `<div class="sensor-warning climate-warning">
+           <span class="sensor-warning-icon" aria-hidden="true">${Nobo.icon(icon)}</span>
            <span>
-             <strong>${esc(climateConditionTitle(climate))}</strong>
-             <small>${esc(climateConditionDetail(climate))}${
-               climate.condition_since ? ` · started ${esc(Nobo.fmtAgo(climate.condition_since))}` : ''}</small>
+             <strong>${esc(title)}</strong>
+             <small>${esc(detail)}</small>
            </span>
-         </div>`
-      : '';
+         </div>`;
+    const coveredByFrost = climate.condition === 'too_cold' && climate.frost;
+    const warning = [
+      climate.condition && !coveredByFrost
+        ? warningBox(climate.condition === 'too_cold' ? 'frost' : 'thermo',
+            climateConditionTitle(climate),
+            `${climateConditionDetail(climate)}${
+              climate.condition_since ? ` · started ${Nobo.fmtAgo(climate.condition_since)}` : ''}`)
+        : '',
+      ...climateAlerts(climate).map(alert => warningBox(alert.icon, alert.title, alert.detail)),
+    ].join('');
 
     const fact = (label, value) => `
       <div class="climate-fact">
@@ -1586,7 +1638,7 @@
              temperature rule is not acting on it.</small>
          </div>`
       : `<div class="climate-facts">
-           ${fact('Temperature', `${esc(Nobo.fmtTemp(climate.temperature))}\u00B0C`)}
+           ${fact('Actual temperature', `${esc(Nobo.fmtTemp(climate.temperature))}\u00B0C`)}
            ${climate.humidity != null ? fact('Humidity', esc(fmtHumidity(climate.humidity))) : ''}
            ${climate.pressure != null ? fact('Pressure', esc(fmtPressure(climate.pressure))) : ''}
          </div>
@@ -1595,6 +1647,7 @@
            climate.fresh_count > 1 ? `average of ${climate.fresh_count} thermometers` : '',
            zone.temperature_source === 'hub' ? 'the heater\u2019s own reading is shown above' : '',
          ].filter(Boolean).join(' · '))}</p>`;
+    const history = climateHistory(climate.last_24h);
 
     return `
       <section class="card sensor-card climate-card">
@@ -1604,10 +1657,69 @@
         </div>
         <div aria-live="polite">${warning}</div>
         ${readings}
+        ${history}
         ${rule ? `<p class="sensor-rule-line is-${rule.tone}">${esc(rule.text)}</p>` : ''}
         <ul class="sensor-list">${items.map(item => sensorRow(item, admin)).join('')}</ul>
         ${climateRuleSummary(zone)}
+        ${CLIMATE_PLACEMENT_TIP}
       </section>`;
+  }
+
+  /* A thermometer in the wrong place reports the wrong room faithfully. */
+  const CLIMATE_PLACEMENT_TIP = `
+    <details class="climate-tip">
+      <summary>Where to put a room thermometer</summary>
+      <p>About 1.5 m above the floor, on an inside wall. Out of direct sun, and
+      away from heaters, the stove, outside doors and draughts, all of which
+      it would measure instead of the room. In a bathroom, keep it out of the
+      shower's spray but in the room, or damp air will never be seen. After
+      moving one, give it half an hour before trusting the reading.</p>
+    </details>`;
+
+  /* The last 24 hours: the lowest and highest actual reading, and one bar
+     per hour from that hour's lowest to its highest. */
+  function climateHistory(history) {
+    if (!history) return '';
+    const range = (low, high, fmt) => low == null ? null
+      : (fmt(low) === fmt(high) ? fmt(low) : `${fmt(low)} \u2013 ${fmt(high)}`);
+    const temperature = range(history.temperature_min, history.temperature_max,
+      value => `${Nobo.fmtTemp(value)}\u00B0C`);
+    const humidity = range(history.humidity_min, history.humidity_max, fmtHumidity);
+    if (!temperature && !humidity) return '';
+    return `
+      <div class="climate-history">
+        <div class="climate-history-head">
+          <strong>Last 24 hours</strong>
+          <small>${esc([
+            temperature ? `actual ${temperature}` : '',
+            humidity ? `humidity ${humidity}` : '',
+          ].filter(Boolean).join(' · '))}</small>
+        </div>
+        ${climateHistoryChart(history)}
+      </div>`;
+  }
+
+  function climateHistoryChart(history) {
+    const rows = (history.hours || []).filter(row => row.t_min != null && row.t_max != null);
+    if (rows.length < 2) return '';
+    const low = Math.floor(history.temperature_min - 0.5);
+    const high = Math.ceil(history.temperature_max + 0.5);
+    const span = Math.max(high - low, 1);
+    const width = 240, height = 56, slot = width / 24;
+    const y = value => (height - 3) - ((value - low) / span) * (height - 6);
+    const bars = rows.map(row => {
+      const index = Math.round((row.start - history.window_start) / 3600);
+      const top = y(row.t_max);
+      const size = Math.max(y(row.t_min) - top, 2);
+      return `<rect x="${(index * slot + 1).toFixed(1)}" y="${top.toFixed(1)}"
+        width="${(slot - 2).toFixed(1)}" height="${size.toFixed(1)}" rx="1.5"/>`;
+    }).join('');
+    return `
+      <svg class="climate-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
+        role="img" aria-label="Actual temperature each hour over the last 24 hours, between ${low} and ${high} degrees">${bars}</svg>
+      <div class="climate-chart-axis" aria-hidden="true">
+        <span>24 h ago</span><span>${esc(`${low}\u00B0 \u2013 ${high}\u00B0`)}</span><span>now</span>
+      </div>`;
   }
 
   function thresholdOptions(value, from, to, noneLabel) {
@@ -1632,7 +1744,26 @@
       ${!policy.has_equipment && value !== 'nothing' ? 'disabled' : ''}
       >${esc(climateActionLabel(value))}</option>`).join('');
 
-    openSheet(`Temperature rules for ${zone.name}`, `
+    const humidityChoices = [50, 55, 60, 65, 70, 75, 80, 85, 90];
+    if (policy.humidity_max != null && !humidityChoices.includes(Number(policy.humidity_max))) {
+      humidityChoices.push(Number(policy.humidity_max));
+      humidityChoices.sort((a, b) => a - b);
+    }
+    const humidityOptions = `<option value="" ${policy.humidity_max == null ? 'selected' : ''}>No maximum</option>` +
+      humidityChoices.map(value => `<option value="${value}"
+        ${policy.humidity_max != null && Number(policy.humidity_max) === value ? 'selected' : ''}
+        >${esc(fmtHumidity(value))}</option>`).join('');
+    const delayChoices = [0, 900, 1800, 3600, 7200];
+    const savedDelay = Number(policy.humidity_delay_seconds ?? 3600);
+    if (!delayChoices.includes(savedDelay)) {
+      delayChoices.push(savedDelay);
+      delayChoices.sort((a, b) => a - b);
+    }
+    const delayOptions = delayChoices.map(value => `<option value="${value}"
+      ${savedDelay === value ? 'selected' : ''}>${esc(
+        value === 0 ? 'Immediately' : `After ${Nobo.fmtDuration(value)}`)}</option>`).join('');
+
+    openSheet(`Temperature and humidity rules for ${zone.name}`, `
       <p class="zd-sub">Warnings, and optionally a change of heating, when the
       room's thermometer reads outside these limits.</p>
 
@@ -1652,9 +1783,30 @@
         <small class="field-hint" id="cpColdHint"></small>
       </label>
 
+      <label class="field"><span>Maximum humidity</span>
+        <select id="cpHumid">${humidityOptions}</select>
+        <small class="field-hint">Air that stays damp is how mould starts. Warns
+          only; the heating is not changed.</small>
+      </label>
+      <label class="field" id="cpHumidDelayField"><span>Warn when it has stayed above that</span>
+        <select id="cpHumidDelay">${delayOptions}</select>
+        <small class="field-hint">A shower raises a bathroom's humidity for a
+          while. A room that dries out inside this time never warns.</small>
+      </label>
+
+      <label class="switch">
+        <span class="switch-text"><strong>Warn near freezing</strong>
+          <span>Below 5 °C, pipes in walls and floors are at risk. Sent at
+          once, even in quiet hours. Turn it off only for a room that is meant
+          to be this cold, such as an unheated store.</span>
+        </span>
+        <input type="checkbox" id="cpFrost" ${policy.frost_warning === false ? '' : 'checked'}>
+      </label>
+
       <div class="note">The warning starts as soon as a reading crosses the
         limit, and ends once the room is half a degree back inside it, so a
-        reading hovering on the line does not flap. A maximum only ever makes
+        reading hovering on the line does not flap. Damp air ends five points
+        under its maximum, and near freezing at 6 °C. A maximum only ever makes
         the room colder and a minimum only warmer: a room already running
         colder than Eco is not raised to Eco by a maximum. While a door or
         window rule is changing the heating, it has the room.</div>
@@ -1669,14 +1821,18 @@
       const min = root.querySelector('#cpMin');
       const warm = root.querySelector('#cpWarm');
       const cold = root.querySelector('#cpCold');
+      const humid = root.querySelector('#cpHumid');
+      const humidDelay = root.querySelector('#cpHumidDelay');
+      const frost = root.querySelector('#cpFrost');
       const sync = () => {
         root.querySelector('#cpWarmField').hidden = max.value === '';
         root.querySelector('#cpColdField').hidden = min.value === '';
+        root.querySelector('#cpHumidDelayField').hidden = humid.value === '';
         root.querySelector('#cpWarmHint').textContent = climateActionHint(warm.value, true);
         root.querySelector('#cpColdHint').textContent = climateActionHint(cold.value, false);
       };
       sync();
-      [max, min, warm, cold].forEach(control => { control.onchange = sync; });
+      [max, min, warm, cold, humid].forEach(control => { control.onchange = sync; });
 
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       root.querySelector('[data-act="save"]').onclick = async (event) => {
@@ -1697,10 +1853,13 @@
               action_when_too_warm: high == null ? 'nothing' : warm.value,
               temperature_min: low,
               action_when_too_cold: low == null ? 'nothing' : cold.value,
+              humidity_max: humid.value === '' ? null : Number(humid.value),
+              humidity_delay_seconds: Number(humidDelay.value),
+              frost_warning: frost.checked,
             }),
           });
           closeSheet();
-          Nobo.toast('Temperature rules saved');
+          Nobo.toast('Rules saved');
           await refresh(true);
         } catch (e) {
           pressed.disabled = false;
@@ -2394,8 +2553,15 @@
       .map(c => `<span class="np-device">${Nobo.deviceImg(c)}</span>`).join('');
     const more = comps.length > 3 ? `<span class="more">+${comps.length - 3}</span>` : '';
 
+    /* A room with no heater has no set point, so the measured temperature is
+       the headline there — still labelled Actual, so nobody reads it as what
+       the room has been set to. */
+    const actualLeads = monitoring && zone.current_temperature != null;
     let label, setBlock;
-    if (monitoring) {
+    if (actualLeads) {
+      label = 'Actual';
+      setBlock = `<span class="set-value set-value-actual">${Nobo.bigTemp(zone.current_temperature)}</span>`;
+    } else if (monitoring) {
       label = 'Watching';
       setBlock = `<span class="set-mode">${sensorCount} ${sensorCount === 1 ? 'sensor' : 'sensors'}</span>`;
     } else if (empty) {
@@ -2415,12 +2581,21 @@
        has one, whichever of them the temperature itself came from. */
     const humidity = climate && climate.humidity != null
       ? ` \u00B7 ${fmtHumidity(climate.humidity)}` : '';
+    /* "Actual" in words, not just a smaller number: a set point and a
+       measurement side by side are otherwise easy to read the wrong way round. */
     const measuredBy = zone.temperature_source === 'sensor'
-      ? ' title="Measured by the room thermometer"' : '';
+      ? 'Actual temperature, measured by the room thermometer'
+      : 'Actual temperature, measured by the heater';
     const nowBlock = empty
       ? `<span class="set-now">No heater or sensor</span>`
+      : actualLeads
+      ? `<span class="set-now">${esc(sensorCount === 1 ? '1 sensor' : `${sensorCount} sensors`)}${humidity}</span>`
       : zone.current_temperature != null
-      ? `<span class="set-now"${measuredBy}>now ${Nobo.fmtTemp(zone.current_temperature)}&deg;${humidity}</span>`
+      ? `<span class="set-actual" title="${measuredBy}">
+          <span class="set-actual-icon" aria-hidden="true">${Nobo.icon('thermo', '1em')}</span>
+          <span class="set-actual-label">Actual</span>
+          <strong>${Nobo.fmtTemp(zone.current_temperature)}&deg;</strong>${humidity ? `<span class="set-actual-humidity">${humidity}</span>` : ''}
+        </span>`
       : climate
       ? `<span class="set-now" title="The thermometer in this room has not reported for ${Nobo.fmtDuration(climate.stale_after_seconds)}.">No recent reading</span>`
       : monitoring
@@ -2522,8 +2697,9 @@
      the feature is on: the zone carries no sensor fields at all otherwise. */
   function zoneNeedsSensorAttention(zone) {
     if (!zone.sensor_summary) return false;
+    const climate = zone.climate || {};
     return !!zone.sensor_summary.warning_raised
-      || !!(zone.climate && zone.climate.condition);
+      || !!climate.condition || !!climate.humidity_raised || !!climate.frost;
   }
 
   /** What a group heading says about itself.
@@ -2831,19 +3007,34 @@
     const devices = devicesOfZone(zone.zone_id);
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
 
-    const headLabel = remote ? 'Running now' : 'Running';
-    const headValue = remote
-      ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
-      : `<span class="zd-mode">${esc(modeLabel)}</span>`;
-    const measuring = zone.current_temperature == null ? ''
-      : ' \u00B7 measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now';
     const monitoringOnly = !(zone.components || []).length
       && ((zone.sensors || []).length + (zone.climate_sensors || []).length) > 0;
+    const actual = zone.current_temperature;
+    const climate = climateOf(zone);
+    /* What the room is set to and what it measures, side by side and each
+       labelled. One number with "measuring 19°" in small print under it was
+       too easy to read as the other. A room with no heater has nothing to be
+       set to, so its measurement is the headline. */
+    const headLabel = monitoringOnly ? 'Actual' : remote ? 'Set to' : 'Running';
+    const headValue = monitoringOnly
+      ? (actual == null ? '<span class="set-none">No reading</span>' : Nobo.bigTemp(actual))
+      : remote
+      ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
+      : `<span class="zd-mode">${esc(modeLabel)}</span>`;
+    const actualSource = zone.temperature_source === 'sensor' ? 'room thermometer' : 'heater';
+    const actualHumidity = climate && climate.humidity != null
+      ? `${fmtHumidity(climate.humidity)} humidity \u00B7 ` : '';
     const headSub = monitoringOnly
-      ? `Monitoring only \u2014 there is no heater in this zone${measuring}`
+      ? `${actual == null ? '' : esc(actualHumidity + actualSource) + ' \u00B7 '}Monitoring only \u2014 there is no heater in this zone`
       : !remote
       ? 'The temperature in this zone is set by the dial on each heater'
-      : `${esc(modeLabel)}${measuring || ' \u00B7 no temperature sensor in this zone'}`;
+      : `${esc(modeLabel)}${actual == null ? ' \u00B7 no temperature sensor in this zone' : ''}`;
+    const actualBlock = monitoringOnly || actual == null ? '' : `
+          <div class="zd-actual" title="Actual temperature, measured by the ${esc(actualSource)}">
+            <span class="set-label">Actual</span>
+            <div class="zd-actual-value">${Nobo.bigTemp(actual)}</div>
+            <p class="zd-sub">${esc(actualHumidity + actualSource)}</p>
+          </div>`;
 
     /* Both set points, always adjustable, whichever mode the zone is in.
      *
@@ -2867,12 +3058,12 @@
 
     root.innerHTML = `
       <section class="zd-head">
-        <span class="set-label">${esc(headLabel)}</span>
         <div class="zd-set">
           <div>
+            <span class="set-label">${esc(headLabel)}</span>
             <div class="zd-big">${headValue}</div>
             <p class="zd-sub">${headSub}</p>
-          </div>
+          </div>${actualBlock}
         </div>
         ${remote ? `
         <div class="zd-temps">

@@ -580,6 +580,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* Too cold is the same urgency as too warm, but drawn in the cold colour so
    the two are told apart before the words are read. */
 .zclimate-too_cold .sensor-visual { color: var(--pine); background: var(--pine-wash); }
+.zsensor-warning.zclimate-frost .sensor-visual { color: var(--frost); background: var(--frost-wash); }
+.zsensor-warning.zclimate-humid .sensor-visual { color: var(--frost); background: var(--frost-wash); }
 
 /* A room with something left open is worth spotting from across the list. */
 .zone-sensor-warning {
@@ -638,6 +640,24 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .climate-fact span { font-size: .76rem; color: var(--ink-soft); }
 .climate-fact strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .climate-updated { margin: .1rem 0 .8rem; font-size: .8rem; }
+
+/* The last 24 hours: a line of words and one bar per hour, lowest to highest. */
+.climate-history {
+  margin: 0 0 .8rem; padding: .6rem .75rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.climate-history-head { display: flex; flex-wrap: wrap; gap: .2rem .6rem; align-items: baseline; }
+.climate-history-head strong { font-size: .85rem; }
+.climate-history-head small { color: var(--ink-soft); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.climate-chart { display: block; width: 100%; height: 56px; margin-top: .5rem; fill: var(--frost); }
+.climate-chart-axis {
+  display: flex; justify-content: space-between;
+  font-size: .7rem; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+.climate-tip { margin-top: .8rem; font-size: .85rem; color: var(--ink-soft); }
+.climate-tip summary { cursor: pointer; color: var(--pine); font-weight: 600; }
+.climate-tip p { margin: .4rem 0 0; }
 .sensor-reading {
   color: var(--ink); background: var(--paper);
   font-variant-numeric: tabular-nums;
@@ -757,6 +777,23 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   text-transform: uppercase; color: var(--ink-faint);
 }
 .set-now { display: block; margin-top: .3rem; font-size: .78rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+/* The measured temperature, labelled "Actual" in words. Drawn in the cold
+   blue of a thermometer rather than the warm tone of a set point, and large
+   enough to read, so the two numbers are not mistaken for each other. */
+.set-actual {
+  display: inline-flex; align-items: center; gap: .3rem;
+  margin-top: .45rem; padding: .22rem .55rem .22rem .4rem;
+  border-radius: 999px;
+  color: var(--frost); background: var(--frost-wash);
+  font-size: .82rem; line-height: 1.2; font-variant-numeric: tabular-nums;
+}
+.set-actual-icon { display: inline-flex; }
+.set-actual-label {
+  font-size: .64rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+}
+.set-actual strong { font-size: 1.05rem; font-weight: 700; color: var(--ink); }
+.set-actual-humidity { color: var(--ink-soft); }
+.set-value-actual { color: var(--frost); }
 .set-none { font-size: .95rem; font-weight: 600; color: var(--ink-faint); }
 /* A room whose heaters are dial-only leads with what it is running rather
    than with a set temperature nothing can act on. */
@@ -909,6 +946,17 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .zd-set { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .zd-big { font-size: clamp(3rem, 15vw, 4.2rem); font-weight: 660; letter-spacing: -.04em; line-height: .95; font-variant-numeric: tabular-nums; }
 .zd-sub { margin: .35rem 0 0; color: var(--ink-soft); font-size: .95rem; }
+/* Beside the set point, never under it: what the room measures. */
+.zd-actual {
+  padding: .6rem .9rem; border-radius: var(--radius-sm);
+  background: var(--frost-wash); border: 1px solid color-mix(in srgb, var(--frost) 30%, var(--rule));
+}
+.zd-actual .set-label { color: var(--frost); }
+.zd-actual-value {
+  font-size: clamp(2rem, 9vw, 2.6rem); font-weight: 650; letter-spacing: -.03em;
+  line-height: 1; color: var(--frost); font-variant-numeric: tabular-nums;
+}
+.zd-actual .zd-sub { font-size: .82rem; }
 .zd-steps { display: flex; gap: .5rem; }
 .zd-steps .step-btn { width: 56px; height: 48px; font-size: 1.4rem; }
 

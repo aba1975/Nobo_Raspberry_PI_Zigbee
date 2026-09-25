@@ -84,7 +84,10 @@ exist needs real sockets.
   exception is a **Zigbee room thermometer** (sensor kind `climate`, see
   `docs/SENSORS.md`), which fills in `current_temperature` with
   `temperature_source = "sensor"` only where the hub has nothing. Never
-  substitute anything else. No real thermometer has joined yet.
+  substitute anything else. No real thermometer has joined yet. The UI labels
+  that reading **Actual**, always, beside the set point — never an unlabelled
+  second number. Humidity, near-freezing (fixed at 5 °C, critical, bypasses
+  quiet hours) and a 24-hour history ride on the same thermometer.
 - A **dial on a thermostat rewrites the hub's set point outright** — no override
   is created, and the old value is not recoverable from the hub. That is why
   `app/setpoint_guard.py` exists.
@@ -111,7 +114,8 @@ hub reached the hardware; everything else proves a message reached the hub.
 - `app/sensor_*.py` — the optional Zigbee sensors: the provider contract,
   simulator, Zigbee2MQTT provider, persistence and the automation engine.
   Contacts and room thermometers (`climate`) share one registry and one
-  per-zone ownership ledger; `docs/SENSORS.md` is the design
+  per-zone ownership ledger; `docs/SENSORS.md` is the design.
+  `app/climate_history.py` keeps each room's hourly lowest/highest for 24 h
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

@@ -12,12 +12,13 @@ from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
 SENSOR_AUTOMATION_STATE_FILE = DATA_DIR / "sensor_automation_state.json"
 ZIGBEE_METADATA_FILE = DATA_DIR / "zigbee_sensor_metadata.json"
+CLIMATE_HISTORY_FILE = DATA_DIR / "climate_history.json"
 
 # ``simulated`` exists only in demo mode; ``zigbee2mqtt`` talks to real
 # hardware through a Zigbee2MQTT bridge.  See docs/SENSORS.md.
@@ -56,6 +57,10 @@ TOO_COLD_ACTIONS = frozenset({
 # ``sensor_automation`` or one room could be too warm and too cold at once.
 THRESHOLD_LIMITS = (0.0, 40.0)
 THRESHOLD_MIN_GAP = 1.0
+
+# A humidity ceiling is for mould and damp, so anything under 40 % would warn
+# about ordinary indoor air. It is a percentage, so it cannot pass 100.
+HUMIDITY_LIMITS = (40.0, 100.0)
 
 
 class HoldReason(str, Enum):
@@ -108,6 +113,22 @@ def check_climate_policy(
         )
 
 
+def check_humidity_policy(humidity_max: Optional[float], humidity_delay_seconds: int) -> None:
+    """Raise ValueError unless this humidity rule makes sense."""
+    if humidity_max is not None:
+        if isinstance(humidity_max, bool) or not isinstance(humidity_max, (int, float)):
+            raise ValueError("The maximum humidity must be a number")
+        low, high = HUMIDITY_LIMITS
+        if not low <= humidity_max <= high:
+            raise ValueError(f"The maximum humidity must be from {low:g} to {high:g} %")
+    if (
+        isinstance(humidity_delay_seconds, bool)
+        or not isinstance(humidity_delay_seconds, int)
+        or not 0 <= humidity_delay_seconds <= 86400
+    ):
+        raise ValueError("The humidity delay must be from 0 to 86400 seconds")
+
+
 @dataclass(frozen=True)
 class ZoneSensorPolicy:
     """What one zone should do about a contact of its own that stays open.
@@ -127,11 +148,19 @@ class ZoneSensorPolicy:
     action_when_too_warm: ActionWhenOpen = ActionWhenOpen.NOTHING
     temperature_min: Optional[float] = None
     action_when_too_cold: ActionWhenOpen = ActionWhenOpen.NOTHING
+    # Warn-only. Humidity in a bathroom spikes with every shower, so the
+    # warning is for air that *stays* damp: above the maximum for the whole
+    # delay. None switches it off.
+    humidity_max: Optional[float] = None
+    humidity_delay_seconds: int = 3600
+    # Near-freezing warning, on unless a room is meant to be cold — a shed or
+    # a porch with a thermometer in it. The threshold itself is fixed.
+    frost_warning: bool = True
 
     def __post_init__(self):
         for name in ("action_when_open", "action_when_too_warm", "action_when_too_cold"):
             object.__setattr__(self, name, ActionWhenOpen(getattr(self, name)))
-        for name in ("temperature_max", "temperature_min"):
+        for name in ("temperature_max", "temperature_min", "humidity_max"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, bool):
                 object.__setattr__(self, name, round(float(value), 1))
@@ -139,6 +168,9 @@ class ZoneSensorPolicy:
             self.temperature_max, self.action_when_too_warm,
             self.temperature_min, self.action_when_too_cold,
         )
+        check_humidity_policy(self.humidity_max, self.humidity_delay_seconds)
+        if type(self.frost_warning) is not bool:
+            raise ValueError("frost_warning must be true or false")
 
     @property
     def has_climate_rule(self) -> bool:
@@ -176,6 +208,11 @@ class AutomationZoneState:
     # restart must not announce a condition that was already announced.
     climate_condition: Optional[ClimateCondition] = None
     climate_since: Optional[float] = None
+    # Humidity: since when it has been above the maximum (the delay counts
+    # from here) and whether the warning is up. Frost: whether it is up.
+    humidity_since: Optional[float] = None
+    humidity_raised: bool = False
+    frost_raised: bool = False
 
     def __post_init__(self):
         if self.owned_action is not None:
@@ -247,6 +284,13 @@ _POLICY_FIELDS = {
         "temperature_max", "action_when_too_warm",
         "temperature_min", "action_when_too_cold",
     }),
+    6: frozenset({
+        "warning_delay_seconds", "action_when_open",
+        "action_delay_seconds", "override_all_modes",
+        "temperature_max", "action_when_too_warm",
+        "temperature_min", "action_when_too_cold",
+        "humidity_max", "humidity_delay_seconds", "frost_warning",
+    }),
 }
 
 # The same, for what the automation had in flight when it was last saved. The
@@ -264,10 +308,15 @@ _AUTOMATION_FIELDS = {
         "open_started_at", "warning_raised", "owned_action",
         "owned_reason", "climate_condition", "climate_since",
     }),
+    6: frozenset({
+        "open_started_at", "warning_raised", "owned_action",
+        "owned_reason", "climate_condition", "climate_since",
+        "humidity_since", "humidity_raised", "frost_raised",
+    }),
 }
 
 # Every version this build can read. Older files migrate on the next save.
-_READABLE = (1, 2, 3, 4, SCHEMA_VERSION)
+_READABLE = (1, 2, 3, 4, 5, SCHEMA_VERSION)
 
 
 def _document(payload: Any, versions: tuple[int, ...] = (SCHEMA_VERSION,)) -> dict:
@@ -339,6 +388,16 @@ def _parse_settings(payload: Any) -> SensorSettings:
                 "temperature_min": _threshold(item["temperature_min"], "temperature_min"),
                 "action_when_too_cold": _action(item["action_when_too_cold"]),
             }
+        if version >= 6:
+            # Written before humidity and frost existed, a room keeps the
+            # defaults: no humidity rule, and the frost warning on.
+            climate.update(
+                humidity_max=_threshold(item["humidity_max"], "humidity_max"),
+                humidity_delay_seconds=_delay(
+                    item["humidity_delay_seconds"], "humidity delay"
+                ),
+                frost_warning=_require_bool(item["frost_warning"], "frost_warning"),
+            )
         try:
             zones[zone_id] = _policy(item, version, action, action_delay, climate)
         except ValueError as exc:
@@ -500,7 +559,7 @@ def save_zigbee_metadata(metadata: Mapping[str, Any], path: Optional[Path] = Non
 
 def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
     # v4 is the same shape less the climate readings, which are filled below.
-    doc = _document(payload, (4, SCHEMA_VERSION))
+    doc = _document(payload, (4, 5, SCHEMA_VERSION))
     result: Dict[str, dict] = {}
     for address, raw in _require_dict(doc.get("sensors"), "sensors").items():
         if not isinstance(address, str) or not address:
@@ -624,6 +683,15 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             since = row["climate_since"]
             if since is not None and (type(since) not in (int, float) or since < 0):
                 raise InvalidSensorData("climate_since must be a non-negative number or null")
+        humidity_since, humidity_raised, frost_raised = None, False, False
+        if version >= 6:
+            humidity_since = row["humidity_since"]
+            if humidity_since is not None and (
+                type(humidity_since) not in (int, float) or humidity_since < 0
+            ):
+                raise InvalidSensorData("humidity_since must be a non-negative number or null")
+            humidity_raised = _require_bool(row["humidity_raised"], "humidity_raised")
+            frost_raised = _require_bool(row["frost_raised"], "frost_raised")
         result[zone_id] = AutomationZoneState(
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
@@ -631,6 +699,9 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             owned_reason=reason if owned_action is not None else HoldReason.OPEN,
             climate_condition=condition,
             climate_since=float(since) if since is not None else None,
+            humidity_since=float(humidity_since) if humidity_since is not None else None,
+            humidity_raised=humidity_raised,
+            frost_raised=frost_raised,
         )
     return result
 
@@ -648,3 +719,55 @@ def save_automation_state(
     }
     _parse_automation(payload)
     _atomic_write(path or SENSOR_AUTOMATION_STATE_FILE, payload)
+
+
+# ---------------------------------------------------------------------------
+# Climate history: hourly lowest and highest readings per zone
+# ---------------------------------------------------------------------------
+# Versioned on its own. It is a cache of what the rooms read, not a setting,
+# so a file this build cannot read is set aside and history starts again
+# rather than blocking anything else.
+
+CLIMATE_HISTORY_VERSION = 1
+_BUCKET_FIELDS = frozenset({"start", "t_min", "t_max", "h_min", "h_max"})
+
+
+def _parse_climate_history(payload: Any) -> Dict[str, list[dict]]:
+    doc = _document(payload, (CLIMATE_HISTORY_VERSION,))
+    result: Dict[str, list[dict]] = {}
+    for zone_id, rows in _require_dict(doc.get("zones"), "zones").items():
+        if not isinstance(zone_id, str) or not zone_id:
+            raise InvalidSensorData("zone ids must be non-empty strings")
+        if type(rows) is not list:
+            raise InvalidSensorData(f"zones.{zone_id} must be an array")
+        buckets = []
+        for index, raw in enumerate(rows):
+            row = _exact_fields(raw, _BUCKET_FIELDS, f"zones.{zone_id}[{index}]")
+            if type(row["start"]) is not int or row["start"] < 0 or row["start"] % 3600:
+                raise InvalidSensorData("start must be a whole hour in epoch seconds")
+            for key, name in (("t_min", "temperature"), ("t_max", "temperature"),
+                              ("h_min", "humidity"), ("h_max", "humidity")):
+                row[key] = _climate_reading(row[key], name, f"zones.{zone_id}[{index}].{key}")
+            for low, high in (("t_min", "t_max"), ("h_min", "h_max")):
+                if (row[low] is None) != (row[high] is None):
+                    raise InvalidSensorData(f"{low} and {high} must both be set or both null")
+                if row[low] is not None and row[low] > row[high]:
+                    raise InvalidSensorData(f"{low} must not be above {high}")
+            buckets.append(dict(row))
+        result[zone_id] = buckets
+    return result
+
+
+def load_climate_history(path: Optional[Path] = None) -> Dict[str, list[dict]]:
+    return _load(path or CLIMATE_HISTORY_FILE, {}, _parse_climate_history)
+
+
+def save_climate_history(
+    zones: Mapping[str, list[dict]], path: Optional[Path] = None
+) -> None:
+    payload = {
+        "schema_version": CLIMATE_HISTORY_VERSION,
+        "zones": {str(zone_id): [dict(row) for row in rows] for zone_id, rows in zones.items()},
+    }
+    _parse_climate_history(payload)
+    _atomic_write(path or CLIMATE_HISTORY_FILE, payload)

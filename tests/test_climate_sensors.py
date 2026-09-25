@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import sensor_persistence
+
 from sensor_automation import (
     CLIMATE_HYSTERESIS,
     CLIMATE_STALE_SECONDS,
@@ -388,7 +390,8 @@ async def test_a_room_with_no_heater_still_warns():
     result = await engine.evaluate(
         [thermometer(temperature=3)], rules(low=5, cold="comfort"), room(equipment=False),
     )
-    assert [e.condition for e in result.events] == ["too_cold"]
+    # 3 °C is under the fixed frost threshold as well as the room's minimum.
+    assert [e.condition for e in result.events] == ["too_cold", "frost"]
     assert commands.calls == []
     assert result.zones["1"].climate.block_reason is BlockReason.NO_EQUIPMENT
 
@@ -521,7 +524,7 @@ def test_limits_round_trip(tmp_path):
         temperature_min=8, action_when_too_cold=ActionWhenOpen.COMFORT,
     )
     save_sensor_settings(SensorSettings(True, "simulated", {"1": policy}), path)
-    assert json.loads(path.read_text())["schema_version"] == 5
+    assert json.loads(path.read_text())["schema_version"] == sensor_persistence.SCHEMA_VERSION
     assert load_sensor_settings(path).zones["1"] == policy
 
 

@@ -150,6 +150,9 @@ def test_only_honest_alerts_remain():
       waited for a hub thermometer that almost never exists. These read a
       Zigbee room thermometer, refuse a reading more than three hours old,
       and say in their help text that they measure where the sensor hangs.
+    - ``room_near_freezing`` / ``humidity_high`` — the same thermometer, read
+      against a fixed frost line and a room's own humidity maximum. Humidity
+      waits out a delay so a shower is not an alarm.
     """
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
@@ -157,10 +160,11 @@ def test_only_honest_alerts_remain():
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
         "contact_open_while_away",
         "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
+        "room_near_freezing", "humidity_high",
     }
 
 
-def test_only_the_two_alerts_that_cannot_wait_ignore_quiet_hours():
+def test_only_the_alerts_that_cannot_wait_ignore_quiet_hours():
     """Quiet hours exist so routine news waits until morning, and the exception
     has to stay an exception: if everything were urgent, nothing would be.
 
@@ -168,6 +172,9 @@ def test_only_the_two_alerts_that_cannot_wait_ignore_quiet_hours():
     Losing the hub means nothing can be switched by anybody until it returns.
     Open-while-away means you are leaving now, and by morning you are hours
     away with the anti-frost temperature holding an open room.
+
+    A room near freezing is the third. A pipe freezes overnight, so an alert
+    held until morning arrives after the damage it exists to prevent.
     """
     import re
 
@@ -179,7 +186,7 @@ def test_only_the_two_alerts_that_cannot_wait_ignore_quiet_hours():
         head = block[:block.index(")\n")] if ")\n" in block else block[:2000]
         if 'severity="critical"' in head:
             urgent.add(re.search(r'"([a-z_]+)"', head).group(1))
-    assert urgent == {"hub_offline", "contact_open_while_away"}
+    assert urgent == {"hub_offline", "contact_open_while_away", "room_near_freezing"}
 
 
 def test_every_alert_states_its_own_limit():

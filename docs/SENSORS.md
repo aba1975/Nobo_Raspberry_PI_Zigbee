@@ -832,6 +832,14 @@ reading fills in only where the hub has nothing, which on this installation is
 every room, and `temperature_source` says which it was (`hub`, `sensor` or
 `null`) so the interface never has to guess.
 
+**The measurement is always labelled "Actual".** A zone card leads with what
+the room is *set to*; the measured temperature sits under it in its own blue
+pill reading "Actual 21.4° · 45 %", and the zone page shows "Set to" and
+"Actual" side by side. An unlabelled second number next to a set point is easy
+to read the wrong way round — the room looks warm when it is only *meant* to
+be. A room with no heater has no set point, so its actual temperature is the
+headline there, still labelled Actual.
+
 ### The temperature rule
 
 Each zone may set a **maximum** and a **minimum**, each with an action:
@@ -868,17 +876,88 @@ condition **quietly**: the hold is released, but no "back in range" email is
 sent, because nothing has shown that the room recovered. Demo thermometers
 beside a real hub warn but never act, exactly as demo contacts do.
 
+### Damp air
+
+Each zone may also set a **maximum humidity**, 40–100 % (the sheet offers
+50–90 %), and a **delay**, default one hour. It warns once the humidity has
+stayed above the maximum for the whole delay; the count restarts whenever a
+reading is back at or under it, so a bathroom that dries out after each shower
+never warns. It ends, with a recovery, once a reading is **5 points under**
+the maximum (`HUMIDITY_HYSTERESIS`). It is **warn-only**: there is no heating
+answer to a shower, and holding a bathroom on Comfort to dry it would be a
+guess about the ventilation this software cannot see.
+
+### Near freezing
+
+Every zone with a thermometer warns when a fresh reading is **below 5 °C**
+(`FROST_TEMPERATURE`), and stops at **6 °C**. This is independent of the
+zone's own minimum, which is usually a comfort floor or not set at all. Pipes
+in walls and floors freeze before the air does, and Nobø's Away holds 7 °C, so
+a room this cold is not merely on Away: something has lost power, been set to
+Off, or been left open. It is warn-only and on by default; a room that is
+meant to be this cold, such as an unheated store, can switch it off
+(`frost_warning: false`). When it and "too cold" are both raised, the card
+shows the frost strip alone.
+
+### The last 24 hours
+
+`app/climate_history.py` keeps, for each zone, one bucket per clock hour
+holding the lowest and highest actual temperature and humidity seen in it —
+24 rows per room at most, however often a sensor reports. The value recorded
+is the zone reading the rules used, at the time of its newest report. It is
+saved to `data/climate_history.json` only when a bucket changes, and a file
+this build cannot read is set aside rather than blocking anything: it is a
+cache of what the rooms read, not a setting. The zone payload carries it as
+`climate.last_24h`, and the zone page shows the range in words and one bar per
+hour.
+
+### Where to put one
+
+About 1.5 m above the floor, on an inside wall, out of direct sun and away
+from heaters, the stove, outside doors and draughts — each of which it would
+measure instead of the room. In a bathroom, out of the shower's spray but in
+the room, or damp air will never be seen. After moving one, give it half an
+hour. The zone page carries the same advice under the readings.
+
 ### Alerts
 
-Three alert types, all off by default: `temperature_too_high`,
-`temperature_too_low` and `temperature_back_in_range`. They are level-triggered
-conditions like the left-open warning, restored from the automation state at
-start-up, so a restart does not re-announce a room that was already too warm.
-A thermometer that goes quiet is covered by the existing `sensor_quiet` alert.
+Five alert types, all off by default:
+
+| Type | Severity | Raised when |
+| --- | --- | --- |
+| `temperature_too_high` | warning | above the zone's maximum |
+| `temperature_too_low` | warning | below the zone's minimum |
+| `room_near_freezing` | **critical** | below 5 °C |
+| `humidity_high` | warning | above the humidity maximum for the whole delay |
+| `temperature_back_in_range` | info | any of the four has recovered |
+
+They are level-triggered conditions like the left-open warning, restored from
+the automation state at start-up, so a restart does not re-announce a room that
+was already too warm. **`room_near_freezing` ignores quiet hours** — it joins
+`hub_offline` and `contact_open_while_away` as the only alerts that do,
+because a pipe freezes overnight and an alert held until morning arrives after
+the damage. A thermometer that goes quiet is covered by the existing
+`sensor_quiet` alert; a reading that goes stale ends any of these conditions
+quietly, with no "back in range", because nothing has shown the room is fine.
+
+### Wall display
+
+`GET /api/display` is a compact, read-only summary for a wall display such as
+an M5Stack PaperColor e-ink panel: site name, hub connection, global override,
+a headline `status` (`ok`, `open`, `warning` or `unknown`), the open contacts,
+unavailable sensors, and per room its mode, set temperature, **actual
+temperature**, its source, humidity and warnings (`left_open`, `too_warm`,
+`too_cold`, `humid`, `frost`). Set point and measurement are separate fields,
+so a display cannot run them together. It is behind the same session as the
+rest of the API; a display that cannot hold a session belongs behind
+`NOBO_ALLOW_ANON_API` on a trusted network. With sensors switched off it is
+the heating alone. **Only the endpoint exists** — no display firmware is in
+this repository, and none has been run against it.
 
 ### In the demo
 
 A simulated thermometer starts at 21 °C, 45 % and 1013 hPa, and its readings,
-availability and battery are set by hand in its edit sheet. It "reports" every
+availability and battery are set by hand in its edit sheet — so damp air and
+near freezing can be tried by setting 85 % or 3 °C. It "reports" every
 50 minutes when nothing changes, as a real one does, so leaving the demo alone
 does not teach it that thermometers stop working after three hours.

@@ -36,11 +36,15 @@ import notifications
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
+from climate_history import ClimateHistory
 from sensor_automation import (
     AutomationResult as SensorAutomationResult,
     CLIMATE_HYSTERESIS,
     CLIMATE_STALE_SECONDS,
     ConditionEventKind as SensorConditionEventKind,
+    FROST_HYSTERESIS,
+    FROST_TEMPERATURE,
+    HUMIDITY_HYSTERESIS,
     HeatingZone,
     SensorAutomation,
 )
@@ -449,6 +453,11 @@ sensor_automation = SensorAutomation(
     states=sensor_persistence.load_automation_state(),
     save=sensor_persistence.save_automation_state,
     commands=SensorHeatingCommands(),
+)
+
+climate_history = ClimateHistory(
+    zones=sensor_persistence.load_climate_history(),
+    save=sensor_persistence.save_climate_history,
 )
 
 
@@ -1143,11 +1152,15 @@ class SensorZonePolicyUpdate(BaseModel):
     action_when_too_warm: ActionWhenOpen = ActionWhenOpen.NOTHING
     temperature_min: Optional[float] = Field(default=None, ge=0, le=40)
     action_when_too_cold: ActionWhenOpen = ActionWhenOpen.NOTHING
+    humidity_max: Optional[float] = Field(default=None, ge=40, le=100)
+    humidity_delay_seconds: int = Field(default=3600, ge=0, le=86400)
+    frost_warning: bool = True
 
 
 CLIMATE_POLICY_FIELDS = (
     "temperature_max", "action_when_too_warm",
     "temperature_min", "action_when_too_cold",
+    "humidity_max", "humidity_delay_seconds", "frost_warning",
 )
 
 
@@ -2136,12 +2149,13 @@ async def start_sensor_service() -> None:
         notifier.restore_condition(
             f"contact-left-open:{zone_id}", state.warning_raised
         )
+        raised = {
+            state.climate_condition.value if state.climate_condition is not None else None,
+            "humid" if state.humidity_raised else None,
+            "frost" if state.frost_raised else None,
+        }
         for condition, key in CLIMATE_ALERT_KEYS.items():
-            notifier.restore_condition(
-                f"{key}:{zone_id}",
-                state.climate_condition is not None
-                and state.climate_condition.value == condition,
-            )
+            notifier.restore_condition(f"{key}:{zone_id}", condition in raised)
     sensor_automation.reconcile_owned(_sensor_heating_state())
     await evaluate_sensor_automation()
 
@@ -2484,13 +2498,106 @@ def _evaluate_sensor_alerts(
     return min(future) if future else None
 
 
-# Alert types and condition keys for rooms outside their temperature rule.
-CLIMATE_ALERT_TYPES = {"too_warm": "temperature_too_high", "too_cold": "temperature_too_low"}
-CLIMATE_ALERT_KEYS = {"too_warm": "temperature-high", "too_cold": "temperature-low"}
+# Alert types and condition keys for rooms outside their climate rules.
+CLIMATE_ALERT_TYPES = {
+    "too_warm": "temperature_too_high", "too_cold": "temperature_too_low",
+    "humid": "humidity_high", "frost": "room_near_freezing",
+}
+CLIMATE_ALERT_KEYS = {
+    "too_warm": "temperature-high", "too_cold": "temperature-low",
+    "humid": "humidity-high", "frost": "near-freezing",
+}
+
+
+def _raised_climate_conditions(aggregate) -> set:
+    """Which climate conditions a zone has up, by ConditionEvent name."""
+    climate = aggregate.climate if aggregate is not None else None
+    if climate is None:
+        return set()
+    raised = set()
+    if climate.condition is not None:
+        raised.add(climate.condition.value)
+    if climate.humidity_raised:
+        raised.add("humid")
+    if climate.frost_raised:
+        raised.add("frost")
+    return raised
+
+
+def fmt_duration_words(seconds: int) -> str:
+    """"1 hour", "90 minutes", or "" for no time at all, for alert text."""
+    if seconds <= 0:
+        return ""
+    if seconds % 3600 == 0:
+        hours = seconds // 3600
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    minutes = max(1, round(seconds / 60))
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
+def _humidity_event_alert(event, name: str, result: SensorAutomationResult) -> None:
+    aggregate = result.zones.get(event.zone_id)
+    reading = aggregate.climate.reading.humidity if aggregate and aggregate.climate else None
+    policy = _sensor_policy_for(event.zone_id)
+    now_text = f"{reading:.0f} %" if reading is not None else "unknown"
+    limit_text = f"{policy.humidity_max:g} %" if policy.humidity_max is not None else "not set"
+    held = fmt_duration_words(policy.humidity_delay_seconds)
+    notifier.set_condition(
+        "humidity_high",
+        f"{CLIMATE_ALERT_KEYS['humid']}:{event.zone_id}",
+        event.kind is SensorConditionEventKind.WARNING,
+        subject=f"{name} has stayed damp: {now_text} humidity",
+        body=(
+            f"The room thermometer in {name} has read above {limit_text} humidity "
+            f"{'for ' + held if held else 'and still does'}, and now reads {now_text}.\n\n"
+            f"Air that stays this damp is how mould starts. Airing the room, or "
+            f"running its fan for longer after a shower, is usually enough. The "
+            f"heating has been left as it is."
+        ),
+        severity="warning",
+        recovery_subject=f"{name} is drier again",
+        recovery_body=f"The room thermometer in {name} now reads {now_text} humidity.",
+        recovery_event_type="temperature_back_in_range",
+        highlight=[name],
+        facts=(("Room", name), ("Humidity", now_text), ("Maximum", limit_text)),
+    )
+
+
+def _frost_event_alert(event, name: str, result: SensorAutomationResult) -> None:
+    aggregate = result.zones.get(event.zone_id)
+    reading = aggregate.climate.reading.temperature if aggregate and aggregate.climate else None
+    now_text = f"{reading:.1f} °C" if reading is not None else "unknown"
+    notifier.set_condition(
+        "room_near_freezing",
+        f"{CLIMATE_ALERT_KEYS['frost']}:{event.zone_id}",
+        event.kind is SensorConditionEventKind.WARNING,
+        subject=f"{name} is close to freezing: {now_text}",
+        body=(
+            f"The room thermometer in {name} reads {now_text}, below "
+            f"{FROST_TEMPERATURE:g} °C.\n\n"
+            f"Pipes in the walls and under the floor freeze before the air does. "
+            f"Check that the heaters in {name} have power and that the room is "
+            f"not on Off, and that a door or window has not been left open. "
+            f"Nobø's Away holds 7 °C, so a room this cold is not simply on Away."
+        ),
+        severity="critical",
+        recovery_subject=f"{name} is above {FROST_TEMPERATURE + FROST_HYSTERESIS:g} °C again",
+        recovery_body=f"The room thermometer in {name} now reads {now_text}.",
+        recovery_event_type="temperature_back_in_range",
+        highlight=[name],
+        facts=(("Room", name), ("Reading", now_text),
+               ("Warns below", f"{FROST_TEMPERATURE:g} °C")),
+    )
 
 
 def _climate_event_alert(event, name: str, result: SensorAutomationResult) -> None:
-    """Report a room crossing, or coming back inside, its temperature rule."""
+    """Report a room crossing, or coming back inside, one of its climate rules."""
+    if event.condition == "humid":
+        _humidity_event_alert(event, name, result)
+        return
+    if event.condition == "frost":
+        _frost_event_alert(event, name, result)
+        return
     aggregate = result.zones.get(event.zone_id)
     climate = aggregate.climate if aggregate is not None else None
     reading = climate.reading.temperature if climate is not None else None
@@ -2528,6 +2635,17 @@ def _climate_event_alert(event, name: str, result: SensorAutomationResult) -> No
         facts=(("Room", name), ("Reading", now_text),
                ("Maximum" if warm else "Minimum", limit_text)),
     )
+
+
+def _record_climate_history(result: SensorAutomationResult) -> None:
+    """Fold each room's current reading into its 24-hour history."""
+    readings = {}
+    for zone_id, aggregate in result.zones.items():
+        reading = aggregate.climate.reading if aggregate.climate else None
+        if reading is None or reading.newest_at is None:
+            continue
+        readings[zone_id] = (reading.newest_at, reading.temperature, reading.humidity)
+    climate_history.record(readings, time.time())
 
 
 async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
@@ -2586,10 +2704,12 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
     # sensor went quiet, or the threshold was switched off — is cleared here,
     # silently. Nothing is sent for it: neither is news that the room is fine.
     for zone_id, aggregate in result.zones.items():
-        condition = aggregate.climate.condition if aggregate.climate else None
+        raised = _raised_climate_conditions(aggregate)
         for value, key in CLIMATE_ALERT_KEYS.items():
-            if condition is None or condition.value != value:
+            if value not in raised:
                 notifier.set_condition(CLIMATE_ALERT_TYPES[value], f"{key}:{zone_id}", False)
+
+    _record_climate_history(result)
 
     # Time-based sensor alerts, and the earliest moment one of them could
     # change. Kept here rather than inside the automation engine because none
@@ -2908,6 +3028,15 @@ def _zone_climate_summary(
             if climate is not None and climate.owned_action is not None else None
         ),
         "action_available": bool(zone.get("components")),
+        "humidity_max": policy.humidity_max,
+        "humidity_delay_seconds": policy.humidity_delay_seconds,
+        "humidity_hysteresis": HUMIDITY_HYSTERESIS,
+        "humidity_raised": bool(climate and climate.humidity_raised),
+        "humidity_above_since": stamp(climate.humidity_since if climate is not None else None),
+        "frost_warning": policy.frost_warning,
+        "frost": bool(climate and climate.frost_raised),
+        "frost_temperature": FROST_TEMPERATURE,
+        "last_24h": climate_history.summary(str(zone["zone_id"]), time.time()),
     }
 
 
@@ -3267,6 +3396,9 @@ def _sensor_settings_response() -> Dict[str, Any]:
             "action_when_too_warm": policy.action_when_too_warm.value,
             "temperature_min": policy.temperature_min,
             "action_when_too_cold": policy.action_when_too_cold.value,
+            "humidity_max": policy.humidity_max,
+            "humidity_delay_seconds": policy.humidity_delay_seconds,
+            "frost_warning": policy.frost_warning,
         }
     return {
         "enabled": sensor_settings.enabled,
@@ -3664,6 +3796,97 @@ async def get_status():
     }
 
 
+def _display_payload() -> Dict[str, Any]:
+    """Everything a wall display needs, flattened for a small device to parse.
+
+    Read-only and derived from the same zone data the interfaces draw, so a
+    display can never show a state the app does not. Kept shallow and short:
+    an e-ink panel on a microcontroller has kilobytes to spare, not megabytes.
+    """
+    with connection_lock:
+        connected = hub_connected
+    enabled = sensor_settings.enabled
+    rooms: List[Dict[str, Any]] = []
+    open_contacts: List[Dict[str, Any]] = []
+    unavailable: List[Dict[str, Any]] = []
+    left_open = 0
+    climate_warnings = 0
+    for zone in get_zones_data():
+        climate = zone.get("climate") or {}
+        summary = zone.get("sensor_summary") or {}
+        warnings: List[str] = []
+        if enabled:
+            if summary.get("warning_raised"):
+                warnings.append("left_open")
+                left_open += 1
+            if climate.get("condition"):
+                warnings.append(climate["condition"])
+            if climate.get("humidity_raised"):
+                warnings.append("humid")
+            if climate.get("frost"):
+                warnings.append("frost")
+            climate_warnings += len([item for item in warnings if item != "left_open"])
+            for sensor in zone.get("sensors") or []:
+                if sensor["available"] and sensor["state"] == "open":
+                    open_contacts.append({
+                        "zone": zone["name"], "sensor": sensor["name"],
+                        "kind": sensor["kind"], "since": sensor["changed_at"],
+                    })
+            for sensor in (zone.get("sensors") or []) + (zone.get("climate_sensors") or []):
+                if not sensor["available"]:
+                    unavailable.append({"zone": zone["name"], "sensor": sensor["name"]})
+        # What the room is running, worked out as both interfaces do: its own
+        # override if it has one, otherwise what its week says right now.
+        override = zone.get("current_mode") or "normal"
+        mode = override if override != "normal" else (zone.get("schedule_mode") or "comfort")
+        rooms.append({
+            "zone_id": str(zone["zone_id"]),
+            "name": zone["name"],
+            "mode": mode,
+            "on_schedule": override == "normal",
+            "has_heater": bool(zone.get("components")),
+            "set_temperature": (
+                zone.get(f"{mode}_temperature")
+                if mode in ("comfort", "eco", "away") and zone.get("components") else None
+            ),
+            "actual_temperature": zone.get("current_temperature"),
+            "temperature_source": zone.get("temperature_source"),
+            "humidity": climate.get("humidity") if enabled else None,
+            "open": int(summary.get("open_count") or 0) if enabled else 0,
+            "warnings": warnings,
+        })
+    if left_open or climate_warnings:
+        status = "warning"
+    elif open_contacts:
+        status = "open"
+    elif not connected or unavailable:
+        status = "unknown"
+    else:
+        status = "ok"
+    return {
+        "generated_at": local_now().isoformat(),
+        "site": site_settings()["display_name"],
+        "hub_connected": connected,
+        "global_override_mode": _global_override_mode() if connected else None,
+        "sensors_enabled": enabled,
+        "status": status,
+        "open_contacts": open_contacts,
+        "unavailable_sensors": unavailable,
+        "rooms": rooms,
+    }
+
+
+@app.get("/api/display")
+async def get_display():
+    """A compact summary for a wall display such as an e-ink panel.
+
+    Behind the same session as the rest of the API. A display that cannot hold
+    a session belongs behind NOBO_ALLOW_ANON_API on a trusted network, which is
+    the existing, documented way to open the API to headless clients.
+    """
+    return _display_payload()
+
+
 @app.get("/api/hub/config")
 async def get_hub_config():
     """Return the current hub connection settings, for the settings form."""
@@ -3952,6 +4175,7 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
         "contact_open_while_away",
         "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
+        "room_near_freezing", "humidity_high",
     ):
         spec = types.get(key)
         if spec is None:

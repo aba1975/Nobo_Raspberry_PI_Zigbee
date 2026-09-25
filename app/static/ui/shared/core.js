@@ -225,6 +225,8 @@ const Nobo = (() => {
     /* A room thermometer: the bulb reads as "measured", not as a heater. */
     thermo:  '<path d="M14.2 14.6V5.2a2.2 2.2 0 0 0-4.4 0v9.4a4.1 4.1 0 1 0 4.4 0z"/>' +
              '<path d="M12 9.4v7.4"/>',
+    /* Humidity. A drop, which is what damp air means to somebody reading it. */
+    drop:    '<path d="M12 3.6c-3.3 4.3-5.6 7.4-5.6 10.3a5.6 5.6 0 0 0 11.2 0c0-2.9-2.3-6-5.6-10.3z"/>',
     /* Radio waves rather than bars: the bars would have to mean something,
        and the number behind them is a last-hop score, not a strength. */
     signal:  '<path d="M12 19.2h.01" stroke-width="2.4"/>' +

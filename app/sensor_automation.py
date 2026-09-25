@@ -101,6 +101,17 @@ CLIMATE_STALE_SECONDS = 3 * 3600
 # minutes. Half a degree is the resolution the sensor reports changes at.
 CLIMATE_HYSTERESIS = 0.5
 
+#: Below this a room is close enough to freezing that pipes are at risk, and
+#: it clears only once the room is a degree above it. Fixed rather than a
+#: setting: a frost warning that somebody has tuned down to 1 °C is too late.
+FROST_TEMPERATURE = 5.0
+FROST_HYSTERESIS = 1.0
+
+#: A humidity warning ends once the air is this much drier than the maximum.
+#: Wider than the temperature band because humidity readings wander by a few
+#: percent on their own.
+HUMIDITY_HYSTERESIS = 5.0
+
 
 def is_colder(candidate: str, reference: str) -> Optional[bool]:
     """Whether *candidate* is colder than *reference*, or None if unrankable."""
@@ -224,6 +235,12 @@ class ClimateStatus:
     action_status: "ActionStatus"
     block_reason: Optional[BlockReason]
     owned_action: Optional[ActionWhenOpen]
+    #: Warn-only conditions. ``humidity_since`` is when the air first went
+    #: above the maximum, so the interface can say how long it has been damp.
+    humidity_raised: bool = False
+    humidity_since: Optional[float] = None
+    humidity_deadline: Optional[float] = None
+    frost_raised: bool = False
 
 
 @dataclass(frozen=True)
@@ -268,7 +285,8 @@ class ConditionEventKind(str, Enum):
 class ConditionEvent:
     zone_id: str
     kind: ConditionEventKind
-    #: ``open`` for a contact left open, else the ClimateCondition value.
+    #: ``open`` for a contact left open, ``humid`` or ``frost`` for those
+    #: warnings, else the ClimateCondition value.
     condition: str = "open"
 
 
@@ -400,6 +418,9 @@ class SensorAutomation:
                 owned_reason=state.owned_reason,
                 climate_condition=state.climate_condition,
                 climate_since=state.climate_since,
+                humidity_since=state.humidity_since,
+                humidity_raised=state.humidity_raised,
+                frost_raised=state.frost_raised,
             )
             for zone_id, state in (states or {}).items()
         }
@@ -484,6 +505,8 @@ class SensorAutomation:
             self._raise_warning_if_due(step, events)
             await self._run_action_if_due(step, actions)
             self._update_climate_condition(step, events)
+            self._update_humidity_warning(step, events)
+            self._update_frost_warning(step, events)
             # Before the contact cycle is closed, so that a window shutting in
             # a room that is still too warm hands its Eco across to the
             # temperature rule instead of releasing it and taking it again.
@@ -502,7 +525,11 @@ class SensorAutomation:
         deadlines = [
             deadline
             for aggregate in aggregates.values()
-            for deadline in (aggregate.warning_deadline, aggregate.action_deadline)
+            for deadline in (
+                aggregate.warning_deadline,
+                aggregate.action_deadline,
+                aggregate.climate.humidity_deadline if aggregate.climate else None,
+            )
             if deadline is not None and deadline > now
         ]
         if any(
@@ -707,6 +734,72 @@ class SensorAutomation:
         state.climate_condition = condition
         state.climate_since = step.now if condition is not None else None
         step.changed = True
+
+    def _update_humidity_warning(
+        self, step: _ZonePass, events: list[ConditionEvent]
+    ) -> None:
+        """Warn about air that has stayed damp for the zone's whole delay.
+
+        Warn-only: there is no heating answer to a shower. The delay counts
+        from the first reading above the maximum and restarts whenever one is
+        back at or under it, so a bathroom that clears after each shower never
+        warns. Ends, with a recovery, once a fresh reading is
+        ``HUMIDITY_HYSTERESIS`` under the maximum; ends quietly if the reading
+        or the rule goes away.
+        """
+        state, policy = step.state, step.policy
+        humidity, limit = step.climate.humidity, policy.humidity_max
+        before = (state.humidity_since, state.humidity_raised)
+
+        if humidity is None or limit is None:
+            state.humidity_since, state.humidity_raised = None, False
+        elif state.humidity_raised:
+            if humidity <= limit - HUMIDITY_HYSTERESIS:
+                events.append(ConditionEvent(
+                    step.zone_id, ConditionEventKind.RECOVERY, "humid"
+                ))
+                state.humidity_since, state.humidity_raised = None, False
+        elif humidity > limit:
+            if state.humidity_since is None:
+                state.humidity_since = step.now
+            if step.now - state.humidity_since >= policy.humidity_delay_seconds:
+                state.humidity_raised = True
+                events.append(ConditionEvent(
+                    step.zone_id, ConditionEventKind.WARNING, "humid"
+                ))
+        else:
+            state.humidity_since = None
+
+        if (state.humidity_since, state.humidity_raised) != before:
+            step.changed = True
+
+    def _update_frost_warning(
+        self, step: _ZonePass, events: list[ConditionEvent]
+    ) -> None:
+        """Warn the moment a room reads below ``FROST_TEMPERATURE``.
+
+        Independent of the zone's own minimum, which may be a comfort floor
+        set well above freezing or not set at all. Warn-only, and ends a
+        degree above the threshold so a reading on the line does not flap.
+        """
+        state = step.state
+        temperature = step.climate.temperature
+        before = state.frost_raised
+        if temperature is None or not step.policy.frost_warning:
+            state.frost_raised = False
+        elif state.frost_raised:
+            if temperature >= FROST_TEMPERATURE + FROST_HYSTERESIS:
+                events.append(ConditionEvent(
+                    step.zone_id, ConditionEventKind.RECOVERY, "frost"
+                ))
+                state.frost_raised = False
+        elif temperature < FROST_TEMPERATURE:
+            state.frost_raised = True
+            events.append(ConditionEvent(
+                step.zone_id, ConditionEventKind.WARNING, "frost"
+            ))
+        if state.frost_raised != before:
+            step.changed = True
 
     def climate_mode_to_hold(
         self, condition: ClimateCondition, action: ActionWhenOpen, ambient: str
@@ -938,6 +1031,14 @@ class SensorAutomation:
                     if climate_status is ActionStatus.BLOCKED else None
                 ),
                 owned_action=state.owned_action if step.climate_owns else None,
+                humidity_raised=state.humidity_raised,
+                humidity_since=state.humidity_since,
+                humidity_deadline=(
+                    state.humidity_since + policy.humidity_delay_seconds
+                    if state.humidity_since is not None and not state.humidity_raised
+                    else None
+                ),
+                frost_raised=state.frost_raised,
             ),
         )
 
