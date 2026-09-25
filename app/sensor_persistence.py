@@ -12,7 +12,7 @@ from typing import Any, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
@@ -41,6 +41,72 @@ HOLD_ACTIONS = frozenset({
     ActionWhenOpen.COMFORT,
 })
 
+# What a temperature rule may do. A room that is too warm can only be made
+# colder, and one that is too cold only warmer: offering Comfort for "too warm"
+# would be offering to make it worse.
+TOO_WARM_ACTIONS = frozenset({
+    ActionWhenOpen.NOTHING, ActionWhenOpen.ECO, ActionWhenOpen.AWAY,
+})
+TOO_COLD_ACTIONS = frozenset({
+    ActionWhenOpen.NOTHING, ActionWhenOpen.ECO, ActionWhenOpen.COMFORT,
+})
+
+# The bounds a threshold may be set within, and the smallest gap between a
+# maximum and a minimum. The gap has to be wider than twice the hysteresis in
+# ``sensor_automation`` or one room could be too warm and too cold at once.
+THRESHOLD_LIMITS = (0.0, 40.0)
+THRESHOLD_MIN_GAP = 1.0
+
+
+class HoldReason(str, Enum):
+    """Which rule put the automation's override on a zone.
+
+    A zone has one zone override, so the automation keeps one ledger for it,
+    and this says whose it is. It matters when a rule stops wanting the hold:
+    a window closing must not release an override the temperature rule still
+    needs, and a room cooling down must not release one an open window does.
+    """
+
+    OPEN = "open"
+    TOO_WARM = "too_warm"
+    TOO_COLD = "too_cold"
+
+
+class ClimateCondition(str, Enum):
+    TOO_WARM = "too_warm"
+    TOO_COLD = "too_cold"
+
+
+def check_climate_policy(
+    temperature_max: Optional[float],
+    action_when_too_warm: "ActionWhenOpen",
+    temperature_min: Optional[float],
+    action_when_too_cold: "ActionWhenOpen",
+) -> None:
+    """Raise ValueError unless these temperature rules make sense together."""
+    low, high = THRESHOLD_LIMITS
+    for label, value in (("maximum", temperature_max), ("minimum", temperature_min)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"The {label} temperature must be a number")
+        if not low <= value <= high:
+            raise ValueError(
+                f"The {label} temperature must be from {low:g} to {high:g} °C"
+            )
+    if ActionWhenOpen(action_when_too_warm) not in TOO_WARM_ACTIONS:
+        raise ValueError("Too warm can only warn, set Eco or set Away")
+    if ActionWhenOpen(action_when_too_cold) not in TOO_COLD_ACTIONS:
+        raise ValueError("Too cold can only warn, set Eco or set Comfort")
+    if (
+        temperature_max is not None
+        and temperature_min is not None
+        and temperature_max - temperature_min < THRESHOLD_MIN_GAP
+    ):
+        raise ValueError(
+            f"The maximum must be at least {THRESHOLD_MIN_GAP:g} °C above the minimum"
+        )
+
 
 @dataclass(frozen=True)
 class ZoneSensorPolicy:
@@ -55,11 +121,28 @@ class ZoneSensorPolicy:
     action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
     action_delay_seconds: int = 300
     override_all_modes: bool = False
+    # Temperature rules, read from the zone's climate sensors. None switches a
+    # threshold off; an action of NOTHING still warns.
+    temperature_max: Optional[float] = None
+    action_when_too_warm: ActionWhenOpen = ActionWhenOpen.NOTHING
+    temperature_min: Optional[float] = None
+    action_when_too_cold: ActionWhenOpen = ActionWhenOpen.NOTHING
 
     def __post_init__(self):
-        object.__setattr__(
-            self, "action_when_open", ActionWhenOpen(self.action_when_open)
+        for name in ("action_when_open", "action_when_too_warm", "action_when_too_cold"):
+            object.__setattr__(self, name, ActionWhenOpen(getattr(self, name)))
+        for name in ("temperature_max", "temperature_min"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                object.__setattr__(self, name, round(float(value), 1))
+        check_climate_policy(
+            self.temperature_max, self.action_when_too_warm,
+            self.temperature_min, self.action_when_too_cold,
         )
+
+    @property
+    def has_climate_rule(self) -> bool:
+        return self.temperature_max is not None or self.temperature_min is not None
 
 
 @dataclass(frozen=True)
@@ -85,10 +168,21 @@ class AutomationZoneState:
     open_started_at: Optional[float] = None
     warning_raised: bool = False
     owned_action: Optional[ActionWhenOpen] = None
+    # Which rule that override belongs to. Meaningless while nothing is owned,
+    # and kept as OPEN then so a file never carries a reason for nothing.
+    owned_reason: HoldReason = HoldReason.OPEN
+    # Whether the room is currently outside its temperature thresholds, and
+    # since when. Persisted for the same reason ``warning_raised`` is: a
+    # restart must not announce a condition that was already announced.
+    climate_condition: Optional[ClimateCondition] = None
+    climate_since: Optional[float] = None
 
     def __post_init__(self):
         if self.owned_action is not None:
             self.owned_action = ActionWhenOpen(self.owned_action)
+        self.owned_reason = HoldReason(self.owned_reason)
+        if self.climate_condition is not None:
+            self.climate_condition = ClimateCondition(self.climate_condition)
 
 
 class InvalidSensorData(ValueError):
@@ -147,6 +241,12 @@ _POLICY_FIELDS = {
         "warning_delay_seconds", "action_when_open",
         "action_delay_seconds", "override_all_modes",
     }),
+    5: frozenset({
+        "warning_delay_seconds", "action_when_open",
+        "action_delay_seconds", "override_all_modes",
+        "temperature_max", "action_when_too_warm",
+        "temperature_min", "action_when_too_cold",
+    }),
 }
 
 # The same, for what the automation had in flight when it was last saved. The
@@ -160,7 +260,14 @@ _AUTOMATION_FIELDS = {
         "suppressed", "owned_with_override",
     }),
     4: frozenset({"open_started_at", "warning_raised", "owned_action"}),
+    5: frozenset({
+        "open_started_at", "warning_raised", "owned_action",
+        "owned_reason", "climate_condition", "climate_since",
+    }),
 }
+
+# Every version this build can read. Older files migrate on the next save.
+_READABLE = (1, 2, 3, 4, SCHEMA_VERSION)
 
 
 def _document(payload: Any, versions: tuple[int, ...] = (SCHEMA_VERSION,)) -> dict:
@@ -200,7 +307,7 @@ def _load(path: Path, default: Any, validator):
 
 
 def _parse_settings(payload: Any) -> SensorSettings:
-    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
+    doc = _document(payload, _READABLE)
     enabled = _require_bool(doc.get("enabled"), "enabled")
     provider = doc.get("provider")
     if provider not in PROVIDERS:
@@ -224,19 +331,43 @@ def _parse_settings(payload: Any) -> SensorSettings:
         else:
             action = _action(item["action_when_open"])
             action_delay = _delay(item["action_delay_seconds"], "action delay")
-        zones[zone_id] = ZoneSensorPolicy(
-            warning_delay_seconds=_delay(item["warning_delay_seconds"], "warning delay"),
-            action_when_open=action,
-            action_delay_seconds=action_delay,
-            # Rows written before the warmth ordering existed say nothing about
-            # wanting past it, so they migrate with the escape hatch shut.
-            override_all_modes=(
-                _require_bool(item["override_all_modes"], "override_all_modes")
-                if version >= 3
-                else False
-            ),
-        )
+        climate = {}
+        if version >= 5:
+            climate = {
+                "temperature_max": _threshold(item["temperature_max"], "temperature_max"),
+                "action_when_too_warm": _action(item["action_when_too_warm"]),
+                "temperature_min": _threshold(item["temperature_min"], "temperature_min"),
+                "action_when_too_cold": _action(item["action_when_too_cold"]),
+            }
+        try:
+            zones[zone_id] = _policy(item, version, action, action_delay, climate)
+        except ValueError as exc:
+            raise InvalidSensorData(f"zones.{zone_id}: {exc}") from exc
     return SensorSettings(enabled=enabled, provider=provider, zones=zones)
+
+
+def _threshold(value: Any, where: str) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidSensorData(f"{where} must be a number or null")
+    return float(value)
+
+
+def _policy(item: dict, version: int, action, action_delay, climate: dict) -> ZoneSensorPolicy:
+    return ZoneSensorPolicy(
+        warning_delay_seconds=_delay(item["warning_delay_seconds"], "warning delay"),
+        action_when_open=action,
+        action_delay_seconds=action_delay,
+        # Rows written before the warmth ordering existed say nothing about
+        # wanting past it, so they migrate with the escape hatch shut.
+        override_all_modes=(
+            _require_bool(item["override_all_modes"], "override_all_modes")
+            if version >= 3
+            else False
+        ),
+        **climate,
+    )
 
 
 def load_sensor_settings(path: Optional[Path] = None) -> SensorSettings:
@@ -255,11 +386,31 @@ def save_sensor_settings(settings: SensorSettings, path: Optional[Path] = None) 
 _SENSOR_FIELDS = {
     "sensor_id", "provider_id", "name", "zone_id", "state", "available",
     "battery", "changed_at", "last_seen_at", "kind", "link_quality",
+    "temperature", "humidity", "pressure",
 }
+
+_SENSOR_KINDS = ("door", "window", "climate")
+_READINGS = ("temperature", "humidity", "pressure")
+
+
+def _climate_reading(value: Any, name: str, where: str) -> Optional[float]:
+    """A stored climate reading, validated against what hardware can report."""
+    from sensor_provider import READING_LIMITS
+
+    if value is None:
+        return None
+    low, high = READING_LIMITS[name]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not low <= value <= high
+    ):
+        raise InvalidSensorData(f"{where} must be null or a number from {low:g} to {high:g}")
+    return float(value)
 
 
 def _parse_sensors(payload: Any) -> list[dict]:
-    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
+    doc = _document(payload, _READABLE)
     rows = doc.get("sensors")
     if type(rows) is not list:
         raise InvalidSensorData("sensors must be an array")
@@ -274,6 +425,8 @@ def _parse_sensors(payload: Any) -> list[dict]:
             # Written before signal strength was recorded.  Absent means "not
             # measured", which is exactly what the live value means too.
             row = {**row, "link_quality": None}
+        # Written before climate sensors existed: a contact has no readings.
+        row = {**{name: None for name in _READINGS}, **row}
         if set(row) != _SENSOR_FIELDS:
             raise InvalidSensorData(f"sensors[{index}] has unexpected fields")
         for key in ("sensor_id", "provider_id", "name", "changed_at", "last_seen_at"):
@@ -293,8 +446,12 @@ def _parse_sensors(payload: Any) -> list[dict]:
             raise InvalidSensorData("zone_id must be a string or null")
         if row["state"] not in ("open", "closed", "unknown"):
             raise InvalidSensorData("invalid contact state")
-        if row["kind"] not in ("door", "window"):
-            raise InvalidSensorData("kind must be door or window")
+        if row["kind"] not in _SENSOR_KINDS:
+            raise InvalidSensorData("kind must be door, window or climate")
+        for name in _READINGS:
+            if row["kind"] != "climate" and row[name] is not None:
+                raise InvalidSensorData(f"sensors[{index}]: a contact has no {name}")
+            row[name] = _climate_reading(row[name], name, f"sensors[{index}].{name}")
         _require_bool(row["available"], "available")
         if row["battery"] is not None and (
             type(row["battery"]) is not int or not 0 <= row["battery"] <= 100
@@ -342,7 +499,8 @@ def save_zigbee_metadata(metadata: Mapping[str, Any], path: Optional[Path] = Non
 
 
 def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
-    doc = _document(payload, (SCHEMA_VERSION,))
+    # v4 is the same shape less the climate readings, which are filled below.
+    doc = _document(payload, (4, SCHEMA_VERSION))
     result: Dict[str, dict] = {}
     for address, raw in _require_dict(doc.get("sensors"), "sensors").items():
         if not isinstance(address, str) or not address:
@@ -352,17 +510,24 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
         # were kept would otherwise lose every name and room assignment on the
         # next start. Unknown keys are still an error.
         raw = _require_dict(raw, f"sensors.{address}")
-        row = {"last_seen": None, "battery": None, "link_quality": None, **raw}
+        row = {
+            "last_seen": None, "battery": None, "link_quality": None,
+            **{name: None for name in _READINGS},
+            **raw,
+        }
         row = _exact_fields(
             row,
-            ("name", "kind", "zone_id", "last_seen", "battery", "link_quality"),
+            ("name", "kind", "zone_id", "last_seen", "battery", "link_quality",
+             *_READINGS),
             f"sensors.{address}",
         )
         name = row["name"]
         if not isinstance(name, str) or not name.strip() or len(name) > 80:
             raise InvalidSensorData(f"sensors.{address}.name must be 1 to 80 characters")
-        if row["kind"] not in ("door", "window"):
-            raise InvalidSensorData(f"sensors.{address}.kind must be door or window")
+        if row["kind"] not in _SENSOR_KINDS:
+            raise InvalidSensorData(
+                f"sensors.{address}.kind must be door, window or climate"
+            )
         zone_id = row["zone_id"]
         if zone_id is not None and (not isinstance(zone_id, str) or not zone_id.strip()):
             raise InvalidSensorData(
@@ -393,6 +558,10 @@ def _parse_zigbee_metadata(payload: Any) -> Dict[str, dict]:
             "link_quality": _reading(
                 row["link_quality"], 255, f"sensors.{address}.link_quality"
             ),
+            **{
+                name: _climate_reading(row[name], name, f"sensors.{address}.{name}")
+                for name in _READINGS
+            },
         }
     return result
 
@@ -414,7 +583,7 @@ def _reading(value: Any, ceiling: int, where: str) -> Optional[int]:
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
-    doc = _document(payload, (1, 2, 3, SCHEMA_VERSION))
+    doc = _document(payload, _READABLE)
     version = doc["schema_version"]
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
@@ -440,10 +609,28 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
         stamp = row["open_started_at"]
         if stamp is not None and (type(stamp) not in (int, float) or stamp < 0):
             raise InvalidSensorData("open_started_at must be a non-negative number or null")
+        # Before v5 the only thing that could own an override was an open
+        # contact, so that is whose every older hold is.
+        reason, condition, since = HoldReason.OPEN, None, None
+        if version >= 5:
+            try:
+                reason = HoldReason(row["owned_reason"])
+                condition = (
+                    ClimateCondition(row["climate_condition"])
+                    if row["climate_condition"] is not None else None
+                )
+            except (TypeError, ValueError) as exc:
+                raise InvalidSensorData(f"zones.{zone_id}: {exc}") from exc
+            since = row["climate_since"]
+            if since is not None and (type(since) not in (int, float) or since < 0):
+                raise InvalidSensorData("climate_since must be a non-negative number or null")
         result[zone_id] = AutomationZoneState(
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
             owned_action=owned_action,
+            owned_reason=reason if owned_action is not None else HoldReason.OPEN,
+            climate_condition=condition,
+            climate_since=float(since) if since is not None else None,
         )
     return result
 

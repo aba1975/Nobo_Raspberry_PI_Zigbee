@@ -145,12 +145,18 @@ def test_only_honest_alerts_remain():
       container does not arrive as one email per sensor.
     - ``contact_open_while_away`` — two facts this system already holds, read
       together: the global override is Away, and a contact is open.
+    - ``temperature_too_high`` / ``temperature_too_low`` /
+      ``temperature_back_in_range`` — not the removed ``room_cold``, which
+      waited for a hub thermometer that almost never exists. These read a
+      Zigbee room thermometer, refuse a reading more than three hours old,
+      and say in their help text that they measure where the sensor hangs.
     """
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
         "contact_open_while_away",
+        "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
     }
 
 

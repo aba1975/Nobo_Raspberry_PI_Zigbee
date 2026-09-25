@@ -37,10 +37,58 @@ class ContactState(str, Enum):
 
 
 class SensorKind(str, Enum):
-    """Physical opening represented by a contact sensor."""
+    """What a sensor watches.
+
+    ``door`` and ``window`` are contacts, and which of the two is a person's
+    choice. ``climate`` is a room thermometer — temperature, humidity and
+    usually air pressure — and is decided by the hardware, not by anybody: a
+    thermometer cannot be relabelled a window, and a contact cannot be turned
+    into a thermometer.
+    """
 
     DOOR = "door"
     WINDOW = "window"
+    CLIMATE = "climate"
+
+    @property
+    def is_contact(self) -> bool:
+        return self is not SensorKind.CLIMATE
+
+
+CONTACT_KINDS = frozenset({SensorKind.DOOR, SensorKind.WINDOW})
+
+# What a room thermometer can plausibly report. The Aqara WSDCGQ11LM is
+# specified from -20 to 50 °C and 300 to 1100 hPa; the bounds are a little
+# wider so a genuine reading is never thrown away, and narrow enough that a
+# corrupted one is.
+READING_LIMITS = {
+    "temperature": (-40.0, 80.0),
+    "humidity": (0.0, 100.0),
+    "pressure": (300.0, 1100.0),
+}
+
+
+def valid_reading(name: str, value) -> Optional[float]:
+    """A climate reading rounded to one decimal, or None if it is not one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    low, high = READING_LIMITS[name]
+    if value != value or not low <= value <= high:  # NaN compares unequal
+        return None
+    return round(float(value), 1)
+
+
+def check_kind_change(current: "SensorKind", wanted: "SensorKind") -> None:
+    """Refuse turning a contact into a thermometer or the other way round.
+
+    Door and window are the same hardware with a different label, so that
+    change is a person's to make. A thermometer is a different device.
+    """
+    if current.is_contact != wanted.is_contact:
+        raise ValueError(
+            "A temperature sensor cannot become a door or window sensor, "
+            "or the other way round"
+        )
 
 
 @dataclass(frozen=True)
@@ -76,6 +124,21 @@ class ContactSnapshot:
     #: the quality of the *last hop* — for a device reporting through a
     #: repeater it describes that leg, not the distance to the coordinator.
     link_quality: Optional[int] = None
+    #: Room readings from a ``climate`` sensor: °C, % relative humidity and
+    #: hPa. Always None for a contact. Each is whatever the device last sent,
+    #: and ``last_seen_at`` says how old that is — a stale reading is still
+    #: carried here, and it is the automation that decides not to believe it.
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
+
+    @property
+    def is_contact(self) -> bool:
+        return self.kind.is_contact
+
+    @property
+    def is_climate(self) -> bool:
+        return self.kind is SensorKind.CLIMATE
 
 
 class SensorEventKind(str, Enum):

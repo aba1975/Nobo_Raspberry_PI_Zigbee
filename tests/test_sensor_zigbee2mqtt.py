@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tests.fake_zigbee2mqtt import (
-    FakeBroker, FakeTransport, FakeZigbee2Mqtt, contact_device, other_device,
-    topic_matches, unhelpful_device,
+    FakeBroker, FakeTransport, FakeZigbee2Mqtt, chip_thermometer_device,
+    climate_device, contact_device, other_device, topic_matches, unhelpful_device,
 )
 from sensor_provider import (
     ContactState, PairingOutcome, SensorEventKind, SensorKind,
@@ -728,6 +728,7 @@ def test_zigbee_metadata_round_trips(tmp_path):
         ADDRESS: {
             "name": "Kitchen window", "kind": "window", "zone_id": "3",
             "last_seen": None, "battery": None, "link_quality": None,
+            "temperature": None, "humidity": None, "pressure": None,
         }
     }
 
@@ -1312,3 +1313,102 @@ async def test_routers_and_sensors_coexist(rig, events):
 
     assert len(await provider.routers()) == 1
     assert len(await provider.list()) == 1
+
+
+# -- room thermometers -----------------------------------------------------
+#
+# Aqara WSDCGQ11LM temperature, humidity and pressure sensors. The fixture
+# follows Zigbee2MQTT's definition for the model; none had joined this radio
+# when these were written, so the shape is the documented one, not a capture.
+
+THERMO = "0x00158d000aabbcc1"
+
+
+@pytest.mark.asyncio
+async def test_a_room_thermometer_is_discovered_as_one(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(climate_device(THERMO))
+
+    sensor = (await provider.list())[0]
+    # The hardware decides this, not the user: it measures, it has no contact.
+    assert sensor.kind is SensorKind.CLIMATE
+    assert sensor.temperature is None
+    assert sensor.available is False
+
+
+@pytest.mark.asyncio
+async def test_a_chip_temperature_is_not_a_room_temperature(rig, events):
+    """``device_temperature`` is the inside of the plastic. Treating a button
+    that reports one as a thermometer would put its warmth on a room card."""
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(chip_thermometer_device("0x00158d000aabbcc2"))
+    assert await provider.list() == []
+
+
+@pytest.mark.asyncio
+async def test_readings_arrive_and_a_partial_report_keeps_the_rest(rig, events):
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(climate_device(THERMO))
+    await z2m.report(
+        THERMO, temperature=21.37, humidity=48.2, pressure=1009.4,
+        battery=100, linkquality=150, last_seen=clock().isoformat(),
+    )
+    sensor = (await provider.list())[0]
+    assert (sensor.temperature, sensor.humidity, sensor.pressure) == (21.4, 48.2, 1009.4)
+    assert sensor.available is True
+
+    # The Aqara sends each reading as it changes, not always all three.
+    clock.advance(60)
+    await z2m.report(THERMO, temperature=22.0, last_seen=clock().isoformat())
+    sensor = (await provider.list())[0]
+    assert (sensor.temperature, sensor.humidity, sensor.pressure) == (22.0, 48.2, 1009.4)
+
+
+@pytest.mark.asyncio
+async def test_an_impossible_reading_is_not_believed(rig, events):
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(climate_device(THERMO))
+    await z2m.report(THERMO, temperature=20.0, last_seen=clock().isoformat())
+    await z2m.report(THERMO, temperature=150.0, last_seen=clock().isoformat())
+    assert (await provider.list())[0].temperature == 20.0
+
+
+@pytest.mark.asyncio
+async def test_a_thermometer_cannot_be_renamed_into_a_window(rig, events):
+    provider, z2m = await started(rig, events)
+    await z2m.add_device(climate_device(THERMO))
+    with pytest.raises(ValueError):
+        await provider.update(THERMO, kind=SensorKind.WINDOW)
+
+
+@pytest.mark.asyncio
+async def test_the_last_reading_survives_a_restart(rig, events):
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(climate_device(THERMO))
+    await z2m.report(
+        THERMO, temperature=19.5, humidity=55.0, pressure=1000.0,
+        last_seen=clock().isoformat(),
+    )
+    await provider.update(THERMO, name="Bathroom", zone_id="3")
+
+    await provider.stop()
+    await provider.start()
+    await z2m.publish_devices()
+    sensor = (await provider.list())[0]
+    assert sensor.kind is SensorKind.CLIMATE
+    assert (sensor.name, sensor.zone_id) == ("Bathroom", "3")
+    assert (sensor.temperature, sensor.humidity) == (19.5, 55.0)
+
+
+@pytest.mark.asyncio
+async def test_a_thermometer_that_joins_is_reported_as_found(rig, events):
+    provider, z2m = await started(rig, events)
+    await provider.begin_pairing(254)
+    await _interview(z2m, THERMO, "successful", climate_device(THERMO))
+
+    status = provider.pairing_status()
+    assert status.outcome is PairingOutcome.JOINED
+    assert status.sensor_id == THERMO

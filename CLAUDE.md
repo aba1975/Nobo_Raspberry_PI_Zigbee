@@ -80,7 +80,11 @@ exist needs real sockets.
   merely imprecise; a half step down rounds back to where it started.
 - **No temperature reaches this hub at all.** All 11 components report
   `tempsensor_for_zone_id = None`. Of the 25 models pynobo knows, only the SW4
-  has a thermometer, so a blank room temperature is correct behaviour.
+  has a thermometer, so a blank room temperature is correct behaviour. The one
+  exception is a **Zigbee room thermometer** (sensor kind `climate`, see
+  `docs/SENSORS.md`), which fills in `current_temperature` with
+  `temperature_source = "sensor"` only where the hub has nothing. Never
+  substitute anything else. No real thermometer has joined yet.
 - A **dial on a thermostat rewrites the hub's set point outright** — no override
   is created, and the old value is not recoverable from the hub. That is why
   `app/setpoint_guard.py` exists.
@@ -104,6 +108,10 @@ hub reached the hardware; everything else proves a message reached the hub.
 - `app/away_schedule.py` — the scheduled away window. `away_schedule_loop()` is the only thing that writes to the hub unprompted, and both its paths require `enabled: true`
 - `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, away exceptions, applied away exceptions, intended set points, site identity
 - `app/setpoint_guard.py` — what temperatures this system *means* each zone to have. A dial on a thermostat rewrites the hub's set point outright and the hub keeps no history, so this is the only record that a room was ever meant to be something else. Drift is derived on read, never stored
+- `app/sensor_*.py` — the optional Zigbee sensors: the provider contract,
+  simulator, Zigbee2MQTT provider, persistence and the automation engine.
+  Contacts and room thermometers (`climate`) share one registry and one
+  per-zone ownership ledger; `docs/SENSORS.md` is the design
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

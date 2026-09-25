@@ -178,10 +178,13 @@ def test_a_suppression_flag_from_an_older_build_is_read_and_discarded(tmp_path):
     assert migrated == AutomationZoneState(10.0, True, ActionWhenOpen.ECO)
     # And it round-trips at the current version without those fields.
     save_automation_state({"1": migrated}, path)
-    assert json.loads(path.read_text())["schema_version"] == 4
+    assert json.loads(path.read_text())["schema_version"] == 5
     assert set(json.loads(path.read_text())["zones"]["1"]) == {
         "open_started_at", "warning_raised", "owned_action",
+        "owned_reason", "climate_condition", "climate_since",
     }
+    # Before temperature rules existed only a window could own a hold.
+    assert json.loads(path.read_text())["zones"]["1"]["owned_reason"] == "open"
 
 
 def test_schema_two_policy_migrates_with_sensor_override_disabled(tmp_path):

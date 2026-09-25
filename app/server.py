@@ -38,6 +38,8 @@ import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
 from sensor_automation import (
     AutomationResult as SensorAutomationResult,
+    CLIMATE_HYSTERESIS,
+    CLIMATE_STALE_SECONDS,
     ConditionEventKind as SensorConditionEventKind,
     HeatingZone,
     SensorAutomation,
@@ -1135,6 +1137,18 @@ class SensorZonePolicyUpdate(BaseModel):
     action_when_open: ActionWhenOpen = ActionWhenOpen.NOTHING
     action_delay_seconds: int = Field(default=300, ge=0, le=86400)
     override_all_modes: bool = False
+    # Temperature rules. A zone sent without them keeps the ones it had, so a
+    # client that only edits the door and window rule cannot wipe them.
+    temperature_max: Optional[float] = Field(default=None, ge=0, le=40)
+    action_when_too_warm: ActionWhenOpen = ActionWhenOpen.NOTHING
+    temperature_min: Optional[float] = Field(default=None, ge=0, le=40)
+    action_when_too_cold: ActionWhenOpen = ActionWhenOpen.NOTHING
+
+
+CLIMATE_POLICY_FIELDS = (
+    "temperature_max", "action_when_too_warm",
+    "temperature_min", "action_when_too_cold",
+)
 
 
 class SensorSettingsUpdate(BaseModel):
@@ -1164,6 +1178,11 @@ class SensorUpdate(BaseModel):
 
 class SensorSimulationUpdate(BaseModel):
     state: Optional[str] = None
+    # Room readings for a simulated thermometer. Range-checked by the
+    # provider against what the hardware can report.
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
     available: Optional[bool] = None
     battery: Optional[int] = Field(default=None, ge=0, le=100)
     clear_battery: bool = False
@@ -1978,6 +1997,9 @@ def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
         "link_quality": snapshot.link_quality,
         "changed_at": snapshot.changed_at.isoformat(),
         "last_seen_at": snapshot.last_seen_at.isoformat(),
+        "temperature": snapshot.temperature,
+        "humidity": snapshot.humidity,
+        "pressure": snapshot.pressure,
     }
 
 
@@ -2114,6 +2136,12 @@ async def start_sensor_service() -> None:
         notifier.restore_condition(
             f"contact-left-open:{zone_id}", state.warning_raised
         )
+        for condition, key in CLIMATE_ALERT_KEYS.items():
+            notifier.restore_condition(
+                f"{key}:{zone_id}",
+                state.climate_condition is not None
+                and state.climate_condition.value == condition,
+            )
     sensor_automation.reconcile_owned(_sensor_heating_state())
     await evaluate_sensor_automation()
 
@@ -2160,7 +2188,7 @@ def _sensor_view_signature() -> tuple:
     return (
         tuple(
             (item.sensor_id, item.state.value, item.available, item.battery,
-             item.link_quality)
+             item.link_quality, item.temperature, item.humidity, item.pressure)
             for item in sensor_snapshots
         ),
         tuple(
@@ -2170,6 +2198,10 @@ def _sensor_view_signature() -> tuple:
                 aggregate.warning_raised,
                 aggregate.action_status.value,
                 aggregate.owned_action.value if aggregate.owned_action else None,
+                # A reading going stale changes what the card shows without
+                # any sensor having said anything, so the climate summary is
+                # part of what a browser can see.
+                aggregate.climate,
             )
             for zone_id, aggregate in sorted(sensor_zone_aggregates.items())
         ),
@@ -2384,17 +2416,37 @@ def _evaluate_sensor_alerts(
         where = f"{sensor.name} ({room})" if room else sensor.name
 
         is_quiet = sensor in quiet and not system_down
+        if sensor.is_climate:
+            # A thermometer reports on a heartbeat, so its silence means more,
+            # and its reading has already stopped being used by the time this
+            # is sent: the temperature rule gives up on one after three hours.
+            last_said = (
+                f"{sensor.temperature:.1f} °C" if sensor.temperature is not None
+                else "no reading"
+            )
+            consequence = (
+                f"A room thermometer reports about once an hour even when nothing "
+                f"changes, so this is more likely a flat battery or a sensor out of "
+                f"range than a quiet room. Its last reading — {last_said} — is too "
+                f"old to act on, and the temperature rule for the room has already "
+                f"stopped holding the heating on its account."
+            )
+        else:
+            last_said = sensor.state.value
+            consequence = (
+                f"These sensors speak only when something changes, so a quiet one is "
+                f"usually just a door nobody has touched. A flat battery looks exactly "
+                f"the same from here, and until it is ruled out, whatever this sensor "
+                f"last reported — {last_said} — is being believed by the "
+                f"left-open warning and by any heating rule that depends on it."
+            )
         notifier.set_condition(
             "sensor_quiet", f"sensor-quiet:{sensor.sensor_id}", is_quiet,
             subject=f"{sensor.name} has not reported for "
                     f"{SENSOR_QUIET_SECONDS // 3600} hours",
             body=(
                 f"{where} was last heard from {local_time_text(sensor.last_seen_at.timestamp())}.\n\n"
-                f"These sensors speak only when something changes, so a quiet one is "
-                f"usually just a door nobody has touched. A flat battery looks exactly "
-                f"the same from here, and until it is ruled out, whatever this sensor "
-                f"last reported — {sensor.state.value} — is being believed by the "
-                f"left-open warning and by any heating rule that depends on it."
+                f"{consequence}"
             ),
             severity="warning",
             recovery_subject=f"{sensor.name} is reporting again",
@@ -2404,7 +2456,7 @@ def _evaluate_sensor_alerts(
             facts=(("Sensor", sensor.name),
                    ("Room", room or "not assigned"),
                    ("Last heard", local_time_text(sensor.last_seen_at.timestamp())),
-                   ("Still reads", sensor.state.value)),
+                   ("Still reads", last_said)),
         )
 
         low = sensor.battery is not None and sensor.battery <= SENSOR_BATTERY_LOW_PERCENT
@@ -2430,6 +2482,52 @@ def _evaluate_sensor_alerts(
 
     future = [deadline for deadline in deadlines if deadline > now]
     return min(future) if future else None
+
+
+# Alert types and condition keys for rooms outside their temperature rule.
+CLIMATE_ALERT_TYPES = {"too_warm": "temperature_too_high", "too_cold": "temperature_too_low"}
+CLIMATE_ALERT_KEYS = {"too_warm": "temperature-high", "too_cold": "temperature-low"}
+
+
+def _climate_event_alert(event, name: str, result: SensorAutomationResult) -> None:
+    """Report a room crossing, or coming back inside, its temperature rule."""
+    aggregate = result.zones.get(event.zone_id)
+    climate = aggregate.climate if aggregate is not None else None
+    reading = climate.reading.temperature if climate is not None else None
+    policy = _sensor_policy_for(event.zone_id)
+    warm = event.condition == "too_warm"
+    limit = policy.temperature_max if warm else policy.temperature_min
+    action = policy.action_when_too_warm if warm else policy.action_when_too_cold
+    now_text = f"{reading:.1f} °C" if reading is not None else "unknown"
+    limit_text = f"{limit:g} °C" if limit is not None else "not set"
+    doing = (
+        "The heating has been left as it is; this rule only warns."
+        if action is ActionWhenOpen.NOTHING
+        else f"The room is being held at {action.value.capitalize()} until it is "
+             f"{CLIMATE_HYSTERESIS:g} °C back inside the limit, unless the house is "
+             f"already {'colder' if warm else 'warmer'} than that."
+    )
+    notifier.set_condition(
+        CLIMATE_ALERT_TYPES[event.condition],
+        f"{CLIMATE_ALERT_KEYS[event.condition]}:{event.zone_id}",
+        event.kind is SensorConditionEventKind.WARNING,
+        subject=f"{name} is too {'warm' if warm else 'cold'}: {now_text}",
+        body=(
+            f"The room thermometer in {name} reads {now_text}, "
+            f"{'above the maximum' if warm else 'below the minimum'} of {limit_text}.\n\n"
+            f"{doing}\n\n"
+            f"This is one sensor's reading, taken where it is mounted. One in "
+            f"sunlight or beside a heater reads high, and it is worth checking "
+            f"the app before acting on it."
+        ),
+        severity="warning",
+        recovery_subject=f"{name} is back within its temperature limit",
+        recovery_body=f"The room thermometer in {name} now reads {now_text}.",
+        recovery_event_type="temperature_back_in_range",
+        highlight=[name],
+        facts=(("Room", name), ("Reading", now_text),
+               ("Maximum" if warm else "Minimum", limit_text)),
+    )
 
 
 async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
@@ -2461,6 +2559,9 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
     for event in result.events:
         name = zones_by_id.get(event.zone_id, f"Zone {event.zone_id}")
         raised = event.kind is SensorConditionEventKind.WARNING
+        if event.condition != "open":
+            _climate_event_alert(event, name, result)
+            continue
         notifier.set_condition(
             "contact_left_open",
             f"contact-left-open:{event.zone_id}",
@@ -2480,6 +2581,15 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
                 "Contact sensor automation could not %s for zone %s: %s",
                 action.kind.value, action.zone_id, action.error,
             )
+
+    # A temperature condition that ended without a reading saying so — the
+    # sensor went quiet, or the threshold was switched off — is cleared here,
+    # silently. Nothing is sent for it: neither is news that the room is fine.
+    for zone_id, aggregate in result.zones.items():
+        condition = aggregate.climate.condition if aggregate.climate else None
+        for value, key in CLIMATE_ALERT_KEYS.items():
+            if condition is None or condition.value != value:
+                notifier.set_condition(CLIMATE_ALERT_TYPES[value], f"{key}:{zone_id}", False)
 
     # Time-based sensor alerts, and the earliest moment one of them could
     # change. Kept here rather than inside the automation engine because none
@@ -2673,20 +2783,45 @@ def get_zones_data() -> List[Dict[str, Any]]:
         for zone in zones:
             zone.setdefault("setpoint_changed_outside", None)
 
+    for zone in zones:
+        # Where the room temperature came from: a heater's own thermometer,
+        # a climate sensor, or nowhere. Said explicitly, because an interface
+        # that has to guess will sooner or later call a guess a measurement.
+        zone["temperature_source"] = (
+            "hub" if zone.get("current_temperature") is not None else None
+        )
+
     if sensor_settings.enabled:
         sensors_by_zone: Dict[str, List[Dict[str, Any]]] = {}
+        climate_by_zone: Dict[str, List[Dict[str, Any]]] = {}
         for snapshot in sensor_snapshots:
             if snapshot.zone_id is not None:
-                sensors_by_zone.setdefault(str(snapshot.zone_id), []).append(
+                target = sensors_by_zone if snapshot.is_contact else climate_by_zone
+                target.setdefault(str(snapshot.zone_id), []).append(
                     _sensor_snapshot_dict(snapshot)
                 )
         for zone in zones:
             zone_id = str(zone["zone_id"])
             aggregate = sensor_zone_aggregates.get(zone_id)
             policy = _sensor_policy_for(zone_id)
+            # Contacts only. Thermometers have their own list, so that
+            # nothing counting windows ever counts a thermometer as one.
             zone["sensors"] = sorted(
                 sensors_by_zone.get(zone_id, []), key=lambda item: item["name"].lower()
             )
+            zone["climate_sensors"] = sorted(
+                climate_by_zone.get(zone_id, []), key=lambda item: item["name"].lower()
+            )
+            zone["climate"] = _zone_climate_summary(
+                zone, aggregate, policy, zone["climate_sensors"]
+            )
+            reading = zone["climate"]["temperature"]
+            # Most Nobø receivers measure nothing, so a room thermometer is
+            # the only temperature such a room will ever have. A heater's own
+            # reading, where one exists, is left as it is.
+            if zone.get("current_temperature") is None and reading is not None:
+                zone["current_temperature"] = reading
+                zone["temperature_source"] = "sensor"
             zone["sensor_summary"] = {
                 "state": aggregate.state.value if aggregate else "empty",
                 "sensor_count": aggregate.sensor_count if aggregate else len(zone["sensors"]),
@@ -2720,6 +2855,60 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 "action_available": bool(zone.get("components")),
             }
     return zones
+
+
+def _zone_climate_summary(
+    zone: Dict[str, Any],
+    aggregate: Optional[Any],
+    policy: ZoneSensorPolicy,
+    sensors: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """A zone's temperature, humidity and pressure, and its temperature rule.
+
+    Readings come from the automation's own aggregate, so the number on the
+    card is exactly the number the rule decided on — fresh, available
+    thermometers averaged — and not a second calculation that could disagree.
+    """
+    climate = aggregate.climate if aggregate is not None else None
+    reading = climate.reading if climate is not None else None
+
+    def stamp(value: Optional[float]) -> Optional[str]:
+        if value is None:
+            return None
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+
+    return {
+        "sensor_count": len(sensors),
+        "fresh_count": reading.fresh_count if reading else 0,
+        "temperature": reading.temperature if reading else None,
+        "humidity": reading.humidity if reading else None,
+        "pressure": reading.pressure if reading else None,
+        "updated_at": stamp(reading.newest_at if reading else None),
+        "stale_after_seconds": CLIMATE_STALE_SECONDS,
+        "condition": (
+            climate.condition.value
+            if climate is not None and climate.condition is not None else None
+        ),
+        "condition_since": stamp(climate.since if climate is not None else None),
+        # The rule travels with the state, as the contact rule does, so an
+        # ordinary user can read why a room is being held without the
+        # admin-only settings endpoint.
+        "temperature_max": policy.temperature_max,
+        "action_when_too_warm": policy.action_when_too_warm.value,
+        "temperature_min": policy.temperature_min,
+        "action_when_too_cold": policy.action_when_too_cold.value,
+        "hysteresis": CLIMATE_HYSTERESIS,
+        "action_status": climate.action_status.value if climate is not None else "idle",
+        "block_reason": (
+            climate.block_reason.value
+            if climate is not None and climate.block_reason is not None else None
+        ),
+        "owned_action": (
+            climate.owned_action.value
+            if climate is not None and climate.owned_action is not None else None
+        ),
+        "action_available": bool(zone.get("components")),
+    }
 
 
 def zone_follows_global_mode(zone: Dict[str, Any]) -> bool:
@@ -3074,6 +3263,10 @@ def _sensor_settings_response() -> Dict[str, Any]:
             "action_when_open": policy.action_when_open.value,
             "action_delay_seconds": policy.action_delay_seconds,
             "override_all_modes": policy.override_all_modes,
+            "temperature_max": policy.temperature_max,
+            "action_when_too_warm": policy.action_when_too_warm.value,
+            "temperature_min": policy.temperature_min,
+            "action_when_too_cold": policy.action_when_too_cold.value,
         }
     return {
         "enabled": sensor_settings.enabled,
@@ -3202,16 +3395,24 @@ async def update_sensor_settings(request: Request, body: SensorSettingsUpdate):
         # client that only cares about one room does not have to send the
         # whole house back to avoid resetting it.
         sent = body.zones.get(zone_id)
-        policies[zone_id] = (
-            ZoneSensorPolicy(
+        if sent is None:
+            policies[zone_id] = _sensor_policy_for(zone_id)
+            continue
+        current = _sensor_policy_for(zone_id)
+        climate = {
+            name: getattr(sent if name in sent.model_fields_set else current, name)
+            for name in CLIMATE_POLICY_FIELDS
+        }
+        try:
+            policies[zone_id] = ZoneSensorPolicy(
                 warning_delay_seconds=sent.warning_delay_seconds,
                 action_when_open=sent.action_when_open,
                 action_delay_seconds=sent.action_delay_seconds,
                 override_all_modes=sent.override_all_modes,
+                **climate,
             )
-            if sent is not None
-            else _sensor_policy_for(zone_id)
-        )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Zone {zone_id}: {exc}")
     if not body.enabled and sensor_settings.enabled:
         if not await sensor_automation.disable(_sensor_heating_state()):
             raise HTTPException(
@@ -3402,6 +3603,11 @@ async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulati
             clear_battery=body.clear_battery,
             link_quality=body.link_quality,
             clear_link_quality=body.clear_link_quality,
+            **{
+                name: getattr(body, name)
+                for name in ("temperature", "humidity", "pressure")
+                if getattr(body, name) is not None
+            },
         )
         await _finish_sensor_mutation()
         return _sensor_snapshot_dict(sensor)
@@ -3739,12 +3945,13 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
     """
     if sensor_settings.enabled:
         return out
-    reason = "Needs contact sensors, which are off."
+    reason = "Needs door, window or temperature sensors, which are off."
     types = out.get("event_types", {})
     for key in (
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
         "contact_open_while_away",
+        "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
     ):
         spec = types.get(key)
         if spec is None:

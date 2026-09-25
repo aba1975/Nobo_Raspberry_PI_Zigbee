@@ -573,6 +573,14 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   background: var(--amber-wash);
 }
 
+/* A room with a window open and a temperature out of range has two strips.
+   They share the card's one sensor slot, stacked, rather than overlapping. */
+.zsensor-stack { grid-area: sensor; display: grid; gap: .4rem; margin-top: .55rem; }
+.zsensor-stack > .zsensor { grid-area: auto; margin-top: 0; }
+/* Too cold is the same urgency as too warm, but drawn in the cold colour so
+   the two are told apart before the words are read. */
+.zclimate-too_cold .sensor-visual { color: var(--pine); background: var(--pine-wash); }
+
 /* A room with something left open is worth spotting from across the list. */
 .zone-sensor-warning {
   border-color: var(--danger);
@@ -615,6 +623,25 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 
 .sensor-rule-line { margin: .2rem 0 .8rem; font-size: .85rem; color: var(--ink-soft); }
 .sensor-rule-line.is-active { color: var(--pine); font-weight: 600; }
+
+/* Temperature, humidity and pressure, read at a glance on the zone page. */
+.climate-facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: .5rem; margin: .6rem 0 .3rem;
+}
+.climate-fact {
+  display: grid; gap: .1rem;
+  padding: .6rem .75rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.climate-fact span { font-size: .76rem; color: var(--ink-soft); }
+.climate-fact strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.climate-updated { margin: .1rem 0 .8rem; font-size: .8rem; }
+.sensor-reading {
+  color: var(--ink); background: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
 
 .sensor-count {
   font-size: .78rem; font-weight: 650; color: var(--ink-soft);

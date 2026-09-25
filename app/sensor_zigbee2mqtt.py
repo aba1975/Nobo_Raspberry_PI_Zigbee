@@ -15,6 +15,12 @@ sensor removed and paired again returns to the room it was already assigned to.
 is in contact, not whether the opening is.  Inverting it would make the whole
 feature backwards while looking entirely plausible, so it is asserted by test.
 
+*A thermometer is recognised by what it exposes.*  A device that exposes
+``temperature`` and no ``contact`` is a climate sensor — the Aqara WSDCGQ11LM
+and its relatives.  ``device_temperature``, which contact sensors and plugs
+report about their own electronics, is a different property and deliberately
+does not count: it is the temperature of a circuit board, not of a room.
+
 This application owns the display name, the door/window type and the zone.
 Zigbee2MQTT is infrastructure and keeps whatever friendly name it assigned,
 which by default is the IEEE address.  Deliberately not renaming devices there
@@ -35,8 +41,10 @@ from typing import Awaitable, Callable, Optional, Protocol
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, PairingOutcome, PairingStatus,
     ProviderUnavailable, RouterInfo, SensorEvent, SensorEventKind, SensorKind,
-    SensorNotFound,
+    SensorNotFound, check_kind_change, valid_reading,
 )
+
+_READINGS = ("temperature", "humidity", "pressure")
 
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 
@@ -286,10 +294,13 @@ class Zigbee2MqttContactSensorProvider:
         current = self._get(sensor_id)
         if zone_id is not None and clear_zone:
             raise ValueError("zone_id and clear_zone cannot both be supplied")
+        if kind is not None:
+            kind = _valid_kind(kind)
+            check_kind_change(current.kind, kind)
         updated = _replace(
             current,
             name=_valid_name(name) if name is not None else current.name,
-            kind=_valid_kind(kind) if kind is not None else current.kind,
+            kind=kind if kind is not None else current.kind,
             zone_id=None if clear_zone else (
                 _valid_zone(zone_id) if zone_id is not None else current.zone_id
             ),
@@ -412,7 +423,7 @@ class Zigbee2MqttContactSensorProvider:
                 continue
             if _is_router(entry):
                 routers[address] = _router_info(address, entry)
-            if not _is_contact_sensor(entry):
+            if not _is_sensor(entry):
                 continue
             seen.add(address)
             friendly = entry.get("friendly_name") or address
@@ -503,7 +514,7 @@ class Zigbee2MqttContactSensorProvider:
                 detail="The device started joining but the interview did not finish",
             )
         elif status == "successful":
-            if _is_contact_sensor(data):
+            if _is_sensor(data):
                 await self._end_pairing(PairingOutcome.JOINED, sensor_id=address)
             elif _is_router(data):
                 # Somebody who buys a plug to extend the mesh has succeeded at
@@ -543,6 +554,15 @@ class Zigbee2MqttContactSensorProvider:
             return
 
         state = _contact_state(document.get("contact"), snapshot.state)
+        # A thermometer's readings, each kept from before when this report
+        # left it out. Aqara sends all three together, but a partial report
+        # is not a reason to forget a humidity measured a minute ago.
+        readings = {}
+        if snapshot.is_climate:
+            state = ContactState.UNKNOWN
+            for name in _READINGS:
+                value = valid_reading(name, document.get(name))
+                readings[name] = value if value is not None else getattr(snapshot, name)
         battery = _battery(document.get("battery"), snapshot.battery)
         # Signal strength of the hop we just heard. Unlike battery it rides
         # along with every report, so it is known from the first message.
@@ -555,9 +575,12 @@ class Zigbee2MqttContactSensorProvider:
         # Zigbee2MQTT; without it the receive time is the best available, and
         # is wrong only across a restart.
         stamp = _parse_stamp(document.get("last_seen")) or self._aware_now()
-        changed = state != snapshot.state
+        changed = state != snapshot.state or any(
+            readings[name] != getattr(snapshot, name) for name in readings
+        )
         updated = _replace(
             snapshot,
+            **readings,
             state=state,
             battery=battery,
             link_quality=link,
@@ -580,11 +603,21 @@ class Zigbee2MqttContactSensorProvider:
         # just been heard from, every time the application started — which is
         # the one moment somebody is most likely to be looking.
         heard = _parse_stamp(meta.get("last_seen")) or stamp
+        # The hardware decides whether this is a thermometer. For a contact
+        # the door/window choice is the person's, and is what the metadata
+        # remembers; a contact whose metadata somehow says "climate" is still
+        # a contact, and becomes a window rather than a thermometer.
+        if _is_climate_sensor(entry):
+            kind = SensorKind.CLIMATE
+        else:
+            kind = _valid_kind(meta.get("kind") or SensorKind.WINDOW)
+            if not kind.is_contact:
+                kind = SensorKind.WINDOW
         return ContactSnapshot(
             sensor_id=address,
             provider_id=f"zigbee2mqtt:{address}",
             name=meta.get("name") or _default_name(entry, address),
-            kind=_valid_kind(meta.get("kind") or SensorKind.WINDOW),
+            kind=kind,
             zone_id=meta.get("zone_id"),
             state=ContactState.UNKNOWN,
             available=False,
@@ -597,6 +630,13 @@ class Zigbee2MqttContactSensorProvider:
             link_quality=_stored_reading(meta.get("link_quality"), 255),
             changed_at=stamp,
             last_seen_at=heard,
+            # A room temperature is a measurement too, and is restored on the
+            # same terms: with the time it was taken, which is what lets the
+            # automation refuse to act on one that has gone stale.
+            **(
+                {name: valid_reading(name, meta.get(name)) for name in _READINGS}
+                if kind is SensorKind.CLIMATE else {}
+            ),
         )
 
     async def _store(self, snapshot: ContactSnapshot) -> ContactSnapshot:
@@ -627,6 +667,9 @@ class Zigbee2MqttContactSensorProvider:
             "last_seen": snapshot.last_seen_at.isoformat(),
             "battery": snapshot.battery,
             "link_quality": snapshot.link_quality,
+            "temperature": snapshot.temperature,
+            "humidity": snapshot.humidity,
+            "pressure": snapshot.pressure,
         }
         self._save_metadata(self._metadata)
 
@@ -737,14 +780,37 @@ def _router_info(address: str, entry: dict) -> RouterInfo:
     )
 
 
-def _is_contact_sensor(entry: dict) -> bool:
+def _exposed_properties(entry: dict) -> set:
     definition = entry.get("definition")
     if not isinstance(definition, dict):
-        return False
-    return any(
-        isinstance(expose, dict) and expose.get("property") == "contact"
+        return set()
+    return {
+        expose.get("property")
         for expose in _exposes(definition)
+        if isinstance(expose, dict)
+    }
+
+
+def _is_contact_sensor(entry: dict) -> bool:
+    return "contact" in _exposed_properties(entry)
+
+
+def _is_climate_sensor(entry: dict) -> bool:
+    """A room thermometer: reports ``temperature`` and has no contact.
+
+    Routers are excluded even if they expose one. A mains device with a room
+    thermometer is rare, and the router list is where it is already shown.
+    """
+    properties = _exposed_properties(entry)
+    return (
+        "temperature" in properties
+        and "contact" not in properties
+        and not _is_router(entry)
     )
+
+
+def _is_sensor(entry: dict) -> bool:
+    return _is_contact_sensor(entry) or _is_climate_sensor(entry)
 
 
 def _exposes(definition: dict) -> list:
@@ -797,7 +863,7 @@ def _valid_kind(kind: SensorKind | str) -> SensorKind:
     try:
         return SensorKind(kind)
     except (TypeError, ValueError) as exc:
-        raise ValueError("kind must be door or window") from exc
+        raise ValueError("kind must be door, window or climate") from exc
 
 
 def _replace(item: ContactSnapshot, **changes) -> ContactSnapshot:

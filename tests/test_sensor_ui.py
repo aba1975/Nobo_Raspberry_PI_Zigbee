@@ -656,7 +656,8 @@ def test_a_repeater_is_not_reported_as_a_broken_sensor():
     )
 
     assert "is-warn" in markup
-    assert "not a contact sensor" in markup
+    # Not "not a contact sensor": a thermometer is a sensor this can use too.
+    assert "not a sensor this can use" in markup
     assert "TRETAKT" in markup
 
 

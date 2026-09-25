@@ -84,6 +84,10 @@ def _render_zone(zone):
       const sensorZoneHeadline = () => '';
       const sensorRuleLine = () => null;
       const sensorStatus = () => '';
+      const zoneSensorStrips = () => '';
+      const zoneNeedsSensorAttention = () => false;
+      const climateOf = (z) => (z.climate && z.climate.sensor_count ? z.climate : null);
+      const fmtHumidity = (v) => `${Math.round(v)} %%`;
       const zoneOverrideBadge = () => '';
       const renderSetpointDriftBadge = () => '';
       const Nobo = {
@@ -93,6 +97,7 @@ def _render_zone(zone):
         targetTemp: (z) => z.comfort_temperature == null ? null : z.comfort_temperature,
         bigTemp: (v) => `${v}`,
         fmtTemp: (v) => `${v}`,
+        fmtDuration: (v) => `${v} seconds`,
         deviceImg: () => '<img/>',
         icon: (n) => `<svg data-icon="${n}"/>`,
       };
@@ -170,3 +175,50 @@ def test_an_empty_zone_offers_no_temperature_to_step():
 def test_the_empty_badge_is_quieter_than_the_dial_one():
     assert ".badge-empty" in CSS
     assert "var(--ink-faint)" in CSS.split(".badge-empty")[1][:200]
+
+
+# -- rooms watched by sensors ------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_with_only_sensors_is_monitoring_not_empty():
+    """A bedroom with a window contact and no heater is a first-class
+    monitoring-only room. "Empty" invited somebody to add a heater it was
+    never meant to have."""
+    markup = _render_zone(_zone(sensors=[{"sensor_id": "s1"}]))
+
+    assert "Monitoring only" in markup, markup
+    assert ">Empty<" not in markup
+    assert "No heater or sensor" not in markup
+    assert "Set on heater" not in markup
+    assert "data-step" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_thermometer_fills_in_the_missing_temperature():
+    """Most Nobø receivers measure nothing, so the card said "No sensor". With
+    an Aqara thermometer in the room the server fills the reading in, and the
+    card shows it with the humidity beside it."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+        current_temperature=21.3, temperature_source="sensor",
+        climate={"sensor_count": 1, "humidity": 45.2, "stale_after_seconds": 10800},
+    ))
+
+    assert "now 21.3" in markup, markup
+    assert "45 %" in markup
+    assert "No sensor" not in markup
+    assert "room thermometer" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_silent_thermometer_is_not_the_same_as_no_thermometer():
+    """A thermometer whose readings have gone stale is a fault worth seeing,
+    not the ordinary "this room cannot measure" state."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+        climate={"sensor_count": 1, "humidity": None, "stale_after_seconds": 10800},
+    ))
+
+    assert "No recent reading" in markup, markup
+    assert ">No sensor<" not in markup

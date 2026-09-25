@@ -178,6 +178,74 @@ def other_device(address: str, *, friendly_name: Optional[str] = None) -> dict:
     }
 
 
+def climate_device(
+    address: str,
+    *,
+    friendly_name: Optional[str] = None,
+    model: str = "WSDCGQ11LM",
+) -> dict:
+    """A ``bridge/devices`` entry shaped like an Aqara room thermometer.
+
+    The WSDCGQ11LM temperature, humidity and pressure sensor, with the exposes
+    Zigbee2MQTT publishes for it. Not yet checked against one on this radio:
+    none had arrived when this was written, so the shape follows Zigbee2MQTT's
+    device definition rather than a captured join.
+    """
+    def numeric(name: str, unit: str, **extra) -> dict:
+        return {
+            "type": "numeric", "name": name, "property": name,
+            "access": 1, "unit": unit, **extra,
+        }
+
+    return {
+        "ieee_address": address,
+        "friendly_name": friendly_name or address,
+        "type": "EndDevice",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": model,
+            "vendor": "Aqara",
+            "description": "Temperature, humidity and pressure sensor",
+            "exposes": [
+                numeric("battery", "%", value_min=0, value_max=100,
+                        category="diagnostic"),
+                numeric("temperature", "°C"),
+                numeric("humidity", "%"),
+                numeric("pressure", "hPa"),
+                numeric("voltage", "mV", category="diagnostic"),
+                numeric("linkquality", "lqi", value_min=0, value_max=255,
+                        category="diagnostic"),
+            ],
+        },
+    }
+
+
+def chip_thermometer_device(address: str, *, friendly_name: Optional[str] = None) -> dict:
+    """A battery device whose only temperature is its own chip's.
+
+    Aqara buttons and some contacts report ``device_temperature``: the inside
+    of the plastic, not the room. It must never be taken for a thermometer.
+    """
+    return {
+        "ieee_address": address,
+        "friendly_name": friendly_name or address,
+        "type": "EndDevice",
+        "supported": True,
+        "disabled": False,
+        "definition": {
+            "model": "WXKG11LM",
+            "vendor": "Aqara",
+            "description": "Wireless mini switch",
+            "exposes": [
+                {"type": "enum", "name": "action", "property": "action", "access": 1},
+                {"type": "numeric", "name": "device_temperature",
+                 "property": "device_temperature", "access": 1, "unit": "°C"},
+            ],
+        },
+    }
+
+
 def unhelpful_device(address: str, *, friendly_name: Optional[str] = None) -> dict:
     """A battery device that is neither a contact sensor nor a router.
 

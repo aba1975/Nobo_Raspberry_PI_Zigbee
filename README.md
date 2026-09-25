@@ -87,6 +87,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Left-open warnings** | A room says which of its openings is open, and how many. After a delay you choose — immediately, or up to an hour — it becomes a warning you cannot miss. Offline is shown as its own state, because "I cannot tell you" is not the same as "it is shut". |
 | **Heating when something is open** | Optionally put the room into Away, Eco or Comfort, or hand it back to its schedule, while a contact stays open. Only an override this feature applied is ever released, and Comfort is never sent to "put things back". |
 | **Leaving with something open** | If the house is on Away and anything is open, the front page says so and names the rooms, with no delay — being away is what changes the stakes. |
+| **Room thermometers** | Aqara temperature, humidity and pressure sensors pair the same way. A room with one shows its temperature where the heater reports none, and humidity and pressure in the room. Each room can have a maximum and a minimum: warn only, or warn and hold Eco or Away while too warm, or Eco or Comfort while too cold, until it is half a degree back inside. See [Room thermometers](docs/SENSORS.md#room-thermometers). Not yet tested with a real thermometer. |
 | **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. |
 
 ### Heating control
@@ -184,7 +185,9 @@ models this software knows, only the **SW4** control panel has a thermometer.
 The NTB-2R, the R80 RDC 700 and every other receiver control the temperature
 without reporting it, so a blank room temperature is correct behaviour and not
 a fault. It is not the setpoint, and the app will not substitute one. This
-matters beyond cosmetics: it decides which [alerts](#alerts) can work.
+matters beyond cosmetics: it decides which [alerts](#alerts) can work. The one
+way to get a room temperature is a Zigbee room thermometer — see
+[Room thermometers](docs/SENSORS.md#room-thermometers).
 **Confirmed on a real hub during commissioning:** every component reported
 `tempsensor_for_zone_id = None` and the hub's temperature table was empty.
 
@@ -791,7 +794,10 @@ while you are away, you will know.
 person has access, and an **away period starting or ending** confirms a planned
 trip actually took effect.
 
-That is the honest list. It will not tell you a pipe is freezing.
+That is the honest list. It will not tell you a pipe is freezing — unless
+the room has a Zigbee thermometer, in which case the optional **A room gets too
+cold** and **A room gets too warm** alerts do exactly that, from the sensor
+rather than the hub. See [Room thermometers](docs/SENSORS.md#room-thermometers).
 
 **And there is no good workaround on this hardware.** A smart plug with a local
 API would give the "running constantly" and "lost power" signals — but only for

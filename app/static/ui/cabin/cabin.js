@@ -375,14 +375,16 @@
         const confirm = root.querySelector('#pwConfirm').value;
         if (next.length < 8) { Nobo.toast('Use at least 8 characters', 'error'); return; }
         if (next !== confirm) { Nobo.toast('The new passwords do not match', 'error'); return; }
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           await Nobo.api.changePassword(current, next);
           closeSheet();
           Nobo.toast('Password changed');
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -939,11 +941,13 @@
   }
 
   function sensorKindLabel(sensor) {
+    if (sensor && sensor.kind === 'climate') return 'Thermometer';
     return sensor && sensor.kind === 'door' ? 'Door' : 'Window';
   }
 
   function sensorIcon(sensor, className = '') {
-    const kind = sensor && sensor.kind === 'door' ? 'door' : 'window';
+    const kind = sensor && sensor.kind === 'climate' ? 'thermo'
+      : sensor && sensor.kind === 'door' ? 'door' : 'window';
     return `<span class="sensor-visual ${className}" aria-hidden="true">${Nobo.icon(kind)}</span>`;
   }
 
@@ -979,7 +983,8 @@
      when they are all the same thing. Mixed doors and windows fall back to the
      neutral word rather than picking one and being wrong about the other. */
   function sensorGroupNoun(sensors) {
-    const kinds = new Set(sensors.map(item => item.kind === 'door' ? 'door' : 'window'));
+    const kinds = new Set(sensors.map(item => item.kind === 'door' ? 'door'
+      : item.kind === 'climate' ? 'thermometer' : 'window'));
     const noun = kinds.size === 1 ? [...kinds][0] : 'sensor';
     return sensors.length === 1 ? noun : `${noun}s`;
   }
@@ -998,7 +1003,27 @@
       action_when_open: policy.action_when_open || 'nothing',
       action_delay_seconds: policy.action_delay_seconds ?? 300,
       override_all_modes: policy.override_all_modes === true,
+      temperature_max: policy.temperature_max ?? null,
+      action_when_too_warm: policy.action_when_too_warm || 'nothing',
+      temperature_min: policy.temperature_min ?? null,
+      action_when_too_cold: policy.action_when_too_cold || 'nothing',
     };
+  }
+
+  /* The fields a zone's rules go back to the server with. One list, used by
+     every writer, so a rule added later cannot be dropped by whichever of them
+     was not updated. */
+  const SENSOR_POLICY_FIELDS = [
+    'warning_delay_seconds', 'action_when_open', 'action_delay_seconds',
+    'override_all_modes', 'temperature_max', 'action_when_too_warm',
+    'temperature_min', 'action_when_too_cold',
+  ];
+
+  function sensorPolicyBody(zoneId) {
+    const policy = sensorPolicyFor(zoneId);
+    const body = {};
+    SENSOR_POLICY_FIELDS.forEach(field => { body[field] = policy[field]; });
+    return body;
   }
 
   /* What the heating rule is doing, in words a person can act on. Both the
@@ -1159,6 +1184,7 @@
     const sensors = [];
     for (const zone of list) {
       for (const sensor of (zone && zone.sensors) || []) sensors.push(sensor);
+      for (const sensor of (zone && zone.climate_sensors) || []) sensors.push(sensor);
     }
     if (!sensors.length) return 'On, none added yet';
 
@@ -1203,8 +1229,16 @@
   }
 
   function sensorRow(sensor, admin) {
-    const open = sensor.available && sensor.state === 'open';
-    const label = sensor.available ? sensorStateLabel(sensor.state) : 'Offline';
+    const climate = sensor.kind === 'climate';
+    const open = !climate && sensor.available && sensor.state === 'open';
+    /* A thermometer has no open or closed; its state is the reading. */
+    const label = !sensor.available ? 'Offline'
+      : climate
+        ? (sensor.temperature == null ? 'No reading yet' : `${Nobo.fmtTemp(sensor.temperature)}\u00B0`)
+        : sensorStateLabel(sensor.state);
+    const stateClass = !sensor.available ? 'unavailable'
+      : climate ? (sensor.temperature == null ? 'unknown' : 'reading')
+        : sensor.state;
     const low = sensor.battery != null && sensor.battery <= 20;
     /* A battery sensor reports its level on its own schedule, and Aqara warns
        that can take up to a day. Rendering nothing for a level we have not
@@ -1225,11 +1259,13 @@
        like a healthy one, and whatever it last said is still being believed.
        So the age of that last word is shown once it gets old, well before
        anything is willing to call it offline. */
+    const extras = climate ? climateExtras(sensor) : '';
+    const kindText = extras ? `${sensorKindLabel(sensor)} · ${extras}` : sensorKindLabel(sensor);
     const detail = !sensor.available
       ? `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`
-      : sensorIsStale(sensor)
-        ? `${sensorKindLabel(sensor)} · nothing heard since ${Nobo.fmtAgo(sensor.last_seen_at)}`
-        : sensorKindLabel(sensor);
+      : (climate ? climateReadingIsStale(sensor) : sensorIsStale(sensor))
+        ? `${kindText} · nothing heard since ${Nobo.fmtAgo(sensor.last_seen_at)}`
+        : kindText;
     return `
       <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'}">
         ${sensorIcon(sensor)}
@@ -1238,7 +1274,7 @@
           <small>${esc(detail)}</small>
         </span>
         <span class="sensor-facts">
-          <span class="sensor-state sensor-${esc(sensor.available ? sensor.state : 'unavailable')}">${esc(label)}</span>
+          <span class="sensor-state sensor-${esc(stateClass)}">${esc(label)}</span>
           ${battery}
           ${sensorSignal(sensor)}
         </span>
@@ -1343,8 +1379,341 @@
       </section>`;
   }
 
+  /* ------------------------------------------------------------------
+   * Room thermometers
+   *
+   * A temperature sensor is not a contact, and nothing here counts it as one.
+   * It has its own list on the zone (`climate_sensors`), its own summary
+   * (`zone.climate`) and its own card. The reading shown is the one the
+   * server's rule decided on - fresh, available thermometers, averaged - so
+   * the number on screen cannot disagree with what the heating is doing.
+   * ---------------------------------------------------------------- */
+
+  const CLIMATE_WARM_ACTIONS = ['nothing', 'eco', 'away'];
+  const CLIMATE_COLD_ACTIONS = ['nothing', 'eco', 'comfort'];
+
+  /* The zone's climate summary, but only when it has a thermometer in it. */
+  function climateOf(zone) {
+    const climate = zone && zone.climate;
+    return climate && climate.sensor_count ? climate : null;
+  }
+
+  /* A limit is usually a whole degree, and "24.0" reads as a measurement. */
+  function fmtLimit(value) {
+    return Nobo.fmtTemp(value, Number.isInteger(value) ? 0 : 1);
+  }
+
+  function fmtHumidity(value) { return `${Math.round(value)}\u00A0%`; }
+  function fmtPressure(value) { return `${Math.round(value)}\u00A0hPa`; }
+
+  /* Humidity and pressure, for the detail line under a thermometer's name. */
+  function climateExtras(sensor) {
+    const parts = [];
+    if (sensor.humidity != null) parts.push(fmtHumidity(sensor.humidity));
+    if (sensor.pressure != null) parts.push(fmtPressure(sensor.pressure));
+    return parts.join(' · ');
+  }
+
+  /* Past this, the server has stopped using the reading, so the row says so
+     rather than showing a number the rule is no longer believing. */
+  function climateReadingIsStale(sensor, staleSeconds = 3 * 3600) {
+    if (!sensor.last_seen_at) return false;
+    const heard = new Date(sensor.last_seen_at).getTime();
+    if (Number.isNaN(heard)) return false;
+    return (Date.now() - heard) > staleSeconds * 1000;
+  }
+
+  function climateActionLabel(value) {
+    return {
+      nothing: 'Warn only',
+      eco: 'Warn and set Eco',
+      away: 'Warn and set Away',
+      comfort: 'Warn and set Comfort',
+    }[value] || 'Warn only';
+  }
+
+  function climateActionHint(value, warm) {
+    if (value === 'nothing') return 'The heating is left exactly as it is.';
+    const until = warm
+      ? 'until it is back half a degree under the maximum'
+      : 'until it is back half a degree over the minimum';
+    return {
+      eco: warm
+        ? `Drop the room to its eco temperature ${until}.`
+        : `Raise the room to at least its eco temperature ${until} — useful when the house is on Away.`,
+      away: `Drop the room to the fixed 7 °C anti-frost temperature ${until}.`,
+      comfort: `Raise the room to its comfort temperature ${until}.`,
+    }[value] || '';
+  }
+
+  function climateConditionTitle(climate) {
+    return climate.condition === 'too_warm' ? 'Too warm'
+      : climate.condition === 'too_cold' ? 'Too cold' : '';
+  }
+
+  function climateConditionDetail(climate) {
+    const now = climate.temperature == null
+      ? '' : `${Nobo.fmtTemp(climate.temperature)}\u00B0 now · `;
+    return climate.condition === 'too_warm'
+      ? `${now}maximum ${fmtLimit(climate.temperature_max)}\u00B0`
+      : `${now}minimum ${fmtLimit(climate.temperature_min)}\u00B0`;
+  }
+
+  /* What the temperature rule is doing about it, as plain text. */
+  function climateRuleLine(zone) {
+    const climate = climateOf(zone);
+    if (!climate || !climate.condition) return null;
+    const warm = climate.condition === 'too_warm';
+    const action = warm ? climate.action_when_too_warm : climate.action_when_too_cold;
+    if (climate.owned_action) {
+      const limit = warm
+        ? `below ${fmtLimit(climate.temperature_max - climate.hysteresis)}\u00B0`
+        : `above ${fmtLimit(climate.temperature_min + climate.hysteresis)}\u00B0`;
+      return {
+        tone: 'active',
+        text: `Holding ${sensorModeWord(climate.owned_action)} until it is back ${limit}.`,
+      };
+    }
+    if (action === 'nothing') {
+      return { tone: 'muted', text: 'Warning only — the heating is left as it is.' };
+    }
+    const target = sensorModeWord(action);
+    if (climate.action_status === 'blocked') {
+      return {
+        tone: 'muted',
+        text: {
+          colder_mode: `The room is already running colder than ${target}, so it stays as it is.`,
+          warmer_mode: `The room is already running at least as warm as ${target}, so it stays as it is.`,
+          contact_open: 'A door or window is open, and its own rule has the room until it closes.',
+          no_equipment: 'Monitoring only — there is no heater in this room.',
+          disconnected: 'The hub cannot be reached, so the heating was not changed.',
+          demo_sensors: 'Demo sensors never change a real heater, so the heating is left as it is.',
+        }[climate.block_reason] || 'The heating was left as it is.',
+      };
+    }
+    if (climate.action_status === 'pending') {
+      return { tone: 'muted', text: `About to set this room to ${target}.` };
+    }
+    return null;
+  }
+
+  /* The strip on the front-page card: only when the room is out of range.
+     A reading that is fine is already on the card as "now 21°". */
+  function climateZoneHeadline(zone) {
+    const climate = climateOf(zone);
+    if (!climate || !climate.condition) return '';
+    const rule = climateRuleLine(zone);
+    return `<div class="zsensor zsensor-warning zclimate zclimate-${esc(climate.condition)}">
+      <span class="sensor-visual" aria-hidden="true">${Nobo.icon(
+        climate.condition === 'too_cold' ? 'frost' : 'thermo')}</span>
+      <span class="zsensor-copy">
+        <strong>${esc(climateConditionTitle(climate))}</strong>
+        <small>${esc(climateConditionDetail(climate))}</small>
+      </span>
+      ${rule ? `<small class="zsensor-rule">${esc(rule.text)}</small>` : ''}
+    </div>`;
+  }
+
+  /* Contacts and thermometers share one place on the card. When a room has
+     something to say about both, they stack rather than overlap. */
+  function zoneSensorStrips(zone) {
+    const contact = sensorStatus(zone);
+    const climate = zone.sensor_summary ? climateZoneHeadline(zone) : '';
+    if (contact && climate) {
+      return `<div class="zsensor-stack">${contact}${climate}</div>`;
+    }
+    return contact || climate;
+  }
+
+  function climateRuleSummary(zone) {
+    const policy = sensorPolicyFor(zone.zone_id);
+    if (!policy) return '';
+    const admin = state.me && state.me.role === 'admin';
+    const parts = [];
+    parts.push(policy.temperature_max == null
+      ? 'No maximum'
+      : `Above ${fmtLimit(policy.temperature_max)}\u00B0: ${
+          climateActionLabel(policy.action_when_too_warm).toLowerCase()}`);
+    parts.push(policy.temperature_min == null
+      ? 'no minimum'
+      : `below ${fmtLimit(policy.temperature_min)}\u00B0: ${
+          climateActionLabel(policy.action_when_too_cold).toLowerCase()}`);
+    return `
+      <div class="sensor-rule">
+        <span class="sensor-rule-copy">
+          <strong>When it gets too warm or too cold</strong>
+          <small>${esc(parts.join(' · '))}</small>
+        </span>
+        ${admin ? `<button class="btn btn-small" type="button"
+          data-edit-climate-policy="${esc(zone.zone_id)}">Change</button>` : ''}
+      </div>`;
+  }
+
+  /* The zone-detail card. Shown only once the room has a thermometer: a card
+     for every room saying "no temperature sensor" would be the feature
+     advertising itself, and adding one goes through the same Add sensor as a
+     contact does. */
+  function climateStatus(zone) {
+    if (!zone.sensor_summary) return '';
+    const climate = climateOf(zone);
+    if (!climate) return '';
+    const items = zone.climate_sensors || [];
+    const admin = state.me && state.me.role === 'admin';
+    const rule = climateRuleLine(zone);
+
+    const warning = climate.condition
+      ? `<div class="sensor-warning climate-warning">
+           <span class="sensor-warning-icon" aria-hidden="true">${Nobo.icon(
+             climate.condition === 'too_cold' ? 'frost' : 'thermo')}</span>
+           <span>
+             <strong>${esc(climateConditionTitle(climate))}</strong>
+             <small>${esc(climateConditionDetail(climate))}${
+               climate.condition_since ? ` · started ${esc(Nobo.fmtAgo(climate.condition_since))}` : ''}</small>
+           </span>
+         </div>`
+      : '';
+
+    const fact = (label, value) => `
+      <div class="climate-fact">
+        <span>${esc(label)}</span>
+        <strong>${value}</strong>
+      </div>`;
+    const readings = climate.temperature == null
+      ? `<div class="sensor-offline-note">
+           <strong>No recent reading</strong>
+           <small>Nothing has been heard from ${items.length === 1 ? 'this thermometer' : 'these thermometers'}
+             in the last ${esc(Nobo.fmtDuration(climate.stale_after_seconds))}, so the
+             temperature rule is not acting on it.</small>
+         </div>`
+      : `<div class="climate-facts">
+           ${fact('Temperature', `${esc(Nobo.fmtTemp(climate.temperature))}\u00B0C`)}
+           ${climate.humidity != null ? fact('Humidity', esc(fmtHumidity(climate.humidity))) : ''}
+           ${climate.pressure != null ? fact('Pressure', esc(fmtPressure(climate.pressure))) : ''}
+         </div>
+         <p class="zd-sub climate-updated">${esc([
+           climate.updated_at ? `Updated ${Nobo.fmtAgo(climate.updated_at)}` : '',
+           climate.fresh_count > 1 ? `average of ${climate.fresh_count} thermometers` : '',
+           zone.temperature_source === 'hub' ? 'the heater\u2019s own reading is shown above' : '',
+         ].filter(Boolean).join(' · '))}</p>`;
+
+    return `
+      <section class="card sensor-card climate-card">
+        <div class="card-head">
+          <h2>Temperature and humidity</h2>
+          <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+        </div>
+        <div aria-live="polite">${warning}</div>
+        ${readings}
+        ${rule ? `<p class="sensor-rule-line is-${rule.tone}">${esc(rule.text)}</p>` : ''}
+        <ul class="sensor-list">${items.map(item => sensorRow(item, admin)).join('')}</ul>
+        ${climateRuleSummary(zone)}
+      </section>`;
+  }
+
+  function thresholdOptions(value, from, to, noneLabel) {
+    const choices = [];
+    for (let t = from; t <= to + 1e-9; t += 0.5) choices.push(Math.round(t * 10) / 10);
+    // A value saved through the API, outside this list, stays selectable.
+    if (value != null && !choices.includes(Number(value))) {
+      choices.push(Number(value));
+      choices.sort((a, b) => a - b);
+    }
+    return `<option value="" ${value == null ? 'selected' : ''}>${esc(noneLabel)}</option>` +
+      choices.map(t => `<option value="${t}" ${Number(value) === t && value != null ? 'selected' : ''}
+        >${esc(fmtLimit(t))} \u00B0C</option>`).join('');
+  }
+
+  function editClimatePolicySheet(zoneId) {
+    const zone = state.zones.find(z => String(z.zone_id) === String(zoneId));
+    const policy = sensorPolicyFor(zoneId);
+    if (!zone || !policy) return;
+    const actionOptions = (list, chosen) => list.map(value => `<option value="${value}"
+      ${chosen === value ? 'selected' : ''}
+      ${!policy.has_equipment && value !== 'nothing' ? 'disabled' : ''}
+      >${esc(climateActionLabel(value))}</option>`).join('');
+
+    openSheet(`Temperature rules for ${zone.name}`, `
+      <p class="zd-sub">Warnings, and optionally a change of heating, when the
+      room's thermometer reads outside these limits.</p>
+
+      <label class="field"><span>Maximum temperature</span>
+        <select id="cpMax">${thresholdOptions(policy.temperature_max, 10, 35, 'No maximum')}</select>
+      </label>
+      <label class="field" id="cpWarmField"><span>When it is warmer than that</span>
+        <select id="cpWarm">${actionOptions(CLIMATE_WARM_ACTIONS, policy.action_when_too_warm)}</select>
+        <small class="field-hint" id="cpWarmHint"></small>
+      </label>
+
+      <label class="field"><span>Minimum temperature</span>
+        <select id="cpMin">${thresholdOptions(policy.temperature_min, 3, 25, 'No minimum')}</select>
+      </label>
+      <label class="field" id="cpColdField"><span>When it is colder than that</span>
+        <select id="cpCold">${actionOptions(CLIMATE_COLD_ACTIONS, policy.action_when_too_cold)}</select>
+        <small class="field-hint" id="cpColdHint"></small>
+      </label>
+
+      <div class="note">The warning starts as soon as a reading crosses the
+        limit, and ends once the room is half a degree back inside it, so a
+        reading hovering on the line does not flap. A maximum only ever makes
+        the room colder and a minimum only warmer: a room already running
+        colder than Eco is not raised to Eco by a maximum. While a door or
+        window rule is changing the heating, it has the room.</div>
+      ${policy.has_equipment ? '' : `<div class="note">This room has no Nobø
+        heater, so it can warn but not change the heating.</div>`}
+
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save rules</button>
+      </div>`, (root) => {
+      const max = root.querySelector('#cpMax');
+      const min = root.querySelector('#cpMin');
+      const warm = root.querySelector('#cpWarm');
+      const cold = root.querySelector('#cpCold');
+      const sync = () => {
+        root.querySelector('#cpWarmField').hidden = max.value === '';
+        root.querySelector('#cpColdField').hidden = min.value === '';
+        root.querySelector('#cpWarmHint').textContent = climateActionHint(warm.value, true);
+        root.querySelector('#cpColdHint').textContent = climateActionHint(cold.value, false);
+      };
+      sync();
+      [max, min, warm, cold].forEach(control => { control.onchange = sync; });
+
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const high = max.value === '' ? null : Number(max.value);
+        const low = min.value === '' ? null : Number(min.value);
+        if (high != null && low != null && high - low < 1) {
+          Nobo.toast('The maximum has to be at least 1 °C above the minimum', 'error');
+          return;
+        }
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          state.sensorSettings = await Nobo.api.setSensorSettings({
+            enabled: true,
+            zones: sensorPolicyPayload(zoneId, {
+              temperature_max: high,
+              action_when_too_warm: high == null ? 'nothing' : warm.value,
+              temperature_min: low,
+              action_when_too_cold: low == null ? 'nothing' : cold.value,
+            }),
+          });
+          closeSheet();
+          Nobo.toast('Temperature rules saved');
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
   function configuredSensor(sensorId) {
-    return state.zones.flatMap(zone => zone.sensors || []).find(
+    return state.zones.flatMap(zone => [
+      ...(zone.sensors || []), ...(zone.climate_sensors || []),
+    ]).find(
       sensor => String(sensor.sensor_id) === String(sensorId)
     ) || (state.sensorDevices || []).find(
       sensor => String(sensor.sensor_id) === String(sensorId)
@@ -1366,7 +1735,7 @@
   const PAIRING_REPORT = {
     joined:    { tone: 'ok',    icon: 'check',  title: 'Sensor found' },
     router:    { tone: 'ok',    icon: 'signal', title: 'Repeater added' },
-    ignored:   { tone: 'warn',  icon: 'alert',  title: 'That is not a contact sensor' },
+    ignored:   { tone: 'warn',  icon: 'alert',  title: 'That is not a sensor this can use' },
     failed:    { tone: 'error', icon: 'alert',  title: 'Pairing failed' },
     cancelled: { tone: 'idle',  icon: 'normal', title: 'Pairing stopped' },
     expired:   { tone: 'warn',  icon: 'alert',  title: 'Nothing joined in time' },
@@ -1392,7 +1761,7 @@
       const what = pairing.detail ? `${pairing.detail}. ` : '';
       return {
         ...known,
-        detail: `${what}It is not a contact sensor, but it will relay for sensors near it. `
+        detail: `${what}It is not a sensor, but it will relay for sensors near it. `
           + 'Pair those after it, so they can choose it.',
       };
     }
@@ -1416,14 +1785,32 @@
       </div>`;
   }
 
-  function sensorDetailsFields(sensor, defaultZoneId) {
+  /* Door or window is the user's to say, because the hardware is identical.
+     A thermometer is not: whether a device measures temperature is decided by
+     what it is, so a real one that joined is simply labelled, and only a
+     simulated sensor - which is whatever it is created as - offers the
+     choice. */
+  function sensorKindField(id, sensor, anyKind) {
+    const kind = sensor && sensor.kind;
+    if (kind === 'climate' && !anyKind) {
+      return `<input id="${id}" type="hidden" value="climate">
+        <div class="field"><span>Sensor type</span>
+          <strong>Temperature sensor</strong></div>`;
+    }
     return `
       <label class="field"><span>Sensor type</span>
-        <select id="pairSensorKind">
-          <option value="window" ${(sensor && sensor.kind === 'door') ? '' : 'selected'}>Window</option>
-          <option value="door" ${(sensor && sensor.kind === 'door') ? 'selected' : ''}>Door</option>
+        <select id="${id}">
+          <option value="window" ${kind === 'door' || kind === 'climate' ? '' : 'selected'}>Window</option>
+          <option value="door" ${kind === 'door' ? 'selected' : ''}>Door</option>
+          ${anyKind ? `<option value="climate" ${kind === 'climate' ? 'selected' : ''}
+            >Temperature sensor</option>` : ''}
         </select>
-      </label>
+      </label>`;
+  }
+
+  function sensorDetailsFields(sensor, defaultZoneId, { anyKind = false } = {}) {
+    return `
+      ${sensorKindField('pairSensorKind', sensor, anyKind)}
       <label class="field"><span>Name</span>
         <input id="pairSensorName" type="text" maxlength="80" autocomplete="off"
           value="${esc(sensor ? sensor.name : '')}" placeholder="Kitchen window">
@@ -1445,8 +1832,8 @@
      the whole of it. */
   function simulatedSensorSheet(defaultZoneId, replacing) {
     openSheet(replacing ? 'Replace sensor' : 'Add a sensor', `
-      <p class="zd-sub">Demo mode creates a simulated contact immediately.</p>
-      ${sensorDetailsFields(replacing, defaultZoneId)}
+      <p class="zd-sub">Demo mode creates a simulated sensor immediately.</p>
+      ${sensorDetailsFields(replacing, defaultZoneId, { anyKind: true })}
       ${replacing ? '<div class="note">The old sensor is removed only after its replacement exists.</div>' : ''}
       <div class="sheet-actions">
         <button class="btn" type="button" data-act="cancel">Cancel</button>
@@ -1458,7 +1845,9 @@
       root.querySelector('[data-act="pair"]').onclick = async (event) => {
         const name = root.querySelector('#pairSensorName').value.trim();
         if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           await Nobo.api.pairSensor({
             name,
@@ -1470,7 +1859,7 @@
           Nobo.toast(replacing ? `${name} replaced` : `${name} added`);
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -1548,7 +1937,9 @@
 
       const startButton = sheetBody.querySelector('[data-act="start"]');
       if (startButton) startButton.onclick = async (event) => {
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           pairing = await Nobo.api.startSensorPairing(254);
           joined = null;
@@ -1557,7 +1948,7 @@
           poll();
         } catch (e) {
           Nobo.toast(e.message, 'error');
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
         }
       };
 
@@ -1565,7 +1956,9 @@
       if (saveButton) saveButton.onclick = async (event) => {
         const name = sheetBody.querySelector('#pairSensorName').value.trim();
         if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           await Nobo.api.updateSensor(joined.sensor_id, {
             name,
@@ -1577,7 +1970,7 @@
           Nobo.toast(`${name} added`);
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -1673,24 +2066,30 @@
        beside a demo hub is a supported arrangement, and offering to type
        in their battery level offers to invent a hardware reading. */
     const demo = !!(state.sensorSettings && state.sensorSettings.simulated);
+    const climate = sensor.kind === 'climate';
+    const reading = (id, label, value, min, max, step) => `
+        <label class="field"><span>${esc(label)}</span>
+          <input id="${id}" type="number" min="${min}" max="${max}" step="${step}"
+            inputmode="decimal" value="${value == null ? '' : esc(value)}">
+        </label>`;
     openSheet(`Edit ${sensor.name}`, `
       <label class="field"><span>Name</span>
         <input id="editSensorName" type="text" maxlength="80" value="${esc(sensor.name)}">
       </label>
-      <label class="field"><span>Sensor type</span>
-        <select id="editSensorKind">
-          <option value="window" ${sensor.kind === 'door' ? '' : 'selected'}>Window</option>
-          <option value="door" ${sensor.kind === 'door' ? 'selected' : ''}>Door</option>
-        </select>
-      </label>
+      ${sensorKindField('editSensorKind', sensor, false)}
       ${demo ? `
         <h3>Simulated state</h3>
+        ${climate ? `
+          ${reading('editSensorTemp', 'Temperature (°C)', sensor.temperature, -40, 80, 0.1)}
+          ${reading('editSensorHumidity', 'Humidity (%)', sensor.humidity, 0, 100, 1)}
+          ${reading('editSensorPressure', 'Pressure (hPa)', sensor.pressure, 300, 1100, 1)}
+        ` : `
         <label class="field"><span>Contact</span>
           <select id="editSensorState">
             ${['closed', 'open', 'unknown'].map(value => `<option value="${value}"
               ${sensor.state === value ? 'selected' : ''}>${esc(sensorStateLabel(value))}</option>`).join('')}
           </select>
-        </label>
+        </label>`}
         <label class="switch"><span class="switch-text"><strong>Available</strong>
           <span>Simulate whether the provider can currently reach it.</span></span>
           <input id="editSensorAvailable" type="checkbox" ${sensor.available ? 'checked' : ''}>
@@ -1712,7 +2111,9 @@
       root.querySelector('[data-act="save"]').onclick = async (event) => {
         const name = root.querySelector('#editSensorName').value.trim();
         if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           await Nobo.api.updateSensor(sensor.sensor_id, {
             name,
@@ -1721,8 +2122,19 @@
           if (demo) {
             const battery = root.querySelector('#editSensorBattery').value;
             const lqi = root.querySelector('#editSensorLqi').value;
+            const number = (id) => {
+              const value = root.querySelector(id).value;
+              return value === '' ? undefined : Number(value);
+            };
+            const said = climate
+              ? {
+                  temperature: number('#editSensorTemp'),
+                  humidity: number('#editSensorHumidity'),
+                  pressure: number('#editSensorPressure'),
+                }
+              : { state: root.querySelector('#editSensorState').value };
             await Nobo.api.simulateSensor(sensor.sensor_id, {
-              state: root.querySelector('#editSensorState').value,
+              ...said,
               available: root.querySelector('#editSensorAvailable').checked,
               battery: battery === '' ? undefined : Number(battery),
               clear_battery: battery === '',
@@ -1734,7 +2146,7 @@
           Nobo.toast('Sensor updated');
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -1755,7 +2167,9 @@
       </div>`, (root) => {
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       root.querySelector('[data-act="move"]').onclick = async (event) => {
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           await Nobo.api.updateSensor(sensor.sensor_id, {
             zone_id: root.querySelector('#moveSensorZone').value,
@@ -1764,7 +2178,7 @@
           Nobo.toast(`${sensor.name} moved`);
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -1810,15 +2224,11 @@
   function sensorPolicyPayload(zoneId, edited) {
     const zones = {};
     Object.keys(state.sensorSettings.zones || {}).forEach(id => {
-      const policy = sensorPolicyFor(id);
-      zones[id] = {
-        warning_delay_seconds: policy.warning_delay_seconds,
-        action_when_open: policy.action_when_open,
-        action_delay_seconds: policy.action_delay_seconds,
-        override_all_modes: policy.override_all_modes,
-      };
+      zones[id] = sensorPolicyBody(id);
     });
-    zones[String(zoneId)] = edited;
+    // A sheet edits one half of a zone's rules; the other half goes back as
+    // it came rather than being reset by omission.
+    zones[String(zoneId)] = { ...(zones[String(zoneId)] || {}), ...edited };
     return zones;
   }
 
@@ -1890,7 +2300,9 @@
 
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       root.querySelector('[data-act="save"]').onclick = async (event) => {
-        event.currentTarget.disabled = true;
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
         try {
           const chosen = action.value;
           state.sensorSettings = await Nobo.api.setSensorSettings({
@@ -1906,7 +2318,7 @@
           Nobo.toast('Rules saved');
           await refresh(true);
         } catch (e) {
-          event.currentTarget.disabled = false;
+          pressed.disabled = false;
           Nobo.toast(e.message, 'error');
         }
       };
@@ -1932,6 +2344,9 @@
     root.querySelectorAll('[data-edit-sensor-policy]').forEach(button => {
       button.onclick = () => editSensorPolicySheet(button.dataset.editSensorPolicy);
     });
+    root.querySelectorAll('[data-edit-climate-policy]').forEach(button => {
+      button.onclick = () => editClimatePolicySheet(button.dataset.editClimatePolicy);
+    });
   }
 
   function zoneRow(zone) {
@@ -1949,14 +2364,24 @@
        an empty zone used to claim "Set on heater" and "Dial sets the
        temperature", inviting somebody to go and turn a dial that is not there.
        The distinguishing fact is simply whether the room contains anything. */
-    const empty = !(zone.components || []).length;
+    /* Sensors count as contents too. A room with a thermometer or a window
+       contact and no heater is a monitoring-only room, not an empty one, and
+       calling it "Empty" invited somebody to go and add a heater it was never
+       meant to have. */
+    const sensorCount = (zone.sensors || []).length + (zone.climate_sensors || []).length;
+    const noHeaters = !(zone.components || []).length;
+    const monitoring = noHeaters && sensorCount > 0;
+    const empty = noHeaters && !monitoring;
     const adjustable = key !== null && remote;
+    const climate = climateOf(zone);
 
     const scheduled = (zone.current_mode || 'normal') === 'normal';
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
     const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
 
-    const manualBadge = empty
+    const manualBadge = monitoring
+      ? `<span class="badge badge-empty" title="This zone has sensors but no heater, so it is watched and warns, but its heating cannot be changed.">Monitoring only</span>`
+      : empty
       ? `<span class="badge badge-empty" title="This zone has no heater and no sensor yet. Add a heater to control it, or a contact sensor to monitor it.">Empty</span>`
       : !remote
       ? `<span class="badge badge-manual" title="No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
@@ -1970,7 +2395,10 @@
     const more = comps.length > 3 ? `<span class="more">+${comps.length - 3}</span>` : '';
 
     let label, setBlock;
-    if (empty) {
+    if (monitoring) {
+      label = 'Watching';
+      setBlock = `<span class="set-mode">${sensorCount} ${sensorCount === 1 ? 'sensor' : 'sensors'}</span>`;
+    } else if (empty) {
       label = 'Contains';
       setBlock = `<span class="set-none">Nothing yet</span>`;
     } else if (!remote) {
@@ -1983,11 +2411,21 @@
         : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
     }
 
+    /* Humidity rides along with the temperature whenever a room thermometer
+       has one, whichever of them the temperature itself came from. */
+    const humidity = climate && climate.humidity != null
+      ? ` \u00B7 ${fmtHumidity(climate.humidity)}` : '';
+    const measuredBy = zone.temperature_source === 'sensor'
+      ? ' title="Measured by the room thermometer"' : '';
     const nowBlock = empty
       ? `<span class="set-now">No heater or sensor</span>`
-      : zone.current_temperature == null
-      ? `<span class="set-now">${remote ? 'No sensor' : 'Dial sets the temperature'}</span>`
-      : `<span class="set-now">now ${Nobo.fmtTemp(zone.current_temperature)}&deg;</span>`;
+      : zone.current_temperature != null
+      ? `<span class="set-now"${measuredBy}>now ${Nobo.fmtTemp(zone.current_temperature)}&deg;${humidity}</span>`
+      : climate
+      ? `<span class="set-now" title="The thermometer in this room has not reported for ${Nobo.fmtDuration(climate.stale_after_seconds)}.">No recent reading</span>`
+      : monitoring
+      ? `<span class="set-now">No heater</span>`
+      : `<span class="set-now">${remote ? 'No sensor' : 'Dial sets the temperature'}</span>`;
 
     const stepTitle = adjustable
       ? ''
@@ -1996,12 +2434,12 @@
           : 'Away uses a fixed system temperature');
 
     return `
-      <li class="zone ${zone.sensor_summary && zone.sensor_summary.warning_raised ? 'zone-sensor-warning' : ''}" data-zone="${esc(zone.zone_id)}">
+      <li class="zone ${zoneNeedsSensorAttention(zone) ? 'zone-sensor-warning' : ''}" data-zone="${esc(zone.zone_id)}">
         <button class="zone-open" type="button" data-open="${esc(zone.zone_id)}">
           <span>${esc(zone.name)}</span><span class="chev" aria-hidden="true">›</span>
         </button>
         <div class="zone-meta">${modeBadge}${manualBadge}${zoneOverrideBadge(zone)}${renderSetpointDriftBadge(zone)}</div>
-        ${sensorStatus(zone)}
+        ${zoneSensorStrips(zone)}
         <div class="zone-set">
           <span class="set-label">${esc(label)}</span>
           ${setBlock}
@@ -2077,8 +2515,15 @@
      set point was changed on a heater behind the application's back. Both
      already have a badge on the card; the group line only counts them. */
   function zoneNeedsAttention(zone) {
-    return !!(zone.sensor_summary && zone.sensor_summary.warning_raised)
-      || !!zone.setpoint_changed_outside;
+    return zoneNeedsSensorAttention(zone) || !!zone.setpoint_changed_outside;
+  }
+
+  /* A window left open, or a room outside its temperature limits. Only while
+     the feature is on: the zone carries no sensor fields at all otherwise. */
+  function zoneNeedsSensorAttention(zone) {
+    if (!zone.sensor_summary) return false;
+    return !!zone.sensor_summary.warning_raised
+      || !!(zone.climate && zone.climate.condition);
   }
 
   /** What a group heading says about itself.
@@ -2390,11 +2835,15 @@
     const headValue = remote
       ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
       : `<span class="zd-mode">${esc(modeLabel)}</span>`;
-    const headSub = !remote
+    const measuring = zone.current_temperature == null ? ''
+      : ' \u00B7 measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now';
+    const monitoringOnly = !(zone.components || []).length
+      && ((zone.sensors || []).length + (zone.climate_sensors || []).length) > 0;
+    const headSub = monitoringOnly
+      ? `Monitoring only \u2014 there is no heater in this zone${measuring}`
+      : !remote
       ? 'The temperature in this zone is set by the dial on each heater'
-      : `${esc(modeLabel)}${zone.current_temperature == null
-          ? ' \u00B7 no temperature sensor in this zone'
-          : ' \u00B7 measuring ' + Nobo.fmtTemp(zone.current_temperature) + '\u00B0 right now'}`;
+      : `${esc(modeLabel)}${measuring || ' \u00B7 no temperature sensor in this zone'}`;
 
     /* Both set points, always adjustable, whichever mode the zone is in.
      *
@@ -2435,7 +2884,7 @@
             <span class="zd-temp-note">set by Nobø</span>
           </div>
         </div>` : ''}
-        ${remote ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
+        ${remote || monitoringOnly ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
           from here. You can still switch the zone between comfort, eco, away and its schedule -
           turn the dial on the heater to change the temperature itself.</div>`}
         ${renderSetpointDrift(zone)}
@@ -2451,6 +2900,7 @@
       </section>
 
       ${sensorStatus(zone, true)}
+      ${climateStatus(zone)}
 
       <section class="card">
         <h2>Heaters in this zone (${devices.length})</h2>
@@ -3881,7 +4331,7 @@
        has no source to choose, so the second row simply is not there. */
     const onOff = settingRow(
       'Use contact sensors',
-      'Door and window state, left-open warnings and optional heating actions.',
+      'Door and window contacts and room thermometers, with warnings and optional heating actions.',
       segControl('sensor-enabled', [['off', 'Off'], ['on', 'On']],
         settings.enabled ? 'on' : 'off', { label: 'Use contact sensors' }));
 
@@ -3909,7 +4359,7 @@
     return settingsSection('sensors', 'Door and Window Sensor Configuration',
       !settings.enabled ? '<b>Off</b>'
         : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired`, `
-        <p class="zd-sub">Optional contact monitoring.</p>
+        <p class="zd-sub">Optional door, window and room temperature monitoring.</p>
         ${onOff}
         ${sourceRow}
         ${sourceError}
@@ -3919,7 +4369,7 @@
           </div>
           <div class="sensor-settings-summary">
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
-            <span>Open a zone to see status, battery, edit or move sensors, and choose what that zone should do when one stays open.</span>
+            <span>Open a zone to see status and battery, edit or move sensors, and choose what that zone should do when a window stays open or the temperature leaves its limits.</span>
           </div>
           ${sensorMeshNote()}
           ${unassigned.length ? `
@@ -3946,13 +4396,7 @@
     // so every zone goes back exactly as it came.
     const zones = {};
     Object.keys(state.sensorSettings.zones || {}).forEach(id => {
-      const policy = sensorPolicyFor(id);
-      zones[id] = {
-        warning_delay_seconds: policy.warning_delay_seconds,
-        action_when_open: policy.action_when_open,
-        action_delay_seconds: policy.action_delay_seconds,
-        override_all_modes: policy.override_all_modes,
-      };
+      zones[id] = sensorPolicyBody(id);
     });
     state.sensorSettings = await Nobo.api.setSensorSettings(
       provider ? { enabled, provider, zones } : { enabled, zones }

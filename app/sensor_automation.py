@@ -30,6 +30,19 @@ is written down, and on closure exactly that override is cancelled with a
 Nobø ``NORMAL``. What happens next — the global mode, the week profile — is the
 hub's business, not ours. We never send Comfort to "restore" a room, because we
 do not know that Comfort is where it came from.
+
+**Temperature rules share that one ledger.** A zone has a single zone
+override, so a room that is too warm, too cold and open at once still has one
+owner, recorded as ``owned_reason``. While an open contact's rule is due it
+alone decides — a window open in winter is not a reason to heat harder. The
+rest of the time the temperature rule does: a ceiling holds the colder of its
+action and the house, exactly as a contact rule does, and a floor holds the
+*warmer* of the two, which is the point of a floor. When one rule stops wanting
+the hold and the other still wants it, ownership passes across without the
+room being released in between; only when neither wants it is the override
+cancelled. A reading that has gone stale, or a sensor that has gone offline,
+counts as not knowing the temperature, and not knowing is never a reason to
+hold a room anywhere.
 """
 
 from __future__ import annotations
@@ -42,7 +55,9 @@ from typing import Callable, Mapping, Optional, Protocol, Sequence
 from sensor_persistence import (
     ActionWhenOpen,
     AutomationZoneState,
+    ClimateCondition,
     HOLD_ACTIONS,
+    HoldReason,
     ZoneSensorPolicy,
 )
 from sensor_provider import ContactSnapshot, ContactState
@@ -72,6 +87,19 @@ RECHECK_WHILE_OPEN_SECONDS = 60
 # and any contact anywhere in the house triggers one — would read that as
 # "somebody has taken the room off us" and send the same command again.
 SETTLING_SECONDS = 5.0
+
+# How old a climate reading may be and still be believed. An Aqara thermometer
+# reports on every half-degree change and otherwise about once an hour, so
+# three hours of silence is two missed heartbeats — long enough not to cry
+# wolf, short enough that a room is not held in Eco on the strength of a
+# temperature from this morning.
+CLIMATE_STALE_SECONDS = 3 * 3600
+
+# How far back inside a threshold a room has to come before the condition
+# clears. Without it a room sitting on its maximum, reporting 26.0 then 26.1
+# then 26.0, would warn and recover — and switch the heating — every few
+# minutes. Half a degree is the resolution the sensor reports changes at.
+CLIMATE_HYSTERESIS = 0.5
 
 
 def is_colder(candidate: str, reference: str) -> Optional[bool]:
@@ -131,9 +159,71 @@ class ActionStatus(str, Enum):
 
 class BlockReason(str, Enum):
     COLDER_MODE = "colder_mode"      # the room is already colder than the rule
+    WARMER_MODE = "warmer_mode"      # already at least as warm as a floor asks
     NO_EQUIPMENT = "no_equipment"    # monitoring-only room
     DISCONNECTED = "disconnected"    # no hub to ask
     DEMO_SENSORS = "demo_sensors"    # invented contacts, real heaters
+    CONTACT_OPEN = "contact_open"    # an open window's rule has the room
+
+
+@dataclass(frozen=True)
+class ClimateReading:
+    """A zone's room climate, from whichever of its thermometers are fresh.
+
+    Averaged, because two thermometers in one room disagree by a degree as a
+    matter of course and neither is more right. Unavailable and stale sensors
+    are left out rather than averaged in, and a zone none of whose
+    thermometers is fresh has no reading at all — which is not the same as a
+    reading of zero, and is never treated like one.
+    """
+
+    sensor_count: int = 0
+    fresh_count: int = 0
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
+    #: When the oldest reading used was taken, which is when this goes stale.
+    oldest_at: Optional[float] = None
+    newest_at: Optional[float] = None
+
+
+def climate_reading(
+    sensors: Sequence[ContactSnapshot], now: float
+) -> ClimateReading:
+    thermometers = [item for item in sensors if item.is_climate]
+    fresh = [
+        item for item in thermometers
+        if item.available
+        and item.temperature is not None
+        and now - item.last_seen_at.timestamp() <= CLIMATE_STALE_SECONDS
+    ]
+
+    def mean(name: str) -> Optional[float]:
+        values = [getattr(item, name) for item in fresh if getattr(item, name) is not None]
+        return round(sum(values) / len(values), 1) if values else None
+
+    stamps = [item.last_seen_at.timestamp() for item in fresh]
+    return ClimateReading(
+        sensor_count=len(thermometers),
+        fresh_count=len(fresh),
+        temperature=mean("temperature"),
+        humidity=mean("humidity"),
+        pressure=mean("pressure"),
+        oldest_at=min(stamps) if stamps else None,
+        newest_at=max(stamps) if stamps else None,
+    )
+
+
+@dataclass(frozen=True)
+class ClimateStatus:
+    """What a zone's temperature rule sees and is doing about it."""
+
+    reading: ClimateReading
+    condition: Optional[ClimateCondition]
+    since: Optional[float]
+    action_status: "ActionStatus"
+    block_reason: Optional[BlockReason]
+    owned_action: Optional[ActionWhenOpen]
 
 
 @dataclass(frozen=True)
@@ -150,6 +240,9 @@ class ZoneAggregate:
     owned_action: Optional[ActionWhenOpen]
     action_status: ActionStatus = ActionStatus.IDLE
     block_reason: Optional[BlockReason] = None
+    #: Contacts only. ``owned_action`` above is the contact rule's hold and is
+    #: None while the temperature rule owns the zone; that one is here.
+    climate: Optional[ClimateStatus] = None
 
 
 class ActionKind(str, Enum):
@@ -175,6 +268,8 @@ class ConditionEventKind(str, Enum):
 class ConditionEvent:
     zone_id: str
     kind: ConditionEventKind
+    #: ``open`` for a contact left open, else the ClimateCondition value.
+    condition: str = "open"
 
 
 @dataclass(frozen=True)
@@ -200,15 +295,43 @@ class _ZonePass:
     contacts: Sequence[ContactSnapshot]
     zone: Optional[HeatingZone]
     now: float
+    climate: ClimateReading = field(default_factory=ClimateReading)
 
     settling: bool = False
     changed: bool = False
     status: ActionStatus = ActionStatus.IDLE
     block_reason: Optional[BlockReason] = None
+    climate_status: ActionStatus = ActionStatus.IDLE
+    climate_block: Optional[BlockReason] = None
 
     @property
     def owns_override(self) -> bool:
         return self.state.owned_action is not None
+
+    @property
+    def contact_owns(self) -> bool:
+        return self.owns_override and self.state.owned_reason is HoldReason.OPEN
+
+    @property
+    def climate_owns(self) -> bool:
+        return self.owns_override and self.state.owned_reason is not HoldReason.OPEN
+
+    @property
+    def contact_rule_due(self) -> bool:
+        """Whether an open contact's heating rule has the room right now.
+
+        True from the moment its action delay runs out until every contact
+        closes, whatever the rule then decided — including standing down
+        because the house is already colder. While it is true, the
+        temperature rule watches and warns but does not touch the heating.
+        """
+        state, policy = self.state, self.policy
+        return (
+            policy.action_when_open is not ActionWhenOpen.NOTHING
+            and state.open_started_at is not None
+            and not self.contacts_settled
+            and self.now >= state.open_started_at + policy.action_delay_seconds
+        )
 
     @property
     def ambient_mode(self) -> str:
@@ -274,6 +397,9 @@ class SensorAutomation:
                 open_started_at=state.open_started_at,
                 warning_raised=state.warning_raised,
                 owned_action=state.owned_action,
+                owned_reason=state.owned_reason,
+                climate_condition=state.climate_condition,
+                climate_since=state.climate_since,
             )
             for zone_id, state in (states or {}).items()
         }
@@ -325,9 +451,15 @@ class SensorAutomation:
         grouped: dict[str, list[ContactSnapshot]] = {
             str(zone_id): [] for zone_id in policies
         }
+        thermometers: dict[str, list[ContactSnapshot]] = {
+            str(zone_id): [] for zone_id in policies
+        }
         for sensor in sensors:
             if sensor.zone_id is not None and str(sensor.zone_id) in grouped:
-                grouped[str(sensor.zone_id)].append(sensor)
+                # A thermometer is never a contact: counting one would make
+                # every room with a thermometer read "state unknown".
+                target = grouped if sensor.is_contact else thermometers
+                target[str(sensor.zone_id)].append(sensor)
 
         actions: list[RequestedAction] = []
         events: list[ConditionEvent] = []
@@ -343,6 +475,7 @@ class SensorAutomation:
                 contacts=grouped[zone_id],
                 zone=heating.get(zone_id),
                 now=now,
+                climate=climate_reading(thermometers[zone_id], now),
                 settling=self._settling(zone_id, now),
             )
 
@@ -350,6 +483,11 @@ class SensorAutomation:
             self._begin_cycle_if_newly_open(step)
             self._raise_warning_if_due(step, events)
             await self._run_action_if_due(step, actions)
+            self._update_climate_condition(step, events)
+            # Before the contact cycle is closed, so that a window shutting in
+            # a room that is still too warm hands its Eco across to the
+            # temperature rule instead of releasing it and taking it again.
+            await self._run_climate_rule(step, actions)
             await self._finish_cycle_if_settled(step, actions, events)
 
             aggregates[zone_id] = self._summarise(step)
@@ -371,8 +509,21 @@ class SensorAutomation:
             aggregate.open_started_at is not None
             and policies[zone_id].action_when_open is not ActionWhenOpen.NOTHING
             for zone_id, aggregate in aggregates.items()
+        ) or any(
+            # A held temperature rule depends on the schedule in the same way,
+            # and the moment a reading goes stale is an event nothing reports.
+            aggregate.climate is not None
+            and aggregate.climate.condition is not None
+            for aggregate in aggregates.values()
         ):
             deadlines.append(now + RECHECK_WHILE_OPEN_SECONDS)
+        deadlines.extend(
+            aggregate.climate.reading.oldest_at + CLIMATE_STALE_SECONDS
+            for aggregate in aggregates.values()
+            if aggregate.climate is not None
+            and aggregate.climate.reading.oldest_at is not None
+            and aggregate.climate.reading.oldest_at + CLIMATE_STALE_SECONDS > now
+        )
         # Look again as soon as a zone stops settling, so a change made while
         # our own write was in flight is honoured in seconds rather than at the
         # next routine re-check.
@@ -454,7 +605,7 @@ class SensorAutomation:
             # "about to" do something it is not going to do. Anything held
             # from before the source changed goes back now rather than
             # waiting for a contact that may never be closed.
-            if state.owned_action is not None:
+            if step.contact_owns:
                 await self._hand_back_ownership(step, actions)
             step.status = ActionStatus.BLOCKED
             step.block_reason = BlockReason.DEMO_SENSORS
@@ -487,6 +638,11 @@ class SensorAutomation:
             return
 
         if state.owned_action is wanted:
+            # Possibly the temperature rule's hold, which is exactly what the
+            # window wants too. It becomes the window's without a command.
+            if state.owned_reason is not HoldReason.OPEN:
+                state.owned_reason = HoldReason.OPEN
+                step.changed = True
             step.status = ActionStatus.ACTIVE
             return
 
@@ -499,7 +655,144 @@ class SensorAutomation:
             step.status = ActionStatus.PENDING
             return
         state.owned_action = wanted
+        state.owned_reason = HoldReason.OPEN
         step.status = ActionStatus.ACTIVE
+        step.changed = True
+
+    def _update_climate_condition(
+        self, step: _ZonePass, events: list[ConditionEvent]
+    ) -> None:
+        """Whether the room is outside its thresholds, with hysteresis.
+
+        A condition is raised the moment a reading crosses a threshold and
+        cleared only once the room is ``CLIMATE_HYSTERESIS`` back inside it.
+        Recovery is announced only when a reading says so. A condition that
+        ends because the reading went stale, the sensor went away or the
+        threshold was switched off ends quietly: none of those is news that
+        the room is fine.
+        """
+        state, policy = step.state, step.policy
+        temperature = step.climate.temperature
+        previous = state.climate_condition
+        high, low = policy.temperature_max, policy.temperature_min
+
+        condition: Optional[ClimateCondition] = None
+        if temperature is not None:
+            if previous is ClimateCondition.TOO_WARM and high is not None:
+                if temperature > high - CLIMATE_HYSTERESIS:
+                    condition = previous
+            elif previous is ClimateCondition.TOO_COLD and low is not None:
+                if temperature < low + CLIMATE_HYSTERESIS:
+                    condition = previous
+            if condition is None:
+                if high is not None and temperature > high:
+                    condition = ClimateCondition.TOO_WARM
+                elif low is not None and temperature < low:
+                    condition = ClimateCondition.TOO_COLD
+
+        if condition is previous:
+            return
+        if previous is not None:
+            threshold_kept = (
+                high if previous is ClimateCondition.TOO_WARM else low
+            ) is not None
+            if temperature is not None and threshold_kept:
+                events.append(ConditionEvent(
+                    step.zone_id, ConditionEventKind.RECOVERY, previous.value
+                ))
+        if condition is not None:
+            events.append(ConditionEvent(
+                step.zone_id, ConditionEventKind.WARNING, condition.value
+            ))
+        state.climate_condition = condition
+        state.climate_since = step.now if condition is not None else None
+        step.changed = True
+
+    def climate_mode_to_hold(
+        self, condition: ClimateCondition, action: ActionWhenOpen, ambient: str
+    ) -> Optional[ActionWhenOpen]:
+        """Which mode a temperature rule should hold, or None for none.
+
+        A ceiling only ever cools and a floor only ever warms, so each holds
+        its mode only while that is on the right side of what the room would
+        do anyway. An unrankable ambient mode is left alone, as it is for
+        contacts.
+        """
+        if action not in HOLD_ACTIONS:
+            return None
+        if condition is ClimateCondition.TOO_WARM:
+            return action if is_colder(action.value, ambient) else None
+        return action if is_colder(ambient, action.value) else None
+
+    async def _run_climate_rule(
+        self, step: _ZonePass, actions: list[RequestedAction]
+    ) -> None:
+        state, policy, zone = step.state, step.policy, step.zone
+        condition = state.climate_condition
+        action = ActionWhenOpen.NOTHING
+        if condition is ClimateCondition.TOO_WARM:
+            action = policy.action_when_too_warm
+        elif condition is ClimateCondition.TOO_COLD:
+            action = policy.action_when_too_cold
+
+        if step.contact_rule_due:
+            # The window's rule has the room. Its hold, or its decision to
+            # hold nothing, stands until every contact closes.
+            if action in HOLD_ACTIONS:
+                step.climate_status = ActionStatus.BLOCKED
+                step.climate_block = BlockReason.CONTACT_OPEN
+            return
+
+        wanted: Optional[ActionWhenOpen] = None
+        if action in HOLD_ACTIONS:
+            if zone is None or not zone.connected:
+                # Nothing can be sent, and nothing held is given up: the
+                # ledger is kept until the hub can be asked again.
+                step.climate_status = ActionStatus.BLOCKED
+                step.climate_block = BlockReason.DISCONNECTED
+                return
+            if not zone.has_equipment:
+                step.climate_status = ActionStatus.BLOCKED
+                step.climate_block = BlockReason.NO_EQUIPMENT
+            elif not zone.sensors_may_act:
+                step.climate_status = ActionStatus.BLOCKED
+                step.climate_block = BlockReason.DEMO_SENSORS
+            else:
+                wanted = self.climate_mode_to_hold(condition, action, step.ambient_mode)
+                if wanted is None:
+                    step.climate_status = ActionStatus.BLOCKED
+                    step.climate_block = (
+                        BlockReason.COLDER_MODE
+                        if condition is ClimateCondition.TOO_WARM
+                        else BlockReason.WARMER_MODE
+                    )
+
+        reason = HoldReason(condition.value) if condition is not None else None
+        if wanted is None:
+            if step.climate_owns:
+                await self._hand_back_ownership(step, actions)
+            return
+
+        if state.owned_action is wanted:
+            # Already there — perhaps the window's hold, handed across now
+            # that the window has shut, perhaps this rule's own.
+            if state.owned_reason is not reason:
+                state.owned_reason = reason
+                step.changed = True
+            step.climate_status = ActionStatus.ACTIVE
+            return
+        if step.settling:
+            step.climate_status = ActionStatus.PENDING
+            return
+
+        applied = await self._command_apply(step.zone_id, wanted)
+        actions.append(applied)
+        if not applied.succeeded:
+            step.climate_status = ActionStatus.PENDING
+            return
+        state.owned_action = wanted
+        state.owned_reason = reason
+        step.climate_status = ActionStatus.ACTIVE
         step.changed = True
 
     async def _return_zone_to_its_schedule(
@@ -556,7 +849,9 @@ class SensorAutomation:
         state = step.state
         if not step.contacts_settled:
             return
-        if state.owned_action is not None:
+        # Only the window's own hold. One the temperature rule has taken over
+        # on this pass, or held all along, is not the window's to give back.
+        if step.contact_owns:
             if not await self._hand_back_ownership(step, actions):
                 return
         if state.open_started_at is None and not state.warning_raised:
@@ -587,6 +882,7 @@ class SensorAutomation:
         if not action.succeeded:
             return False
         state.owned_action = None
+        state.owned_reason = HoldReason.OPEN
         step.changed = True
         return True
 
@@ -602,15 +898,20 @@ class SensorAutomation:
             state.open_started_at + policy.action_delay_seconds
             if open_cycle
             and policy.action_when_open is not ActionWhenOpen.NOTHING
-            and state.owned_action is None
+            and not step.contact_owns
             and step.block_reason is not BlockReason.DEMO_SENSORS
             else None
         )
         status = step.status
-        if state.owned_action is not None:
+        if step.contact_owns:
             status = ActionStatus.ACTIVE
         elif not open_cycle:
             status = ActionStatus.IDLE
+        climate_status = step.climate_status
+        if step.climate_owns:
+            climate_status = ActionStatus.ACTIVE
+        elif state.climate_condition is None:
+            climate_status = ActionStatus.IDLE
         return ZoneAggregate(
             zone_id=step.zone_id,
             state=self.aggregate(step.contacts),
@@ -624,9 +925,20 @@ class SensorAutomation:
             open_started_at=state.open_started_at,
             warning_deadline=warning_deadline,
             action_deadline=action_deadline,
-            owned_action=state.owned_action,
+            owned_action=state.owned_action if step.contact_owns else None,
             action_status=status,
             block_reason=step.block_reason if status is ActionStatus.BLOCKED else None,
+            climate=ClimateStatus(
+                reading=step.climate,
+                condition=state.climate_condition,
+                since=state.climate_since,
+                action_status=climate_status,
+                block_reason=(
+                    step.climate_block
+                    if climate_status is ActionStatus.BLOCKED else None
+                ),
+                owned_action=state.owned_action if step.climate_owns else None,
+            ),
         )
 
     async def _forget_zones_that_no_longer_exist(
@@ -783,5 +1095,10 @@ class SensorAutomation:
             )
 
     def _save(self) -> None:
+        # Several paths let go of a hold; rather than each remembering to
+        # reset whose it was, a hold nobody has carries no owner.
+        for state in self.states.values():
+            if state.owned_action is None:
+                state.owned_reason = HoldReason.OPEN
         if self._save_fn is not None:
             self._save_fn(self.states)

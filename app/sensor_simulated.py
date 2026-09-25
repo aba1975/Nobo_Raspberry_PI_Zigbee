@@ -1,4 +1,4 @@
-"""Persisted demo contact-sensor provider."""
+"""Persisted demo sensor provider: contacts and room thermometers."""
 
 from __future__ import annotations
 
@@ -11,8 +11,19 @@ from typing import Callable, Optional
 from sensor_persistence import load_simulated_sensors, save_simulated_sensors
 from sensor_provider import (
     ContactSnapshot, ContactState, EventCallback, PairingStatus, SensorEvent,
-    SensorEventKind, SensorKind, SensorNotFound,
+    SensorEventKind, SensorKind, SensorNotFound, check_kind_change, valid_reading,
 )
+
+# What a new demo thermometer reads before anybody changes it: an ordinary
+# heated room. Deliberately inside any sensible pair of thresholds, so adding
+# one never raises a warning by itself.
+DEMO_CLIMATE = {"temperature": 21.0, "humidity": 45.0, "pressure": 1013.0}
+
+#: How often a simulated thermometer reports when nothing changes. A real
+#: Aqara one sends a reading about once an hour even in a still room, so a
+#: simulated one that only ever spoke when edited would go stale after three
+#: hours and teach the demo that thermometers stop working.
+SIMULATED_REPORT_SECONDS = 50 * 60
 
 
 class SimulatedContactSensorProvider:
@@ -48,7 +59,30 @@ class SimulatedContactSensorProvider:
 
     async def list(self) -> list[ContactSnapshot]:
         self._ensure_started()
+        self._report_readings()
         return sorted(self._sensors.values(), key=lambda item: item.sensor_id)
+
+    def _report_readings(self) -> None:
+        """Let every available thermometer send its periodic report.
+
+        Lazily, when somebody looks, rather than on a timer: the automation
+        always looks before a reading could go stale, because that moment is
+        one of its deadlines. The same reading is repeated, as a real sensor
+        in a room at a steady temperature does. Kept in memory only — the
+        stored time moves with the next real change — so an idle demo does not
+        write to the SD card every hour. A sensor set to unavailable stays
+        silent, which is the point of being able to set it.
+        """
+        if not any(item.is_climate and item.available for item in self._sensors.values()):
+            return
+        now = self._aware_now()
+        for sensor_id, item in tuple(self._sensors.items()):
+            if (
+                item.is_climate
+                and item.available
+                and (now - item.last_seen_at).total_seconds() >= SIMULATED_REPORT_SECONDS
+            ):
+                self._sensors[sensor_id] = self._replace(item, last_seen_at=now)
 
     async def routers(self) -> list:
         """There is no radio, so there is nothing relaying and nothing to say.
@@ -70,18 +104,22 @@ class SimulatedContactSensorProvider:
         sensor_id = self._id_factory()
         if not sensor_id or sensor_id in self._sensors:
             raise ValueError("id_factory returned an invalid or duplicate id")
+        kind = self._kind(kind)
+        climate = kind is SensorKind.CLIMATE
         snapshot = ContactSnapshot(
             sensor_id=sensor_id,
             provider_id=f"simulated:{sensor_id}",
             name=name,
-            kind=self._kind(kind),
+            kind=kind,
             zone_id=self._zone(zone_id),
-            state=ContactState.CLOSED,
+            # A thermometer has no contact, so it has no contact state either.
+            state=ContactState.UNKNOWN if climate else ContactState.CLOSED,
             available=True,
             battery=100,
             link_quality=180,
             changed_at=stamp,
             last_seen_at=stamp,
+            **(DEMO_CLIMATE if climate else {}),
         )
         previous = self._sensors.copy()
         self._sensors[sensor_id] = snapshot
@@ -113,10 +151,13 @@ class SimulatedContactSensorProvider:
         current = self._get(sensor_id)
         if zone_id is not None and clear_zone:
             raise ValueError("zone_id and clear_zone cannot both be supplied")
+        if kind is not None:
+            kind = self._kind(kind)
+            check_kind_change(current.kind, kind)
         updated = self._replace(
             current,
             name=self._valid_name(name) if name is not None else current.name,
-            kind=self._kind(kind) if kind is not None else current.kind,
+            kind=kind if kind is not None else current.kind,
             zone_id=None if clear_zone else (
                 self._zone(zone_id) if zone_id is not None else current.zone_id
             ),
@@ -143,8 +184,24 @@ class SimulatedContactSensorProvider:
         clear_battery: bool = False,
         link_quality: Optional[int] = None,
         clear_link_quality: bool = False,
+        temperature: Optional[float] = None,
+        humidity: Optional[float] = None,
+        pressure: Optional[float] = None,
     ) -> ContactSnapshot:
         current = self._get(sensor_id)
+        readings = {
+            "temperature": temperature, "humidity": humidity, "pressure": pressure,
+        }
+        sent = {name: value for name, value in readings.items() if value is not None}
+        if sent and not current.is_climate:
+            raise ValueError("Only a temperature sensor has room readings")
+        if state is not None and current.is_climate:
+            raise ValueError("A temperature sensor has no open or closed state")
+        for name, value in sent.items():
+            parsed = valid_reading(name, value)
+            if parsed is None:
+                raise ValueError(f"{name} is outside what the sensor can report")
+            sent[name] = parsed
         if battery is not None and clear_battery:
             raise ValueError("battery and clear_battery cannot both be supplied")
         if link_quality is not None and clear_link_quality:
@@ -176,8 +233,9 @@ class SimulatedContactSensorProvider:
             link_quality=None if clear_link_quality else (
                 link_quality if link_quality is not None else current.link_quality
             ),
-            changed_at=now if changed else current.changed_at,
+            changed_at=now if (changed or sent) else current.changed_at,
             last_seen_at=now,
+            **sent,
         )
         return await self._store(updated)
 
@@ -259,7 +317,7 @@ class SimulatedContactSensorProvider:
         try:
             return SensorKind(kind)
         except (TypeError, ValueError) as exc:
-            raise ValueError("kind must be door or window") from exc
+            raise ValueError("kind must be door, window or climate") from exc
 
     @staticmethod
     def _replace(item: ContactSnapshot, **changes) -> ContactSnapshot:

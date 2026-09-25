@@ -30,7 +30,8 @@ is worth writing them down because they decide the shape of everything here:
    the SW4 control panel carries a thermometer, and it is no longer sold. Every
    heater receiver — NTB-2R, R80 RDC 700 and the rest — controls temperature
    without ever reporting it. Alerts that need a room temperature were removed
-   rather than left switched on looking useful.
+   rather than left switched on looking useful. The temperature alerts that
+   exist now read an optional Zigbee room thermometer instead, never the hub.
 
 4. **The keep-alive is between this Pi and the hub, and nowhere else.** The
    client sends ``HANDSHAKE`` every 14 seconds and the hub echoes it; if nothing
@@ -202,6 +203,30 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
                 "quiet hours. Held for five minutes first, because the front door is "
                 "open while you are walking out of it and an alert every single "
                 "departure would teach you to ignore this one.",
+    },
+    "temperature_too_high": {
+        "label": "A room gets too warm",
+        "default": False,
+        "help": "A room thermometer has read above the maximum set for its room. Needs a "
+                "temperature sensor in the room — the Nobø receivers measure nothing — and "
+                "reads the air where the sensor is mounted, so one in sunlight reads high. "
+                "Sent once when it crosses, not again until it has come half a degree "
+                "back inside.",
+    },
+    "temperature_too_low": {
+        "label": "A room gets too cold",
+        "default": False,
+        "help": "A room thermometer has read below the minimum set for its room — a frost "
+                "or comfort floor. Needs a temperature sensor in the room. A reading more "
+                "than three hours old is not used, so a flat battery ends this quietly "
+                "rather than claiming the room has warmed up.",
+    },
+    "temperature_back_in_range": {
+        "label": "The room is back within its limits",
+        "default": False,
+        "help": "Sent after a too-warm or too-cold alert, once a fresh reading is half a "
+                "degree back inside the limit. Not sent when the reading simply stops "
+                "arriving, because that is not news that the room is fine.",
     },
 }
 

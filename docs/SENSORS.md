@@ -1,6 +1,7 @@
 # Contact sensor provider boundary
 
-Contact sensors are optional and off by default. The first provider is a
+Contact sensors — and, since the same boundary carries them, room thermometers
+(see [Room thermometers](#room-thermometers)) — are optional and off by default. The first provider is a
 persisted simulator for demo mode; it does not require a Zigbee dongle, MQTT
 broker, Zigbee2MQTT, or any additional service.
 
@@ -782,3 +783,102 @@ Sensors attach to the application's existing zone IDs. A zone may contain no
 Nobø components: it still receives sensor state and warnings, while heating
 actions are unavailable because there is no heater to control. This avoids a
 second room model that would drift from the heating UI.
+
+## Room thermometers
+
+Aqara temperature, humidity and pressure sensors (WSDCGQ11LM, and anything
+else Zigbee2MQTT exposes a `temperature` for) are a second sensor **kind**,
+`climate`, in the same registry, the same pairing sheet and the same
+per-zone policy as contacts. **No thermometer had joined this radio when this
+was written.** The fake Zigbee2MQTT's device follows the published definition
+for the model; the first real one to pair is the test of it.
+
+### What the provider translates
+
+| Zigbee2MQTT | Snapshot field |
+| --- | --- |
+| `temperature` (°C) | `temperature`, rounded to 0.1 |
+| `humidity` (%) | `humidity` |
+| `pressure` (hPa) | `pressure` |
+
+A device is a thermometer when its `exposes` include `temperature` and no
+`contact`. **`device_temperature` does not count** — it is the inside of the
+device's own plastic, reported by buttons and plugs, and putting it on a room
+card would be a number nobody measured in the room. Such a device is ignored,
+and pairing one says "That is not a sensor this can use".
+
+The kind is decided by the hardware and cannot be changed: renaming a
+thermometer into a window, or a contact into a thermometer, is refused with 400.
+A report that carries only one reading keeps the others — the Aqara sends each
+as it changes — and a value outside what any such sensor can report
+(−40–80 °C, 0–100 %, 300–1100 hPa) is discarded rather than believed. The last
+readings are kept in the Zigbee metadata file, so a restart shows them before
+the next report arrives.
+
+Thermometers never count as contacts: they are in `zone.climate_sensors`, not
+`zone.sensors`, and a quiet thermometer does not make a room's window state
+`unknown`.
+
+### What the room shows
+
+The zone reading is the **average of its fresh, available thermometers**. A
+reading older than three hours (`CLIMATE_STALE_SECONDS`) is not fresh: the
+Aqara reports roughly hourly even in a still room, so three hours of silence is
+a sensor that has stopped, and the card says "No recent reading" rather than
+showing a number the rule is no longer believing.
+
+The **hub's own `current_temperature` wins** where it has one. The Aqara
+reading fills in only where the hub has nothing, which on this installation is
+every room, and `temperature_source` says which it was (`hub`, `sensor` or
+`null`) so the interface never has to guess.
+
+### The temperature rule
+
+Each zone may set a **maximum** and a **minimum**, each with an action:
+
+| Too warm | Too cold |
+| --- | --- |
+| Warn only | Warn only |
+| Warn and set Eco | Warn and set Eco |
+| Warn and set Away | Warn and set Comfort |
+
+The limits must be at least 1 °C apart. The condition starts as soon as a
+reading crosses a limit — there is no delay, because a thermometer already
+reports slowly — and ends once the room is **0.5 °C back inside it**, so a
+reading hovering on the line does not flap.
+
+**A maximum only ever cools a room, and a minimum only ever warms it.** A
+maximum asking for Eco in a room the house already has on Away does nothing;
+a minimum asking for Eco in a room on Away *raises* it, which is the point of
+it — a bathroom with pipes in the wall that a whole-house Away would otherwise
+leave at 7 °C.
+
+**A door or window rule outranks it.** Once an open contact's own rule is due,
+it has the room and the temperature rule stands down with `contact_open`; when
+the contact closes, the temperature rule takes the room back without a release
+in between, so the room does not bounce through its schedule.
+
+Ownership is the same ledger the contact rule uses, one per zone, with
+`owned_reason` saying which rule holds it. Only the override this applied is
+ever released, with `NORMAL`; Comfort is never sent to put a room back. A mode
+set by hand ends the hold, as it does for a contact.
+
+A reading that goes stale or offline, or a limit that is switched off, ends the
+condition **quietly**: the hold is released, but no "back in range" email is
+sent, because nothing has shown that the room recovered. Demo thermometers
+beside a real hub warn but never act, exactly as demo contacts do.
+
+### Alerts
+
+Three alert types, all off by default: `temperature_too_high`,
+`temperature_too_low` and `temperature_back_in_range`. They are level-triggered
+conditions like the left-open warning, restored from the automation state at
+start-up, so a restart does not re-announce a room that was already too warm.
+A thermometer that goes quiet is covered by the existing `sensor_quiet` alert.
+
+### In the demo
+
+A simulated thermometer starts at 21 °C, 45 % and 1013 hPa, and its readings,
+availability and battery are set by hand in its edit sheet. It "reports" every
+50 minutes when nothing changes, as a real one does, so leaving the demo alone
+does not teach it that thermometers stop working after three hours.

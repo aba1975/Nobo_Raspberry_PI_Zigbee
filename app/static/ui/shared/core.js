@@ -222,6 +222,9 @@ const Nobo = (() => {
              '<circle cx="13.1" cy="13.5" r=".7" fill="currentColor" stroke="none"/><path d="M3.5 21h16.8"/>',
     window:  '<rect x="3.5" y="4" width="17" height="16" rx="1.2"/>' +
              '<path d="M12 4v16M3.5 12h17"/><path d="m5.8 9.8 3.9-3.5M14.2 17.8l4-3.6"/>',
+    /* A room thermometer: the bulb reads as "measured", not as a heater. */
+    thermo:  '<path d="M14.2 14.6V5.2a2.2 2.2 0 0 0-4.4 0v9.4a4.1 4.1 0 1 0 4.4 0z"/>' +
+             '<path d="M12 9.4v7.4"/>',
     /* Radio waves rather than bars: the bars would have to mean something,
        and the number behind them is a last-hop score, not a strength. */
     signal:  '<path d="M12 19.2h.01" stroke-width="2.4"/>' +

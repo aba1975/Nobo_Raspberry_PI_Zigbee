@@ -60,6 +60,7 @@ def _run(script: str):
         "function zoneGroups",
         "function groupingIsWorthIt",
         "function zoneNeedsAttention",
+        "function zoneNeedsSensorAttention",
         "function groupSummary",
     )
     with tempfile.NamedTemporaryFile(
