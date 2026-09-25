@@ -2542,8 +2542,10 @@
       ? `<span class="badge badge-empty" title="This zone has sensors but no heater, so it is watched and warns, but its heating cannot be changed.">Monitoring only</span>`
       : empty
       ? `<span class="badge badge-empty" title="This zone has no heater and no sensor yet. Add a heater to control it, or a contact sensor to monitor it.">Empty</span>`
+      /* A dial-only room says so once, in the Set to half of the card, rather
+         than in a badge as well. */
       : !remote
-      ? `<span class="badge badge-manual" title="No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.">Set on heater</span>`
+      ? ''
       : (zone.has_manual_devices
           ? `<span class="badge badge-manual" title="Some heaters in this zone have no remote temperature control. Their temperature is set by a dial on the heater itself.">Some dial-only</span>`
           : '');
@@ -2553,60 +2555,65 @@
       .map(c => `<span class="np-device">${Nobo.deviceImg(c)}</span>`).join('');
     const more = comps.length > 3 ? `<span class="more">+${comps.length - 3}</span>` : '';
 
-    /* A room with no heater has no set point, so the measured temperature is
-       the headline there — still labelled Actual, so nobody reads it as what
-       the room has been set to. */
-    const actualLeads = monitoring && zone.current_temperature != null;
-    let label, setBlock;
-    if (actualLeads) {
-      label = 'Actual';
-      setBlock = `<span class="set-value set-value-actual">${Nobo.bigTemp(zone.current_temperature)}</span>`;
-    } else if (monitoring) {
-      label = 'Watching';
-      setBlock = `<span class="set-mode">${sensorCount} ${sensorCount === 1 ? 'sensor' : 'sensors'}</span>`;
-    } else if (empty) {
-      label = 'Contains';
-      setBlock = `<span class="set-none">Nothing yet</span>`;
-    } else if (!remote) {
-      label = 'Running';
-      setBlock = `<span class="set-mode">${esc(modeLabel)}</span>`;
-    } else {
-      label = 'Set to';
-      setBlock = target == null
-        ? `<span class="set-none">Not set</span>`
-        : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
-    }
-
-    /* Humidity rides along with the temperature whenever a room thermometer
-       has one, whichever of them the temperature itself came from. */
-    const humidity = climate && climate.humidity != null
-      ? ` \u00B7 ${fmtHumidity(climate.humidity)}` : '';
-    /* "Actual" in words, not just a smaller number: a set point and a
-       measurement side by side are otherwise easy to read the wrong way round. */
-    const measuredBy = zone.temperature_source === 'sensor'
-      ? 'Actual temperature, measured by the room thermometer'
-      : 'Actual temperature, measured by the heater';
-    const nowBlock = empty
-      ? `<span class="set-now">No heater or sensor</span>`
-      : actualLeads
-      ? `<span class="set-now">${esc(sensorCount === 1 ? '1 sensor' : `${sensorCount} sensors`)}${humidity}</span>`
-      : zone.current_temperature != null
-      ? `<span class="set-actual" title="${measuredBy}">
-          <span class="set-actual-icon" aria-hidden="true">${Nobo.icon('thermo', '1em')}</span>
-          <span class="set-actual-label">Actual</span>
-          <strong>${Nobo.fmtTemp(zone.current_temperature)}&deg;</strong>${humidity ? `<span class="set-actual-humidity">${humidity}</span>` : ''}
-        </span>`
-      : climate
-      ? `<span class="set-now" title="The thermometer in this room has not reported for ${Nobo.fmtDuration(climate.stale_after_seconds)}.">No recent reading</span>`
-      : monitoring
-      ? `<span class="set-now">No heater</span>`
-      : `<span class="set-now">${remote ? 'No sensor' : 'Dial sets the temperature'}</span>`;
+    /* Two halves, always in the same places: what the room is set to on the
+       left, what it actually measures on the right. The measurement is
+       labelled Actual in words and drawn in thermometer blue, so the two
+       numbers cannot be read the wrong way round. A room with nothing to
+       measure it leaves the right half out rather than saying "No sensor". */
+    const plural = n => (n === 1 ? '1 sensor' : `${n} sensors`);
+    const note = (text, sub, title = '') =>
+      `<span class="zt-note"${title ? ` title="${esc(title)}"` : ''}>${esc(text)}<small>${esc(sub)}</small></span>`;
 
     const stepTitle = adjustable
       ? ''
       : (!remote
           ? 'Turn the dial on the heater to change this zone'
           : 'Away uses a fixed system temperature');
+
+    let setCell;
+    if (monitoring) {
+      setCell = `<div class="zt-cell"><span class="set-label">Heating</span>${note('None', `${plural(sensorCount)} watching`)}</div>`;
+    } else if (empty) {
+      setCell = `<div class="zt-cell"><span class="set-label">Contains</span>${note('Nothing yet', 'No heater or sensor')}</div>`;
+    } else if (!remote) {
+      setCell = `<div class="zt-cell"><span class="set-label">Set to</span>${note('On the heater', 'Adjust by hand',
+        'No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.')}</div>`;
+    } else {
+      /* + above −, stacked beside the number so the buttons add no height to
+         the card. The label and number keep the top of the cell, level with
+         Actual in the other half, and the buttons hang beside them. */
+      const value = target == null
+        ? `<span class="set-none">Not set</span>`
+        : `<span class="set-value">${Nobo.bigTemp(target)}</span>`;
+      setCell = `<div class="zt-cell zt-set">
+          <span class="set-label">Set to</span>
+          ${value}
+          <span class="vstep">
+            <button class="step-btn" type="button" data-step="up" data-zone="${esc(zone.zone_id)}"
+              ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
+              aria-label="Raise ${esc(zone.name)} set temperature">+</button>
+            <button class="step-btn" type="button" data-step="down" data-zone="${esc(zone.zone_id)}"
+              ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
+              aria-label="Lower ${esc(zone.name)} set temperature">&minus;</button>
+          </span>
+        </div>`;
+    }
+
+    /* Humidity rides along with the temperature whenever a room thermometer
+       has one, whichever of them the temperature itself came from. */
+    const humidity = climate && climate.humidity != null
+      ? `<span class="zt-humidity">${Nobo.icon('drop', '1em')} ${fmtHumidity(climate.humidity)} humidity</span>` : '';
+    const measuredBy = zone.temperature_source === 'sensor'
+      ? 'Actual temperature, measured by the room thermometer'
+      : 'Actual temperature, measured by the heater';
+    const actualCell = empty
+      ? ''
+      : zone.current_temperature != null
+      ? `<div class="zt-cell zt-actual" title="${measuredBy}"><span class="set-label">Actual</span><span class="set-value set-value-actual">${Nobo.bigTemp(zone.current_temperature)}</span>${humidity}</div>`
+      : climate
+      ? `<div class="zt-cell zt-actual"><span class="set-label">Actual</span>${note('No recent reading', 'Thermometer silent',
+          `The thermometer in this room has not reported for ${Nobo.fmtDuration(climate.stale_after_seconds)}.`)}</div>`
+      : '';
 
     return `
       <li class="zone ${zoneNeedsSensorAttention(zone) ? 'zone-sensor-warning' : ''}" data-zone="${esc(zone.zone_id)}">
@@ -2615,20 +2622,7 @@
         </button>
         <div class="zone-meta">${modeBadge}${manualBadge}${zoneOverrideBadge(zone)}${renderSetpointDriftBadge(zone)}</div>
         ${zoneSensorStrips(zone)}
-        <div class="zone-set">
-          <span class="set-label">${esc(label)}</span>
-          ${setBlock}
-          ${nowBlock}
-        </div>
-        ${remote ? `
-        <div class="stepper">
-          <button class="step-btn" type="button" data-step="down" data-zone="${esc(zone.zone_id)}"
-            ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
-            aria-label="Lower ${esc(zone.name)} set temperature">&minus;</button>
-          <button class="step-btn" type="button" data-step="up" data-zone="${esc(zone.zone_id)}"
-            ${adjustable ? '' : 'disabled'} title="${esc(stepTitle)}"
-            aria-label="Raise ${esc(zone.name)} set temperature">+</button>
-        </div>` : ''}
+        <div class="zone-temps${actualCell ? '' : ' one'}">${setCell}${actualCell}</div>
         <div class="zone-devices">${thumbs}${more}</div>
       </li>`;
   }

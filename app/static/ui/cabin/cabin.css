@@ -472,14 +472,14 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   position: relative;
   display: grid;
   /* The name gets a row of its own so it is never squeezed by the temperature
-     next to it, then the set temperature and its stepper share the row below. */
+     below it; the set and actual temperatures then share one row. */
   grid-template-columns: 1fr auto;
   grid-template-rows: auto auto auto auto 1fr;
   grid-template-areas:
     "name name"
     "meta meta"
     "sensor sensor"
-    "set  step"
+    "set  set"
     "devs devs";
   align-items: center;
   gap: .15rem .9rem;
@@ -763,9 +763,29 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   font-size: .82rem; color: var(--ink-soft);
 }
 
-/* The set temperature is the headline number. The measured temperature is
-   support, so it sits underneath at a much smaller size. */
-.zone-set { grid-area: set; text-align: left; line-height: 1; margin-top: .55rem; }
+/* Set to on the left, Actual on the right. Both halves put their label and
+   their number at the same height, so the two temperatures sit level and read
+   as a pair; the stacked +/- hangs beside the set number and never pushes it
+   down. A room with nothing measuring it has only the left half. */
+.zone-temps {
+  grid-area: set;
+  display: grid; grid-template-columns: 1fr 1fr; align-items: start;
+  margin-top: .6rem; line-height: 1;
+}
+.zone-temps.one { grid-template-columns: 1fr; }
+.zt-cell { min-width: 0; }
+.zt-cell + .zt-cell { border-left: 1px solid var(--rule); padding-left: .9rem; }
+.zt-cell .set-value { display: block; }
+.zt-set {
+  display: grid; justify-content: start; column-gap: .6rem;
+  grid-template-columns: auto auto;
+  /* The third, flexible row takes whatever extra height the button stack
+     needs, so the label and number rows stay their own size - and level with
+     the other half of the card. */
+  grid-template-rows: auto auto 1fr;
+}
+.zt-set .set-label, .zt-set .set-value, .zt-set .set-none { grid-column: 1; }
+.zt-set .vstep { grid-column: 2; grid-row: 1 / 4; align-self: start; }
 .set-value {
   font-size: clamp(1.85rem, 6vw, 2.35rem);
   font-weight: 660; letter-spacing: -.03em;
@@ -776,39 +796,35 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   font-size: .66rem; font-weight: 700; letter-spacing: .1em;
   text-transform: uppercase; color: var(--ink-faint);
 }
-.set-now { display: block; margin-top: .3rem; font-size: .78rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-/* The measured temperature, labelled "Actual" in words. Drawn in the cold
-   blue of a thermometer rather than the warm tone of a set point, and large
-   enough to read, so the two numbers are not mistaken for each other. */
-.set-actual {
-  display: inline-flex; align-items: center; gap: .3rem;
-  margin-top: .45rem; padding: .22rem .55rem .22rem .4rem;
-  border-radius: 999px;
-  color: var(--frost); background: var(--frost-wash);
-  font-size: .82rem; line-height: 1.2; font-variant-numeric: tabular-nums;
+/* The measured temperature, labelled "Actual" in words and drawn in the cold
+   blue of a thermometer rather than the warm tone of a set point. */
+.zt-actual .set-label, .set-value-actual { color: var(--frost); }
+.zt-humidity {
+  display: flex; align-items: center; gap: .25rem; margin-top: .35rem;
+  font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums;
 }
-.set-actual-icon { display: inline-flex; }
-.set-actual-label {
-  font-size: .64rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-}
-.set-actual strong { font-size: 1.05rem; font-weight: 700; color: var(--ink); }
-.set-actual-humidity { color: var(--ink-soft); }
-.set-value-actual { color: var(--frost); }
 .set-none { font-size: .95rem; font-weight: 600; color: var(--ink-faint); }
-/* A room whose heaters are dial-only leads with what it is running rather
-   than with a set temperature nothing can act on. */
-.set-mode { font-size: clamp(1.25rem, 4vw, 1.5rem); font-weight: 640; letter-spacing: -.01em; }
+/* What stands in for a number when there is none to show: a dial-only
+   heater, a room with no heater, a thermometer gone quiet. */
+.zt-note { display: block; padding-top: .3rem; font-size: 1.02rem; font-weight: 620; color: var(--ink-soft); line-height: 1.15; }
+.zt-note small { display: block; margin-top: .2rem; font-size: .74rem; font-weight: 500; color: var(--ink-faint); }
 .zd-mode { font-size: clamp(2rem, 9vw, 2.8rem); font-weight: 650; letter-spacing: -.02em; }
 
-.stepper {
-  grid-area: step; align-self: end; position: relative; z-index: 1;
-  display: flex; flex-direction: row; gap: .35rem; margin-top: .55rem;
+/* + above -, joined into one tall control, so the buttons add no height to
+   the card. */
+.vstep {
+  position: relative; z-index: 1;
+  display: inline-flex; flex-direction: column;
+  border: 1px solid var(--rule); border-radius: 10px; overflow: hidden;
+  background: var(--card);
 }
 .step-btn {
   width: 40px; height: 34px; border-radius: 10px;
   border: 1px solid var(--rule); background: var(--card); color: var(--ink);
   font-size: 1.15rem; line-height: 1; cursor: pointer;
 }
+.vstep .step-btn { width: 40px; height: 29px; border: 0; border-radius: 0; font-size: 1.05rem; }
+.vstep .step-btn + .step-btn { border-top: 1px solid var(--rule); }
 .step-btn:hover:not([disabled]) { background: var(--amber-wash); border-color: var(--amber); color: var(--amber); }
 .step-btn[disabled] { opacity: .35; cursor: not-allowed; }
 
@@ -1327,6 +1343,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
    to the 44px minimum. */
 @media (max-width: 720px), (pointer: coarse) {
   .step-btn { width: 48px; height: 44px; }
+  /* Stacked, each half is a little under 44px tall: two full-size buttons
+     one above the other would make every card taller than the design that
+     replaced them. The width stays generous for a thumb. */
+  .vstep .step-btn { width: 48px; height: 38px; }
   .icon-btn { width: 44px; height: 44px; }
   .topbar-back { min-width: 44px; min-height: 44px; }
   .sysbox > summary { min-height: 44px; display: flex; align-items: center; }

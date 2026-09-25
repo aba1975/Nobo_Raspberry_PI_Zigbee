@@ -832,13 +832,15 @@ reading fills in only where the hub has nothing, which on this installation is
 every room, and `temperature_source` says which it was (`hub`, `sensor` or
 `null`) so the interface never has to guess.
 
-**The measurement is always labelled "Actual".** A zone card leads with what
-the room is *set to*; the measured temperature sits under it in its own blue
-pill reading "Actual 21.4° · 45 %", and the zone page shows "Set to" and
-"Actual" side by side. An unlabelled second number next to a set point is easy
-to read the wrong way round — the room looks warm when it is only *meant* to
-be. A room with no heater has no set point, so its actual temperature is the
-headline there, still labelled Actual.
+**The measurement is always labelled "Actual".** A zone card is split in two:
+**Set to** on the left, with its + and − stacked beside it, and **Actual** on
+the right in thermometer blue, with the humidity underneath. The two numbers
+sit level. The zone page shows "Set to" and "Actual" side by side in the same
+way. An unlabelled second number next to a set point is easy to read the wrong
+way round — the room looks warm when it is only *meant* to be. A dial-only
+heater's half reads "On the heater — Adjust by hand". A room with no heater
+reads "Heating: None" there, and its actual temperature is still labelled
+Actual.
 
 ### The temperature rule
 

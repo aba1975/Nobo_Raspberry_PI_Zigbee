@@ -143,12 +143,27 @@ def test_an_empty_zone_says_it_is_empty():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
 def test_a_dial_only_zone_still_says_where_the_dial_is():
     """The other half of the same distinction: this room does have a heater,
-    it simply cannot be adjusted from here."""
+    it simply cannot be adjusted from here. It says so once, where a set
+    temperature would otherwise be, and not in a badge as well."""
     markup = _render_zone(_zone(components=["186100000001"]))
 
-    assert "Set on heater" in markup, markup
-    assert "Dial sets the temperature" in markup
+    assert "On the heater" in markup, markup
+    assert "Adjust by hand" in markup
+    assert "Turn the dial on the heater" in markup
+    assert "Set on heater" not in markup
+    assert "Dial sets the temperature" not in markup
     assert ">Empty<" not in markup
+    assert "data-step" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_dial_only_zone_does_not_repeat_its_mode():
+    """The mode is in the badge at the top of the card. Printing "Comfort"
+    again as the big word under "Running" was clutter, and read as if the
+    heater itself had been set to it."""
+    markup = _render_zone(_zone(components=["186100000001"], current_mode="comfort"))
+    assert "Running" not in markup
+    assert markup.count(">Comfort<") == 1, markup
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
@@ -222,9 +237,76 @@ def test_a_heaters_own_reading_is_also_labelled_actual():
         current_temperature=19.5, temperature_source="hub",
     ))
     assert "Set to" in markup
-    assert 'class="set-actual"' in markup
+    assert "zt-actual" in markup
     assert "Actual" in markup and "19.5" in markup
     assert "measured by the heater" in markup
+
+
+def _cells(markup):
+    """The Set to and Actual halves of the card, in order."""
+    return re.findall(r'<div class="zt-cell[^"]*"', markup)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_set_to_and_actual_sit_side_by_side():
+    """Option B: what the room is set to on the left, what it measures on the
+    right, each labelled in words."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+        current_temperature=23.1, temperature_source="sensor",
+        climate={"sensor_count": 1, "humidity": 62.0, "stale_after_seconds": 10800},
+    ))
+    cells = _cells(markup)
+    assert len(cells) == 2, markup
+    assert "zt-set" in cells[0] and "zt-actual" in cells[1]
+    assert markup.index("Set to") < markup.index(">Actual<")
+    assert '<div class="zone-temps">' in markup
+    assert "62 %" in markup and "humidity" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_the_stepper_is_stacked_plus_above_minus_beside_the_number():
+    """+ on top, − underneath, inside the Set to half, so the buttons add no
+    height to the card and plainly belong to that number."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+    ))
+    set_cell = markup[markup.index("zt-set"):]
+    assert '<span class="vstep">' in set_cell
+    assert set_cell.index('data-step="up"') < set_cell.index('data-step="down"')
+    assert 'class="stepper"' not in markup
+    assert "Raise Loft set temperature" in markup
+    assert "Lower Loft set temperature" in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_that_measures_nothing_has_only_the_set_half():
+    """No "No sensor" filler: the Actual half is simply left out."""
+    markup = _render_zone(_zone(
+        components=["186100000001"], supports_temp_adjust=True,
+    ))
+    assert len(_cells(markup)) == 1, markup
+    assert '<div class="zone-temps one">' in markup
+    assert "No sensor" not in markup and ">Actual<" not in markup
+
+
+def test_the_two_temperatures_are_level():
+    """The Set to number and the Actual number start at the same height. The
+    button stack is taller than label and number together, so it spans a
+    flexible third row that absorbs the difference - were it spread over the
+    label and number rows instead, the set number would sit lower than the
+    actual one, which is exactly what was asked to be fixed."""
+    block = CSS[CSS.index(".zt-set {"):]
+    block = block[:block.index("}")]
+    assert "grid-template-rows: auto auto 1fr" in block
+    assert ".zt-set .vstep { grid-column: 2; grid-row: 1 / 4; align-self: start; }" in CSS
+    temps = CSS[CSS.index(".zone-temps {"):]
+    assert "align-items: start" in temps[:temps.index("}")]
+
+
+def test_touch_keeps_the_stacked_buttons_wide():
+    touch = CSS[CSS.index("@media (max-width: 720px), (pointer: coarse) {\n  .step-btn"):]
+    assert ".vstep .step-btn { width: 48px; height: 38px; }" in touch[:600]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")

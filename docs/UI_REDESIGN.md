@@ -121,7 +121,7 @@ Both can be true at once, so a room can be mixed. Concept D distinguishes all th
 | --- | --- |
 | All heaters adjustable | `SET TO 21.0Â°C`, with a working `+` / `âˆ’` |
 | Some heaters dial-only | `SET TO 21.0Â°C`, plus a **Some dial-only** badge |
-| No heater adjustable | `RUNNING Â· Comfort` and *"Dial sets the temperature"*, with the stepper removed |
+| No heater adjustable | `SET TO` *On the heater — Adjust by hand*, with the stepper removed. The mode is not repeated: the badge at the top already says it |
 
 The third case matters. Such a room still reports a `comfort_temperature` over the API, and every
 earlier design â€” including the production UI â€” displays it as though it were a setpoint. Nothing
@@ -236,9 +236,13 @@ card is one column on a phone and as many as the window can hold on a desktop, w
 breakpoints to maintain. Cards in a row share a height, and the device pictures sit on the bottom
 edge so they line up across the row.
 
-Inside the card the room name takes a full row, then the set temperature and its stepper share the
-row below. The whole card is the tap target that opens the room; the stepper is layered above it so
-adjusting a temperature does not navigate.
+Inside the card the room name takes a full row, then the temperatures share the row below: **Set to**
+on the left and **Actual** on the right, each labelled in words, with their numbers level. The `+`
+sits above the `−` in one joined control beside the set number, so the buttons add no height to the
+card. A room that measures nothing leaves the Actual half out rather than printing "No sensor". The
+whole card is the tap target that opens the room; the stepper is layered above it so adjusting a
+temperature does not navigate. Stacked, each half of the stepper is 48 × 38 px under touch, a little
+under the 44 px used elsewhere — the trade for a shorter card (September 2026).
 
 ### Adding a room
 
