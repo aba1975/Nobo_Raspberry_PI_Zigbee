@@ -256,53 +256,315 @@ def test_the_card_carries_placement_advice():
     assert "1.5 m above the floor" in CABIN
 
 
-def _history(history):
-    lifted = "\n".join(_function(name) for name in (
-        "fmtHumidity", "climateHistory", "climateHistoryChart",
-    ))
-    script = """
-      const esc = (v) => String(v == null ? '' : v);
-      const Nobo = { fmtTemp: (v, d = 1) => Number(v).toFixed(d) };
-      %s
-      console.log(JSON.stringify(climateHistory(%s)));
-    """ % (lifted, json.dumps(history))
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+def _const(name):
+    start = CABIN.index(f"const {name} = {{")
+    end = CABIN.index("\n  };\n", start) + len("\n  };\n")
+    return CABIN[start:end]
+
+
+_STUBS = """
+  const esc = (v) => String(v == null ? '' : v);
+  const Nobo = {
+    fmtTemp: (v, d = 1) => Number(v).toFixed(d),
+    icon: (name) => `<i data-icon="${name}"></i>`,
+    fmtTimeOfDay: (v) => {
+      const d = new Date(v);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    },
+  };
+"""
+
+
+def _node(body, *functions, consts=()):
+    lifted = "\n".join([_const(name) for name in consts] + [_function(name) for name in functions])
+    script = _STUBS + lifted + body
+    # UTC, so an hour bucket's clock time does not depend on the machine.
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=30,
+        env={"TZ": "UTC", "PATH": __import__("os").environ["PATH"]},
+    )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
 
+def _history(history, humidity_max=None):
+    return _node(
+        "console.log(JSON.stringify(climateHistory(%s, %s)));"
+        % (json.dumps(history), json.dumps(humidity_max)),
+        "fmtHumidity", "climateHistory", "climateHistoryChart",
+    )
+
+
+DAY = 1_800_000_000 - (1_800_000_000 % 86400)   # a midnight, UTC
+
+
+def _day(temperatures, humidities):
+    """24 hourly rows from midnight: each temperature is the hour's middle."""
+    rows = [
+        {"start": DAY + hour * 3600,
+         "t_min": t - 0.3 if t is not None else None, "t_max": t + 0.2 if t is not None else None,
+         "h_min": h - 2 if h is not None else None, "h_max": h}
+        for hour, (t, h) in enumerate(zip(temperatures, humidities))
+    ]
+    t_values = [row for row in rows if row["t_min"] is not None]
+    h_values = [row["h_max"] for row in rows if row["h_max"] is not None]
+    return {
+        "window_start": DAY,
+        "hours": rows,
+        "temperature_min": min(row["t_min"] for row in t_values) if t_values else None,
+        "temperature_max": max(row["t_max"] for row in t_values) if t_values else None,
+        "humidity_min": min(row["h_min"] for row in rows if row["h_min"] is not None) if h_values else None,
+        "humidity_max": max(h_values) if h_values else None,
+    }
+
+
+def _bathroom():
+    temperatures = [21.0] * 24
+    temperatures[4] = 18.5          # the cold of the night
+    temperatures[17] = 22.9         # a warm evening
+    humidities = [50] * 24
+    humidities[7], humidities[8], humidities[9] = 86, 74, 60   # a shower
+    humidities[21] = 79
+    return _day(temperatures, humidities)
+
+
 @needs_node
-def test_the_last_24_hours_show_lowest_and_highest_with_a_bar_per_hour():
-    start = 1_800_000_000 - (1_800_000_000 % 3600)
-    out = _history({
-        "window_start": start,
-        "temperature_min": 18.0, "temperature_max": 22.5,
-        "humidity_min": 40.0, "humidity_max": 61.0,
-        "hours": [
-            {"start": start, "t_min": 18.0, "t_max": 19.0, "h_min": 40.0, "h_max": 45.0},
-            {"start": start + 3600 * 5, "t_min": 20.0, "t_max": 22.5, "h_min": 50.0, "h_max": 61.0},
-        ],
-    })
+def test_the_last_24_hours_say_coldest_warmest_and_dampest():
+    out = _history(_bathroom(), 70)
     assert "Last 24 hours" in out
-    assert "actual 18.0\u00b0C \u2013 22.5\u00b0C" in out
-    assert "humidity 40\u00a0% \u2013 61\u00a0%" in out
-    assert out.count("<rect") == 2
+    assert "Coldest <b>18.2\u00b0C</b> around 04:00" in out
+    assert "How cold it got overnight." in out
+    assert "Warmest <b>23.1\u00b0C</b> around 17:00" in out
+    assert "Dampest <b>86\u00a0%</b> around 07:00, back under 70\u00a0% by 09:00" in out
+    assert "Above the 70\u00a0% damp-air limit in 3 of the last 24 hours." in out
+    assert "Still above it now" not in out
+
+
+@needs_node
+def test_the_chart_has_bars_a_humidity_line_the_limit_and_a_legend():
+    out = _history(_bathroom(), 70)
+    assert out.count("<rect") == 24
+    assert "climate-chart-humidity" in out
+    assert "climate-chart-limit" in out
+    assert "Damp limit 70\u00a0%" in out
+    assert "Temperature 17\u201324\u00b0C" in out
+    # Ticks at 06, 12 and 18 o'clock; midnight is at the very edge and left out.
+    assert "06:00" in out and "12:00" in out and "18:00" in out
+    assert "left:25.0%" in out
     assert 'role="img"' in out
 
 
 @needs_node
+def test_without_a_humidity_limit_there_is_advice_and_no_limit_line():
+    out = _history(_bathroom(), None)
+    assert "Dampest <b>86\u00a0%</b> around 07:00</span>" not in out  # no "back under"
+    assert "back under" not in out
+    assert "damp that lasts for hours is worth airing out" in out
+    assert "climate-chart-limit" not in out
+    assert "Damp limit" not in out
+
+
+@needs_node
+def test_a_room_still_damp_now_says_so():
+    history = _bathroom()
+    history["hours"][-1]["h_max"] = 88
+    history["humidity_max"] = 88
+    out = _history(history, 70)
+    assert "Dampest <b>88\u00a0%</b> around 23:00" in out
+    assert "back under" not in out
+    assert "Still above it now." in out
+
+
+@needs_node
+def test_a_room_that_stayed_dry_says_so():
+    out = _history(_day([21.0] * 23 + [21.5], [50] * 24), 70)
+    assert "Stayed under the 70\u00a0% damp-air limit." in out
+
+
+@needs_node
+def test_a_steady_room_is_held_not_coldest_and_warmest():
+    history = _day([21.0] * 3 + [None] * 21, [None] * 24)
+    history["hours"] = history["hours"][:3]
+    history["temperature_min"] = history["temperature_max"] = 21.0
+    out = _history(history)
+    assert "Held at <b>21.0\u00b0C</b>" in out
+    assert "No change in the last 3 hours." in out
+    assert "Coldest" not in out and "Dampest" not in out
+
+
+@needs_node
+def test_a_daytime_low_is_not_called_overnight():
+    temperatures = [21.0] * 24
+    temperatures[13] = 17.0
+    out = _history(_day(temperatures, [None] * 24))
+    assert "around 13:00" in out
+    assert "The coldest it got." in out
+    assert "overnight" not in out
+
+
+@needs_node
 def test_one_hour_of_history_has_words_but_no_chart():
-    start = 1_800_000_000 - (1_800_000_000 % 3600)
+    start = DAY
     out = _history({
         "window_start": start, "temperature_min": 21.0, "temperature_max": 21.0,
         "humidity_min": None, "humidity_max": None,
         "hours": [{"start": start, "t_min": 21.0, "t_max": 21.0, "h_min": None, "h_max": None}],
     })
-    assert "actual 21.0\u00b0C" in out
-    assert "humidity" not in out
+    assert "Held at <b>21.0\u00b0C</b>" in out
+    assert "No change in the last hour." in out
+    assert "humidity" not in out.lower()
     assert "<svg" not in out
 
 
 @needs_node
 def test_no_history_draws_nothing():
     assert _history(None) == ""
+
+
+# -- the weather outlook ------------------------------------------------------
+
+
+def _outlook(climate):
+    return _node(
+        "console.log(JSON.stringify(pressureOutlook(%s)));" % json.dumps(climate),
+        "pressureChangeText", "pressureOutlook", "pressureChart",
+        consts=("PRESSURE_OUTLOOK",),
+    )
+
+
+def test_the_card_shows_the_outlook_only_where_there_is_a_barometer():
+    card = _function("climateStatus")
+    assert "climate.measures_pressure" in card
+    assert "? pressureOutlook(climate)" in card
+    assert ": climateHistory(climate.last_24h, climate.humidity_max)" in card
+
+
+def test_there_is_one_message_for_each_tendency_the_server_sends():
+    from pressure_outlook import Tendency
+
+    table = _const("PRESSURE_OUTLOOK")
+    keys = re.findall(r"^    (\w+): \{", table, re.M)
+    assert keys == [item.value for item in Tendency]
+    for icon in re.findall(r"icon: '([\w-]+)'", table):
+        assert f"'{icon}':" in CORE, icon
+
+
+@needs_node
+@pytest.mark.parametrize("tendency, change, title, words, tone", [
+    ("storm", -7.2, "Storm possible", "Secure anything loose outside.", "storm"),
+    ("falling_fast", -4.4, "Rain and wind likely soon", "within 12 hours", "worse"),
+    ("falling", -2.0, "Weather turning", "perhaps rain", "worse"),
+    ("steady", 0.4, "No big change expected", "stay much as it is now", "steady"),
+    ("rising", 2.5, "Improving", "Drier, brighter weather is likely.", "better"),
+    ("rising_fast", 4.8, "Clearing, but gusty", "strong gusts", "better"),
+])
+def test_every_outlook_says_what_it_means(tendency, change, title, words, tone):
+    out = _outlook({
+        "measures_pressure": True,
+        "pressure_outlook": {"tendency": tendency, "change_3h": change, "rooms": 1, "ready_at": None},
+        "pressure_24h": [[1_800_000_000 - 7200, 1010.0], [1_800_000_000, 1008.0]],
+    })
+    assert f"<strong>{title}</strong>" in out
+    assert words in out
+    assert f'class="baro is-{tone}"' in out
+    assert "Weather outlook" in out
+    # A guide, and it says so.
+    assert "not a forecast" in out
+    size = f"{abs(change):.1f}\u00a0hPa in 3 hours"
+    assert (("Down " if change < 0 else "Up ") + size) in out
+
+
+@needs_node
+def test_the_outlook_is_learning_until_three_hours_are_in():
+    out = _outlook({
+        "measures_pressure": True,
+        "pressure_outlook": {"tendency": None, "change_3h": None, "rooms": 0,
+                             "ready_at": "2027-01-15T15:00:00+00:00"},
+        "pressure_24h": [[1_800_000_000, 1010.0]],
+    })
+    assert "Learning the weather" in out
+    assert "three hours of air pressure readings" in out
+    assert "Ready around 15:00." in out
+    # One point is not a line.
+    assert "baro-chart" not in out
+
+
+@needs_node
+def test_a_barometer_gone_quiet_has_no_outlook_and_says_why():
+    out = _outlook({"measures_pressure": True, "pressure_outlook": None, "pressure_24h": []})
+    assert "No outlook just now" in out
+    assert "No recent air pressure reading" in out
+
+
+@needs_node
+def test_no_change_is_written_as_no_change():
+    out = _node(
+        "console.log(JSON.stringify([pressureChangeText(0), pressureChangeText(-0.1),"
+        " pressureChangeText(null)]));",
+        "pressureChangeText",
+    )
+    assert out == ["No change in 3 hours", "Down 0.1\u00a0hPa in 3 hours", ""]
+
+
+def _front_page(zones):
+    return _node("""
+      const el = { hidden: true, innerHTML: '', className: '', attrs: {},
+                   setAttribute(k, v) { this.attrs[k] = v; } };
+      const $ = () => el;
+      const opened = [];
+      const showZone = (id) => opened.push(id);
+      const state = { zones: %s };
+      function climateOf(zone) {
+        const climate = zone && zone.climate;
+        return climate && climate.sensor_count ? climate : null;
+      }
+      renderWeather();
+      if (el.onclick) el.onclick();
+      console.log(JSON.stringify({ hidden: el.hidden, html: el.innerHTML,
+                                   cls: el.className, opened }));
+    """ % json.dumps(zones), "pressureChangeText", "houseOutlook", "renderWeather",
+        consts=("PRESSURE_OUTLOOK",))
+
+
+def _barometer_zone(tendency, change=-4.4, zone_id="4", summary=True):
+    return {
+        "zone_id": zone_id, "name": "Living Room",
+        "sensor_summary": {} if summary else None,
+        "climate": {"sensor_count": 1, "measures_pressure": True,
+                    "pressure_outlook": {"tendency": tendency, "change_3h": change,
+                                         "rooms": 1, "ready_at": None}},
+    }
+
+
+@needs_node
+def test_the_front_page_mentions_the_weather_only_when_it_is_changing():
+    out = _front_page([{"zone_id": "1", "name": "Hall", "sensor_summary": {},
+                        "climate": {"sensor_count": 1, "measures_pressure": False}},
+                       _barometer_zone("falling_fast")])
+    assert out["hidden"] is False
+    assert "Rain and wind likely soon" in out["html"]
+    assert "Down 4.4\u00a0hPa in 3 hours" in out["html"]
+    assert out["cls"] == "weather-chip is-worse"
+    # It opens the room the barometer is in.
+    assert out["opened"] == ["4"]
+
+    steady = _front_page([_barometer_zone("steady", 0.3)])
+    assert steady["hidden"] is True and steady["html"] == ""
+
+
+@needs_node
+def test_the_front_page_says_nothing_while_learning_or_with_sensors_off():
+    assert _front_page([_barometer_zone(None)])["hidden"] is True
+    assert _front_page([_barometer_zone("storm", -8, summary=False)])["hidden"] is True
+    assert _front_page([])["hidden"] is True
+
+
+def test_the_front_page_has_a_hidden_place_for_the_outlook():
+    html = (ROOT / "ui" / "cabin" / "index.html").read_text(encoding="utf-8")
+    assert '<button class="weather-chip" id="weatherChip" type="button" hidden></button>' in html
+    assert "renderWeather();" in _function("renderHome")
+
+
+def test_a_demo_thermometer_can_be_made_to_have_no_barometer():
+    sheet = _function("editSensorSheet")
+    assert "clear_pressure: root.querySelector('#editSensorPressure').value === ''" in sheet

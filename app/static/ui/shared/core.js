@@ -227,6 +227,20 @@ const Nobo = (() => {
              '<path d="M12 9.4v7.4"/>',
     /* Humidity. A drop, which is what damp air means to somebody reading it. */
     drop:    '<path d="M12 3.6c-3.3 4.3-5.6 7.4-5.6 10.3a5.6 5.6 0 0 0 11.2 0c0-2.9-2.3-6-5.6-10.3z"/>',
+    /* The weather outlook from air pressure, one per tendency. Improving is
+       a sun behind a cloud rather than a plain sun, because a plain sun is
+       Comfort and the two sit on the same page. */
+    'wx-storm':  '<path d="M7.2 14.2h9.9a3.9 3.9 0 0 0 .5-7.8 5.6 5.6 0 0 0-10.8 1.2 3.3 3.3 0 0 0 .4 6.6z"/>' +
+                 '<path d="M12.9 15.2l-2.3 3.4h3.1l-2.3 3.4"/>',
+    'wx-rain':   '<path d="M7.2 14.2h9.9a3.9 3.9 0 0 0 .5-7.8 5.6 5.6 0 0 0-10.8 1.2 3.3 3.3 0 0 0 .4 6.6z"/>' +
+                 '<path d="M8.8 17.4l-.9 2.4M12.6 17.4l-.9 2.4M16.4 17.4l-.9 2.4"/>',
+    'wx-cloud':  '<path d="M7.2 18.4h9.9a3.9 3.9 0 0 0 .5-7.8 5.6 5.6 0 0 0-10.8 1.2 3.3 3.3 0 0 0 .4 6.6z"/>',
+    'wx-steady': '<path d="M3.6 12h15.8"/><path d="M15.6 8.2 19.4 12l-3.8 3.8"/>',
+    'wx-clear':  '<circle cx="8.4" cy="8.4" r="3"/>' +
+                 '<path d="M8.4 2.6v1.3M2.6 8.4h1.3M4.3 4.3l.9.9M12.5 4.3l-.9.9"/>' +
+                 '<path d="M10 19.6h7.4a3.2 3.2 0 0 0 .4-6.4 4.6 4.6 0 0 0-8.8 1 2.7 2.7 0 0 0 1 5.4z"/>',
+    'wx-gust':   '<path d="M3.4 9.2h10.4a2.6 2.6 0 1 0-2.6-2.6"/>' +
+                 '<path d="M3.4 13h15a2.6 2.6 0 1 1-2.6 2.6"/><path d="M3.4 16.8h7"/>',
     /* Radio waves rather than bars: the bars would have to mean something,
        and the number behind them is a last-hop score, not a strength. */
     signal:  '<path d="M12 19.2h.01" stroke-width="2.4"/>' +

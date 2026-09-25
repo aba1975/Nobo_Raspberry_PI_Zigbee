@@ -187,6 +187,7 @@ class SimulatedContactSensorProvider:
         temperature: Optional[float] = None,
         humidity: Optional[float] = None,
         pressure: Optional[float] = None,
+        clear_pressure: bool = False,
     ) -> ContactSnapshot:
         current = self._get(sensor_id)
         readings = {
@@ -202,6 +203,12 @@ class SimulatedContactSensorProvider:
             if parsed is None:
                 raise ValueError(f"{name} is outside what the sensor can report")
             sent[name] = parsed
+        if clear_pressure and pressure is not None:
+            raise ValueError("pressure and clear_pressure cannot both be supplied")
+        if clear_pressure and not current.is_climate:
+            raise ValueError("Only a temperature sensor has room readings")
+        if clear_pressure:
+            sent["pressure"] = None
         if battery is not None and clear_battery:
             raise ValueError("battery and clear_battery cannot both be supplied")
         if link_quality is not None and clear_link_quality:

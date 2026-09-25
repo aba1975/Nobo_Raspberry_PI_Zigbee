@@ -910,8 +910,63 @@ is the zone reading the rules used, at the time of its newest report. It is
 saved to `data/climate_history.json` only when a bucket changes, and a file
 this build cannot read is set aside rather than blocking anything: it is a
 cache of what the rooms read, not a setting. The zone payload carries it as
-`climate.last_24h`, and the zone page shows the range in words and one bar per
-hour.
+`climate.last_24h`.
+
+The zone page shows it **only in a room without a barometer** — a room with
+one shows the weather outlook below instead, which is more use than
+yesterday's temperatures. It is a list of facts rather than a range: the
+coldest and warmest hours ("how cold it got overnight" when the coldest fell
+between 22:00 and 07:00), the dampest hour and, when the room has a humidity
+maximum, how many of the last 24 hours were above it and when it came back
+under. Below them is one bar per hour for the temperature, a line for the
+humidity and the damp limit dashed across it.
+
+### Weather outlook
+
+A falling barometer is the oldest weather forecast there is, and the Aqara
+measures pressure to 0.1 hPa. `app/pressure_outlook.py` keeps each zone's
+pressure for 24 hours, one sample per ten minutes, in
+`data/pressure_history.json` — separate from the temperature history, and set
+aside rather than trusted if this build cannot read it. The outlook comes from
+the **change over the last three hours**, in the six bands a barometer's
+tendency is traditionally read in:
+
+| 3-hour change | Outlook |
+| --- | --- |
+| −6.1 hPa or more | Storm likely |
+| −3.6 to −6.0 | Rain and wind likely soon |
+| −1.6 to −3.5 | Weather getting worse |
+| −1.5 to +1.5 | No change expected |
+| +1.6 to +3.5 | Improving |
+| +3.6 or more | Clearing, may turn windy |
+
+- **A reading holds until the next one.** The Aqara reports pressure only when
+  it changes, about hourly in still weather, so a gap is not missing data. The
+  change is the latest reading minus the one in force three hours ago, and it
+  needs the latest to be fresh and the one before the three-hour mark to be no
+  older than `CLIMATE_STALE_SECONDS` — otherwise it is "No outlook just now".
+  A new sensor says "Learning the weather… Ready around HH:MM" for its first
+  three hours.
+- **It is one outlook for the house**, the mean of each room's *own* change,
+  so two sensors a hectopascal apart in calibration cannot disagree about the
+  weather.
+- **It is station pressure**, with no correction to sea level. A tendency is a
+  difference, and the altitude cancels out of it, so there is no setting.
+- The front page shows a small chip with the outlook **only when the weather
+  is changing** — "No change expected" is not news — and it opens the room it
+  came from.
+
+The zone page says what it is: a rough guide from the air pressure measured
+there, not a forecast, and to check yr.no before a trip. `/api/display`
+carries it as `weather_outlook` (`tendency`, `change_3h`), or `null` when
+nothing is known.
+
+**Which rooms have a barometer is decided by the hardware.** A room measures
+pressure when any of its thermometers has reported one
+(`climate.measures_pressure`). The Tuya temperature-and-humidity sensors
+(TS0201 and similar) have no barometer, so Zigbee2MQTT never sends `pressure`
+for them, the reading stays `null`, and their room shows the 24-hour history
+instead — with no setting, and correctly the moment a sensor is moved.
 
 ### Where to put one
 
@@ -960,6 +1015,8 @@ this repository, and none has been run against it.
 
 A simulated thermometer starts at 21 °C, 45 % and 1013 hPa, and its readings,
 availability and battery are set by hand in its edit sheet — so damp air and
-near freezing can be tried by setting 85 % or 3 °C. It "reports" every
+near freezing can be tried by setting 85 % or 3 °C. Leaving the pressure
+blank sends `clear_pressure` and makes it a thermometer without a barometer,
+as a Tuya is. It "reports" every
 50 minutes when nothing changes, as a real one does, so leaving the demo alone
 does not teach it that thermometers stop working after three hours.

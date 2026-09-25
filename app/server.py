@@ -37,6 +37,7 @@ import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
 from climate_history import ClimateHistory
+from pressure_outlook import PressureHistory
 from sensor_automation import (
     AutomationResult as SensorAutomationResult,
     CLIMATE_HYSTERESIS,
@@ -458,6 +459,11 @@ sensor_automation = SensorAutomation(
 climate_history = ClimateHistory(
     zones=sensor_persistence.load_climate_history(),
     save=sensor_persistence.save_climate_history,
+)
+
+pressure_history = PressureHistory(
+    zones=sensor_persistence.load_pressure_history(),
+    save=sensor_persistence.save_pressure_history,
 )
 
 
@@ -1196,6 +1202,8 @@ class SensorSimulationUpdate(BaseModel):
     temperature: Optional[float] = None
     humidity: Optional[float] = None
     pressure: Optional[float] = None
+    # A thermometer without a barometer, as a Tuya one is.
+    clear_pressure: bool = False
     available: Optional[bool] = None
     battery: Optional[int] = Field(default=None, ge=0, le=100)
     clear_battery: bool = False
@@ -2640,12 +2648,39 @@ def _climate_event_alert(event, name: str, result: SensorAutomationResult) -> No
 def _record_climate_history(result: SensorAutomationResult) -> None:
     """Fold each room's current reading into its 24-hour history."""
     readings = {}
+    pressures = {}
     for zone_id, aggregate in result.zones.items():
         reading = aggregate.climate.reading if aggregate.climate else None
         if reading is None or reading.newest_at is None:
             continue
         readings[zone_id] = (reading.newest_at, reading.temperature, reading.humidity)
-    climate_history.record(readings, time.time())
+        # Only rooms whose thermometer has a barometer. A Tuya one reports
+        # temperature and humidity alone, and its room keeps the plain history.
+        if reading.pressure is not None:
+            pressures[zone_id] = (reading.newest_at, reading.pressure)
+    now = time.time()
+    climate_history.record(readings, now)
+    pressure_history.record(pressures, now)
+
+
+def _pressure_summary(zone_id: str, sensors: List[Dict[str, Any]], now: float) -> Dict[str, Any]:
+    """Whether this room measures air pressure, and what it says.
+
+    "Measures" is what the hardware can do: a thermometer in the room that
+    has ever reported a pressure. An Aqara does; a Tuya reports temperature
+    and humidity only, so its room keeps the plain history. Moving the Aqara
+    out changes the room at once, not a day later when its samples expire.
+
+    The outlook is the house's, identical in every room that has a barometer;
+    the chart is this room's own readings.
+    """
+    if not any(sensor.get("pressure") is not None for sensor in sensors):
+        return {"measures_pressure": False, "pressure_outlook": None, "pressure_24h": None}
+    return {
+        "measures_pressure": True,
+        "pressure_outlook": pressure_history.outlook(now, CLIMATE_STALE_SECONDS),
+        "pressure_24h": pressure_history.hourly(zone_id, now),
+    }
 
 
 async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
@@ -3037,6 +3072,7 @@ def _zone_climate_summary(
         "frost": bool(climate and climate.frost_raised),
         "frost_temperature": FROST_TEMPERATURE,
         "last_24h": climate_history.summary(str(zone["zone_id"]), time.time()),
+        **_pressure_summary(str(zone["zone_id"]), sensors, time.time()),
     }
 
 
@@ -3735,6 +3771,7 @@ async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulati
             clear_battery=body.clear_battery,
             link_quality=body.link_quality,
             clear_link_quality=body.clear_link_quality,
+            clear_pressure=body.clear_pressure,
             **{
                 name: getattr(body, name)
                 for name in ("temperature", "humidity", "pressure")
@@ -3872,8 +3909,20 @@ def _display_payload() -> Dict[str, Any]:
         "status": status,
         "open_contacts": open_contacts,
         "unavailable_sensors": unavailable,
+        # The house's pressure tendency: "steady", "falling", ... or null
+        # when no barometer has three hours behind it yet.
+        "weather_outlook": (
+            _display_outlook(pressure_history.outlook(time.time(), CLIMATE_STALE_SECONDS))
+            if enabled else None
+        ),
         "rooms": rooms,
     }
+
+
+def _display_outlook(outlook: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not outlook or outlook["tendency"] is None:
+        return None
+    return {"tendency": outlook["tendency"], "change_3h": outlook["change_3h"]}
 
 
 @app.get("/api/display")

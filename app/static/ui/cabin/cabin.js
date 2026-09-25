@@ -1647,7 +1647,11 @@
            climate.fresh_count > 1 ? `average of ${climate.fresh_count} thermometers` : '',
            zone.temperature_source === 'hub' ? 'the heater\u2019s own reading is shown above' : '',
          ].filter(Boolean).join(' · '))}</p>`;
-    const history = climateHistory(climate.last_24h);
+    /* Pressure is more use than a chart where there is a barometer; a
+       thermometer without one (a Tuya, say) keeps the day in words. */
+    const history = climate.measures_pressure
+      ? pressureOutlook(climate)
+      : climateHistory(climate.last_24h, climate.humidity_max);
 
     return `
       <section class="card sensor-card climate-card">
@@ -1676,50 +1680,220 @@
       moving one, give it half an hour before trusting the reading.</p>
     </details>`;
 
-  /* The last 24 hours: the lowest and highest actual reading, and one bar
-     per hour from that hour's lowest to its highest. */
-  function climateHistory(history) {
+  /* The last 24 hours, written as the three things it is for: how cold the
+     room got, how warm, and whether damp air cleared. Each hour holds its
+     lowest and highest reading, so a time is "around" the start of that
+     hour, never a minute the data does not have. */
+  function climateHistory(history, humidityMax) {
     if (!history) return '';
-    const range = (low, high, fmt) => low == null ? null
-      : (fmt(low) === fmt(high) ? fmt(low) : `${fmt(low)} \u2013 ${fmt(high)}`);
-    const temperature = range(history.temperature_min, history.temperature_max,
-      value => `${Nobo.fmtTemp(value)}\u00B0C`);
-    const humidity = range(history.humidity_min, history.humidity_max, fmtHumidity);
-    if (!temperature && !humidity) return '';
+    const rows = history.hours || [];
+    const at = row => Nobo.fmtTimeOfDay(row.start * 1000);
+    const deg = value => `${Nobo.fmtTemp(value)}\u00B0C`;
+    // The most recent hour that reached the extreme, as the one worth knowing.
+    const latest = test => rows.filter(test).pop();
+    const facts = [];
+    const fact = (icon, tone, text, detail) => facts.push(`
+          <li><span class="h24-icon${tone ? ` is-${tone}` : ''}" aria-hidden="true">${Nobo.icon(icon, '1.05em')}</span>
+            <span>${text}${detail ? `<small>${esc(detail)}</small>` : ''}</span></li>`);
+
+    if (history.temperature_min != null) {
+      if (deg(history.temperature_min) === deg(history.temperature_max)) {
+        fact('thermo', '', `Held at <b>${esc(deg(history.temperature_min))}</b>`,
+          `No change in ${rows.length === 1 ? 'the last hour' : `the last ${rows.length} hours`}.`);
+      } else {
+        const cold = latest(row => row.t_min === history.temperature_min);
+        const warm = latest(row => row.t_max === history.temperature_max);
+        const hour = new Date(cold.start * 1000).getHours();
+        fact('frost', '', `Coldest <b>${esc(deg(history.temperature_min))}</b> around ${esc(at(cold))}`,
+          hour >= 22 || hour < 7 ? 'How cold it got overnight.' : 'The coldest it got.');
+        fact('thermo', 'warm', `Warmest <b>${esc(deg(history.temperature_max))}</b> around ${esc(at(warm))}`,
+          'Sun, showers or a heater left on push this up.');
+      }
+    }
+    if (history.humidity_max != null) {
+      const damp = latest(row => row.h_max === history.humidity_max);
+      let text = `Dampest <b>${esc(fmtHumidity(history.humidity_max))}</b> around ${esc(at(damp))}`;
+      let detail;
+      if (humidityMax != null) {
+        const limit = fmtHumidity(humidityMax);
+        const above = rows.filter(row => row.h_max != null && row.h_max > humidityMax);
+        const after = rows.filter(row => row.start > damp.start);
+        const back = after.find(row => row.h_max != null && row.h_max <= humidityMax);
+        const last = rows[rows.length - 1];
+        if (!above.length) {
+          detail = `Stayed under the ${limit} damp-air limit.`;
+        } else {
+          if (history.humidity_max > humidityMax && back) text += `, back under ${esc(limit)} by ${esc(at(back))}`;
+          detail = `Above the ${limit} damp-air limit in ${above.length} of the last ${rows.length} hours.`
+            + (last.h_max != null && last.h_max > humidityMax ? ' Still above it now.' : '');
+        }
+      } else {
+        detail = 'Short peaks after a shower are normal; damp that lasts for hours is worth airing out.';
+      }
+      fact('drop', '', text, detail);
+    }
+    if (!facts.length) return '';
     return `
       <div class="climate-history">
         <div class="climate-history-head">
           <strong>Last 24 hours</strong>
-          <small>${esc([
-            temperature ? `actual ${temperature}` : '',
-            humidity ? `humidity ${humidity}` : '',
-          ].filter(Boolean).join(' · '))}</small>
+          <small>lowest and highest reading each hour</small>
         </div>
-        ${climateHistoryChart(history)}
+        <ul class="h24-facts">${facts.join('')}</ul>
+        ${climateHistoryChart(history, humidityMax)}
       </div>`;
   }
 
-  function climateHistoryChart(history) {
+  function climateHistoryChart(history, humidityMax) {
     const rows = (history.hours || []).filter(row => row.t_min != null && row.t_max != null);
     if (rows.length < 2) return '';
     const low = Math.floor(history.temperature_min - 0.5);
     const high = Math.ceil(history.temperature_max + 0.5);
     const span = Math.max(high - low, 1);
-    const width = 240, height = 56, slot = width / 24;
+    const width = 240, height = 80, slot = width / 24;
     const y = value => (height - 3) - ((value - low) / span) * (height - 6);
+    const yh = value => (height - 3) - (value / 100) * (height - 6);
+    const index = row => Math.round((row.start - history.window_start) / 3600);
     const bars = rows.map(row => {
-      const index = Math.round((row.start - history.window_start) / 3600);
       const top = y(row.t_max);
       const size = Math.max(y(row.t_min) - top, 2);
-      return `<rect x="${(index * slot + 1).toFixed(1)}" y="${top.toFixed(1)}"
+      return `<rect class="climate-chart-bar" x="${(index(row) * slot + 1).toFixed(1)}" y="${top.toFixed(1)}"
         width="${(slot - 2).toFixed(1)}" height="${size.toFixed(1)}" rx="1.5"/>`;
     }).join('');
+    const damp = (history.hours || []).filter(row => row.h_max != null);
+    const line = damp.length > 1
+      ? `<polyline class="climate-chart-humidity" points="${damp.map(row =>
+          `${(index(row) * slot + slot / 2).toFixed(1)},${yh(row.h_max).toFixed(1)}`).join(' ')}"/>`
+      : '';
+    const limit = line && humidityMax != null
+      ? `<line class="climate-chart-limit" x1="0" x2="${width}" y1="${yh(humidityMax).toFixed(1)}" y2="${yh(humidityMax).toFixed(1)}"/>`
+      : '';
+    // A tick at each 00, 06, 12 and 18 o'clock, where that hour's bar starts.
+    const ticks = [];
+    for (let i = 0; i < 24; i += 1) {
+      const start = history.window_start + i * 3600;
+      const left = (i * slot) / width * 100;
+      if (new Date(start * 1000).getHours() % 6 === 0 && left > 6 && left < 88) {
+        ticks.push(`<span style="left:${left.toFixed(1)}%">${esc(Nobo.fmtTimeOfDay(start * 1000))}</span>`);
+      }
+    }
     return `
       <svg class="climate-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
-        role="img" aria-label="Actual temperature each hour over the last 24 hours, between ${low} and ${high} degrees">${bars}</svg>
-      <div class="climate-chart-axis" aria-hidden="true">
-        <span>24 h ago</span><span>${esc(`${low}\u00B0 \u2013 ${high}\u00B0`)}</span><span>now</span>
+        role="img" aria-label="Actual temperature each hour over the last 24 hours, between ${low} and ${high} degrees${line ? ', with humidity as a line' : ''}">${bars}${limit}${line}</svg>
+      <div class="climate-chart-axis" aria-hidden="true">${ticks.join('')}<span class="is-now">now</span></div>
+      <div class="climate-chart-legend" aria-hidden="true">
+        <span><i class="is-temp"></i>${esc(`Temperature ${low}\u2013${high}\u00B0C`)}</span>
+        ${line ? '<span><i class="is-humidity"></i>Humidity</span>' : ''}
+        ${limit ? `<span><i class="is-limit"></i>${esc(`Damp limit ${fmtHumidity(humidityMax)}`)}</span>` : ''}
       </div>`;
+  }
+
+  /* What the last three hours of air pressure say about the weather, in the
+     bands weather services use. Worded as a guide, because one barometer is
+     one: it cannot see a front coming the way a forecast can. The server
+     decides the band; this only says it. */
+  const PRESSURE_OUTLOOK = {
+    storm: { tone: 'storm', icon: 'wx-storm', title: 'Storm possible',
+      detail: 'Pressure is falling very fast. Strong wind is likely within hours. Secure anything loose outside.' },
+    falling_fast: { tone: 'worse', icon: 'wx-rain', title: 'Rain and wind likely soon',
+      detail: 'Pressure is falling quickly. Unsettled weather usually follows within 12 hours.' },
+    falling: { tone: 'worse', icon: 'wx-cloud', title: 'Weather turning',
+      detail: 'Pressure is falling. More cloud, and perhaps rain, in the next day or so.' },
+    steady: { tone: 'steady', icon: 'wx-steady', title: 'No big change expected',
+      detail: 'Pressure is steady, so the weather will most likely stay much as it is now.' },
+    rising: { tone: 'better', icon: 'wx-clear', title: 'Improving',
+      detail: 'Pressure is rising. Drier, brighter weather is likely.' },
+    rising_fast: { tone: 'better', icon: 'wx-gust', title: 'Clearing, but gusty',
+      detail: 'Pressure is rising fast. Skies often clear quickly behind a front, with strong gusts for a while.' },
+  };
+
+  function pressureChangeText(change) {
+    if (change == null) return '';
+    const size = `${Math.abs(change).toFixed(1)}\u00A0hPa`;
+    if (change < 0) return `Down ${size} in 3 hours`;
+    if (change > 0) return `Up ${size} in 3 hours`;
+    return 'No change in 3 hours';
+  }
+
+  function pressureOutlook(climate) {
+    const outlook = climate.pressure_outlook;
+    const known = outlook && outlook.tendency ? PRESSURE_OUTLOOK[outlook.tendency] : null;
+    const box = (tone, icon, title, detail, extra) => `
+      <div class="baro is-${tone}">
+        <span class="baro-icon" aria-hidden="true">${Nobo.icon(icon, '1.6em')}</span>
+        <span class="baro-body">
+          <span class="baro-eyebrow">Weather outlook</span>
+          <strong>${esc(title)}</strong>
+          <span class="baro-detail">${esc(detail)}</span>
+          ${extra}
+        </span>
+      </div>`;
+    let html;
+    if (known) {
+      html = box(known.tone, known.icon, known.title, known.detail,
+        `<span class="baro-change">${esc(pressureChangeText(outlook.change_3h))}</span>${pressureChart(climate.pressure_24h)}`);
+    } else if (outlook) {
+      const ready = outlook.ready_at ? ` Ready around ${Nobo.fmtTimeOfDay(outlook.ready_at)}.` : '';
+      html = box('steady', 'wx-steady', 'Learning the weather',
+        `It needs three hours of air pressure readings to see which way the weather is moving.${ready}`,
+        pressureChart(climate.pressure_24h));
+    } else {
+      html = box('steady', 'wx-steady', 'No outlook just now',
+        'No recent air pressure reading, so there is nothing to go on.', '');
+    }
+    return `${html}
+      <p class="baro-note">A rough guide from the air pressure measured here, not a forecast. Check yr.no before a trip.</p>`;
+  }
+
+  /* This room's pressure over the day, one point per hour, with the three
+     hours the outlook is read from marked off at the right. */
+  function pressureChart(points) {
+    if (!points || points.length < 2) return '';
+    const width = 240, height = 34;
+    const now = Date.now() / 1000, from = now - 24 * 3600;
+    const values = points.map(point => point[1]);
+    const low = Math.min(...values) - 1, high = Math.max(...values) + 1;
+    const x = at => Math.min(Math.max((at - from) / (24 * 3600), 0), 1) * width;
+    const y = value => (height - 2) - ((value - low) / (high - low)) * (height - 4);
+    const line = points.map(([at, value]) => `${x(at).toFixed(1)},${y(value).toFixed(1)}`).join(' ');
+    const three = (21 / 24 * width).toFixed(1);
+    return `
+      <svg class="baro-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img"
+        aria-label="Air pressure over the last 24 hours, between ${Math.round(Math.min(...values))} and ${Math.round(Math.max(...values))} hPa">
+        <line class="baro-chart-mark" x1="${three}" x2="${three}" y1="0" y2="${height}"/>
+        <polyline points="${line}"/>
+      </svg>
+      <span class="baro-axis" aria-hidden="true"><span>24 h ago</span><span class="is-three">last 3 h</span></span>`;
+  }
+
+  /* The house's outlook for the front page, from whichever room has one:
+     they are the same number, worked out once on the server. */
+  function houseOutlook() {
+    for (const zone of state.zones || []) {
+      const climate = zone.sensor_summary ? climateOf(zone) : null;
+      const outlook = climate && climate.measures_pressure ? climate.pressure_outlook : null;
+      if (outlook && outlook.tendency && PRESSURE_OUTLOOK[outlook.tendency]) return { zone, outlook };
+    }
+    return null;
+  }
+
+  /* Only when the weather is on the move, so a steady day adds nothing to
+     read on the page somebody opens most. */
+  function renderWeather() {
+    const el = $('#weatherChip');
+    if (!el) return;
+    const found = houseOutlook();
+    const show = !!found && found.outlook.tendency !== 'steady';
+    el.hidden = !show;
+    if (!show) { el.innerHTML = ''; el.onclick = null; return; }
+    const known = PRESSURE_OUTLOOK[found.outlook.tendency];
+    el.className = `weather-chip is-${known.tone}`;
+    el.innerHTML = `
+      <span class="weather-chip-icon" aria-hidden="true">${Nobo.icon(known.icon, '1.1em')}</span>
+      <span class="weather-chip-text"><strong>${esc(known.title)}</strong>
+        <small>${esc(pressureChangeText(found.outlook.change_3h))}</small></span>`;
+    el.setAttribute('aria-label', `Weather outlook: ${known.title}. ${pressureChangeText(found.outlook.change_3h)}. Open ${found.zone.name}.`);
+    el.onclick = () => showZone(found.zone.zone_id);
   }
 
   function thresholdOptions(value, from, to, noneLabel) {
@@ -2242,6 +2416,7 @@
           ${reading('editSensorTemp', 'Temperature (°C)', sensor.temperature, -40, 80, 0.1)}
           ${reading('editSensorHumidity', 'Humidity (%)', sensor.humidity, 0, 100, 1)}
           ${reading('editSensorPressure', 'Pressure (hPa)', sensor.pressure, 300, 1100, 1)}
+          <small class="field-hint">Leave pressure blank for a thermometer without a barometer, as a Tuya one is.</small>
         ` : `
         <label class="field"><span>Contact</span>
           <select id="editSensorState">
@@ -2290,6 +2465,7 @@
                   temperature: number('#editSensorTemp'),
                   humidity: number('#editSensorHumidity'),
                   pressure: number('#editSensorPressure'),
+                  clear_pressure: root.querySelector('#editSensorPressure').value === '',
                 }
               : { state: root.querySelector('#editSensorState').value };
             await Nobo.api.simulateSensor(sensor.sensor_id, {
@@ -5841,6 +6017,7 @@
 
   function renderHome() {
     renderTrip();
+    renderWeather();
     renderModes();
     renderZones();
     renderSystem();

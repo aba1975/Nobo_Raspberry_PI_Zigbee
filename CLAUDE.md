@@ -115,7 +115,9 @@ hub reached the hardware; everything else proves a message reached the hub.
   simulator, Zigbee2MQTT provider, persistence and the automation engine.
   Contacts and room thermometers (`climate`) share one registry and one
   per-zone ownership ledger; `docs/SENSORS.md` is the design.
-  `app/climate_history.py` keeps each room's hourly lowest/highest for 24 h
+  `app/climate_history.py` keeps each room's hourly lowest/highest for 24 h,
+  and `app/pressure_outlook.py` turns the 3-hour pressure change into a
+  house-wide weather outlook (rooms without a barometer show the 24 h instead)
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

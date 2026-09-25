@@ -19,6 +19,7 @@ SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
 SENSOR_AUTOMATION_STATE_FILE = DATA_DIR / "sensor_automation_state.json"
 ZIGBEE_METADATA_FILE = DATA_DIR / "zigbee_sensor_metadata.json"
 CLIMATE_HISTORY_FILE = DATA_DIR / "climate_history.json"
+PRESSURE_HISTORY_FILE = DATA_DIR / "pressure_history.json"
 
 # ``simulated`` exists only in demo mode; ``zigbee2mqtt`` talks to real
 # hardware through a Zigbee2MQTT bridge.  See docs/SENSORS.md.
@@ -771,3 +772,55 @@ def save_climate_history(
     }
     _parse_climate_history(payload)
     _atomic_write(path or CLIMATE_HISTORY_FILE, payload)
+
+
+# ---------------------------------------------------------------------------
+# Pressure history: one sample per ten minutes per zone, for the tendency
+# ---------------------------------------------------------------------------
+# Its own file, so rooms whose thermometers have no barometer cost nothing
+# and the temperature history's format did not have to change. A cache like
+# that one: a file this build cannot read is set aside and collection starts
+# again.
+
+PRESSURE_HISTORY_VERSION = 1
+
+
+def _parse_pressure_history(payload: Any) -> Dict[str, list[list[float]]]:
+    doc = _document(payload, (PRESSURE_HISTORY_VERSION,))
+    result: Dict[str, list[list[float]]] = {}
+    for zone_id, rows in _require_dict(doc.get("zones"), "zones").items():
+        if not isinstance(zone_id, str) or not zone_id:
+            raise InvalidSensorData("zone ids must be non-empty strings")
+        if type(rows) is not list:
+            raise InvalidSensorData(f"zones.{zone_id} must be an array")
+        samples: list[list[float]] = []
+        for index, raw in enumerate(rows):
+            where = f"zones.{zone_id}[{index}]"
+            if type(raw) is not list or len(raw) != 2:
+                raise InvalidSensorData(f"{where} must be [epoch seconds, hPa]")
+            at, value = raw
+            if type(at) is not int or at < 0:
+                raise InvalidSensorData(f"{where} time must be whole epoch seconds")
+            if samples and at <= samples[-1][0]:
+                raise InvalidSensorData(f"{where} is not after the sample before it")
+            pressure = _climate_reading(value, "pressure", where)
+            if pressure is None:
+                raise InvalidSensorData(f"{where} has no pressure")
+            samples.append([at, pressure])
+        result[zone_id] = samples
+    return result
+
+
+def load_pressure_history(path: Optional[Path] = None) -> Dict[str, list[list[float]]]:
+    return _load(path or PRESSURE_HISTORY_FILE, {}, _parse_pressure_history)
+
+
+def save_pressure_history(
+    zones: Mapping[str, list[list[float]]], path: Optional[Path] = None
+) -> None:
+    payload = {
+        "schema_version": PRESSURE_HISTORY_VERSION,
+        "zones": {str(zone_id): [list(row) for row in rows] for zone_id, rows in zones.items()},
+    }
+    _parse_pressure_history(payload)
+    _atomic_write(path or PRESSURE_HISTORY_FILE, payload)

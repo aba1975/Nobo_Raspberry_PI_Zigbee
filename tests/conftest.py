@@ -139,6 +139,9 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sensor_persistence, "CLIMATE_HISTORY_FILE", tmp_path / "climate_history.json",
     )
+    monkeypatch.setattr(
+        sensor_persistence, "PRESSURE_HISTORY_FILE", tmp_path / "pressure_history.json",
+    )
     # A module-level history would carry one test's readings into the next.
     server_module = sys.modules.get("server")
     if server_module is not None and hasattr(server_module, "climate_history"):
@@ -146,6 +149,12 @@ def redirect_persistence(tmp_path, monkeypatch):
 
         monkeypatch.setattr(server_module, "climate_history", ClimateHistory(
             save=sensor_persistence.save_climate_history,
+        ))
+    if server_module is not None and hasattr(server_module, "pressure_history"):
+        from pressure_outlook import PressureHistory
+
+        monkeypatch.setattr(server_module, "pressure_history", PressureHistory(
+            save=sensor_persistence.save_pressure_history,
         ))
     # The account store too. It was left out, and a test that changed a
     # password or a role therefore rewrote the real users.json and broke every
