@@ -224,3 +224,15 @@ def test_the_room_sheets_offer_the_choice():
     add = _function("addZoneSheet")
     assert 'id="azSchedule" checked' in add
     assert "no_schedule: !root.querySelector('#azSchedule').checked" in add
+
+
+def test_the_zone_page_leads_with_the_measurement_not_a_mode():
+    body = _function("renderZoneDetail")
+    assert "const measuredHead = monitoringOnly || noSchedule;" in body
+    assert "const headLabel = measuredHead ? 'Actual'" in body
+    assert "${remote || measuredHead ? '' : `<div class=\"note note-warn\">No heater" in body
+
+
+def test_a_group_summary_ignores_rooms_without_a_mode():
+    body = _function("groupSummary")
+    assert "zones.filter(zone => zone.no_schedule !== true)" in body

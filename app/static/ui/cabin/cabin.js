@@ -2967,7 +2967,10 @@
   function groupSummary(zones) {
     const parts = [`${zones.length} ${zones.length === 1 ? 'zone' : 'zones'}`];
 
-    const modes = new Set(zones.map(zone => Nobo.effectiveMode(zone)));
+    /* A room with no heating schedule has no mode, so it neither makes a
+       group "all at Eco" nor splits one that otherwise is. */
+    const modes = new Set(zones.filter(zone => zone.no_schedule !== true)
+      .map(zone => Nobo.effectiveMode(zone)));
     if (modes.size === 1) {
       const only = [...modes][0];
       parts.push(`all at ${(Nobo.MODES[only] || {}).label || only}`);
@@ -3285,8 +3288,11 @@
        labelled. One number with "measuring 19°" in small print under it was
        too easy to read as the other. A room with no heater has nothing to be
        set to, so its measurement is the headline. */
-    const headLabel = monitoringOnly ? 'Actual' : remote ? 'Set to' : 'Running';
-    const headValue = monitoringOnly
+    /* A room with no schedule has nothing running either, so it leads with
+       what it measures, the same as a monitoring-only room. */
+    const measuredHead = monitoringOnly || noSchedule;
+    const headLabel = measuredHead ? 'Actual' : remote ? 'Set to' : 'Running';
+    const headValue = measuredHead
       ? (actual == null ? '<span class="set-none">No reading</span>' : Nobo.bigTemp(actual))
       : remote
       ? (target == null ? '<span class="set-none">Not set</span>' : Nobo.bigTemp(target))
@@ -3296,10 +3302,12 @@
       ? `${fmtHumidity(climate.humidity)} humidity \u00B7 ` : '';
     const headSub = monitoringOnly
       ? `${actual == null ? '' : esc(actualHumidity + actualSource) + ' \u00B7 '}Monitoring only \u2014 there is no heater in this zone`
+      : noSchedule
+      ? 'There is no heater in this zone'
       : !remote
       ? 'The temperature in this zone is set by the dial on each heater'
       : `${esc(modeLabel)}${actual == null ? ' \u00B7 no temperature sensor in this zone' : ''}`;
-    const actualBlock = monitoringOnly || actual == null ? '' : `
+    const actualBlock = measuredHead || actual == null ? '' : `
           <div class="zd-actual" title="Actual temperature, measured by the ${esc(actualSource)}">
             <span class="set-label">Actual</span>
             <div class="zd-actual-value">${Nobo.bigTemp(actual)}</div>
@@ -3345,7 +3353,7 @@
             <span class="zd-temp-note">set by Nobø</span>
           </div>
         </div>` : ''}
-        ${remote || monitoringOnly ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
+        ${remote || measuredHead ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
           from here. You can still switch the zone between comfort, eco, away and its schedule -
           turn the dial on the heater to change the temperature itself.</div>`}
         ${renderSetpointDrift(zone)}

@@ -230,7 +230,8 @@ def test_the_zone_page_labels_the_measurement_actual():
     assert "measuring ' + Nobo.fmtTemp" not in detail
     assert "'Running now'" not in detail
     assert "<span class=\"set-label\">Actual</span>" in detail
-    assert "headLabel = monitoringOnly ? 'Actual' : remote ? 'Set to' : 'Running'" in detail
+    assert "const measuredHead = monitoringOnly || noSchedule;" in detail
+    assert "headLabel = measuredHead ? 'Actual' : remote ? 'Set to' : 'Running'" in detail
     assert "fact('Actual temperature'" in _function("climateStatus")
 
 
