@@ -4572,7 +4572,7 @@ async def add_zone(zone: ZoneAdd):
             "A00",
             "0",
             encoded,
-            DEFAULT_WEEK_PROFILE_ID,
+            _hub_built_in_week_profile(current_hub) or DEFAULT_WEEK_PROFILE_ID,
             str(DEFAULT_NEW_ZONE_COMFORT),
             str(DEFAULT_NEW_ZONE_ECO),
             pynobo.nobo.API.OVERRIDE_ALLOWED,
@@ -4710,6 +4710,22 @@ def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
     _prune_zone_group_order()
 
 
+def _hub_built_in_week_profile(current_hub) -> Optional[str]:
+    """The built-in week profile this hub actually has, if any.
+
+    Hubs differ. The one this was commissioned against has its factory
+    "Default" as profile ``0`` and no profile ``1`` at all, so sending ``1``
+    points a zone at a schedule that does not exist -- the hub accepts it and
+    the zone's schedule then cannot be read. ``0`` is preferred, then
+    DEFAULT_WEEK_PROFILE_ID, and None when neither is present.
+    """
+    profiles = {str(p) for p in (current_hub.week_profiles or {})}
+    for candidate in ("0", DEFAULT_WEEK_PROFILE_ID):
+        if candidate in profiles:
+            return candidate
+    return None
+
+
 def _refuse_schedule_off_with_heaters(update: "ZoneUpdate", components) -> None:
     """A room with a heater keeps its schedule: that is what drives the heater."""
     if update.no_schedule and list(components or []):
@@ -4793,9 +4809,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
         # the protocol has no way to say "none". It is moved to the built-in
         # one, which cannot be edited or deleted, so it neither keeps a custom
         # schedule from being deleted nor changes when one is edited.
-        park_on_default = bool(update.no_schedule) and (
-            str(zone.get('week_profile_id')) != DEFAULT_WEEK_PROFILE_ID
-        )
+        park_on = _hub_built_in_week_profile(current_hub) if update.no_schedule else None
+        park_on_default = park_on is not None and str(zone.get('week_profile_id')) != park_on
 
         # Name, the follow-global flag and the week profile are both fields of the same U00
         # record, and pynobo rebuilds that record from its cached copy of the
@@ -4806,8 +4821,8 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             kwargs: Dict[str, Any] = {}
             described: List[str] = []
             if park_on_default:
-                kwargs['week_profile_id'] = DEFAULT_WEEK_PROFILE_ID
-                described.append(f"week_profile_id={DEFAULT_WEEK_PROFILE_ID} (no heating schedule)")
+                kwargs['week_profile_id'] = park_on
+                described.append(f"week_profile_id={park_on} (no heating schedule)")
             if update.name is not None:
                 kwargs['name'] = update.name.strip()
                 described.append(f"name='{update.name.strip()}'")
@@ -6696,7 +6711,10 @@ async def apply_week_profile_to_zone(current_hub, zone_id: str, entries: List[st
              and profile_id != DEFAULT_WEEK_PROFILE_ID
              and profile_id not in UNDELETABLE_WEEK_PROFILES)
 
-    if (exclusive or share) and profile_id != DEFAULT_WEEK_PROFILE_ID:
+    # Neither built-in is edited in place, even by its only user: the hub takes
+    # U02 for them and silently changes nothing. A zone parked alone on "0"
+    # gets a copy instead.
+    if (exclusive or share) and profile_id not in UNDELETABLE_WEEK_PROFILES:
         name = decode_hub_name(current_hub.week_profiles[profile_id].get('name', zone_name))
         await hub_command(current_hub.async_update_week_profile(profile_id, name, entries))
         # Wait for the edit to land before reporting success. Without this the

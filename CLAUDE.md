@@ -251,7 +251,8 @@ about *how many* connections exist, or how long they live, needs real sockets or
   edit the other one — and a mode left switched is how a cabin gets cold.
 - **A zone with no heater may have no heating schedule.** The hub cannot say
   "none" — `A00`/`U00` always carry a week profile id — so the choice lives in
-  `data/zones_without_schedule.json`, the zone is parked on profile `1`, and it
+  `data/zones_without_schedule.json`, the zone is parked on the hub's built-in
+  profile (`0`, else `1`), and it
   is left out of "used by" and `shared_with_zones`. The zone field
   `no_schedule` is derived on read and is only ever true while the zone has no
   components: adding a heater brings the schedule back.
@@ -357,7 +358,12 @@ Also worth knowing:
   only `0124`, and it is pynobo that talks to the hub.
 - Ids for new zones and week profiles are assigned by the hub, not the client.
   Send a placeholder and find the real one by diffing state before and after.
-- Week profiles are shared between zones and every zone starts on profile `1`.
+- Week profiles are shared between zones. **The commissioned hub's factory
+  "Default" is profile `0`, and it has no profile `1` at all** — the fake hub's
+  default is `1`, which is how sending `1` went unnoticed. Found on hardware in
+  September 2026: parking a zone on `1` pointed it at a schedule that did not
+  exist, and the hub accepted it. New zones and parked zones now go on
+  `_hub_built_in_week_profile()`: `0` if the hub has it, else `1`.
   `apply_week_profile_to_zone()` only edits in place when the profile belongs to
   that zone alone and is not `1`; otherwise it creates a per-zone copy.
 - **`current_temperature` is `null` for most devices, and that is correct.**

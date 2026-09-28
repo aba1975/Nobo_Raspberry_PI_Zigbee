@@ -242,6 +242,79 @@ class TestZoneWithoutASchedule:
         assert zone_id not in server.zones_without_schedule
 
 
+class TestAHubWhoseDefaultIsProfileZero:
+    """The commissioned hub has "Default" as profile 0 and no profile 1.
+
+    Sending profile 1 to it pointed a zone at a schedule that does not exist:
+    the hub took it, and the zone's week then could not be read at all. Found
+    on hardware, setting a storeroom to have no schedule.
+    """
+
+    PROFILE = ("00000,07001,23000,00000,07001,23000,00000,07001,23000,00000,"
+               "07001,23000,00000,07001,23000,00000,07001,23000,00000,07001,23000")
+
+    @pytest.fixture
+    def client(self, monkeypatch, tmp_path):
+        from tests.fake_hub import encode_name
+        monkeypatch.setattr(
+            server.config_persistence, "ZONES_WITHOUT_SCHEDULE_FILE",
+            tmp_path / "zones_without_schedule.json",
+        )
+        server.zones_without_schedule.clear()
+        profiles = {
+            "0": ["0", encode_name("Default"), self.PROFILE],
+            "21": ["21", encode_name("Storage week"), self.PROFILE],
+        }
+        with FakeHubThread(week_profiles=profiles) as fake:
+            for record in fake.zones.values():
+                record[2] = "21"
+            monkeypatch.setattr(server, "DEMO_MODE", False)
+            monkeypatch.setattr(server, "NOBO_SERIAL", HUB_SERIAL)
+            monkeypatch.setattr(server, "NOBO_IP", "127.0.0.1")
+            server.connect_to_hub_sync()
+            try:
+                with TestClient(app) as test_client:
+                    test_client.cookies.set("session_id", SESSION_ID)
+                    self.fake = fake
+                    yield test_client
+            finally:
+                server.disconnect_from_hub()
+                server.zones_without_schedule.clear()
+
+    def test_a_new_zone_is_put_on_a_profile_that_exists(self, client):
+        zone_id = client.post("/api/zones", json={"name": "Storage"}).json()["zone_id"]
+        wait_until(lambda: zone_id in self.fake.zones)
+        assert self.fake.zones[zone_id][2] == "0"
+        assert client.get(f"/api/zones/{zone_id}/schedule").status_code == 200
+
+    def test_no_schedule_parks_it_on_profile_zero(self, client):
+        zone_id = client.post("/api/zones", json={"name": "Storage"}).json()["zone_id"]
+        wait_until(lambda: zone_id in self.fake.zones)
+        assert client.post(f"/api/zones/{zone_id}/week-profile",
+                           json={"profile_id": "21"}).status_code == 200
+        wait_until(lambda: self.fake.zones[zone_id][2] == "21")
+
+        assert client.put(f"/api/zones/{zone_id}", json={"no_schedule": True}).status_code == 200
+        wait_until(lambda: self.fake.zones[zone_id][2] == "0")
+        assert client.get(f"/api/zones/{zone_id}/schedule").status_code == 200
+
+    def test_the_only_zone_on_profile_zero_gets_a_copy_when_edited(self, client):
+        """The hub ignores U02 for its own profiles, so editing 0 in place is lost."""
+        zone_id = client.post("/api/zones", json={"name": "Storage"}).json()["zone_id"]
+        wait_until(lambda: zone_id in self.fake.zones)
+        assert [z for z, r in self.fake.zones.items() if r[2] == "0"] == [zone_id]
+        before = set(self.fake.week_profiles)
+        day = [{"start": "00:00", "end": "24:00", "mode": "eco"}]
+        response = client.post(f"/api/zones/{zone_id}/schedule", json={"schedule": {
+            d: day for d in ("monday", "tuesday", "wednesday", "thursday",
+                             "friday", "saturday", "sunday")}})
+        assert response.status_code == 200, response.text
+        wait_until(lambda: set(self.fake.week_profiles) != before)
+        new_id = (set(self.fake.week_profiles) - before).pop()
+        wait_until(lambda: self.fake.zones[zone_id][2] == new_id)
+        assert self.fake.week_profiles["0"][2] == self.PROFILE
+
+
 # ---------------------------------------------------------------------------
 # Week profiles / schedules
 # ---------------------------------------------------------------------------

@@ -788,7 +788,8 @@ Such a zone can also be set to have **no heating schedule** — from "Edit this
 room", from "Add a zone", or with the button under its week. The hub cannot
 express this: every zone record carries a week profile id, so the choice is
 kept on the Pi in `data/zones_without_schedule.json` and the zone is parked on
-the built-in profile `1`, which cannot be edited or deleted. It is then left
+the hub's built-in profile (`0` on the commissioned hub, which has no `1`),
+which cannot be edited or deleted. It is then left
 out of every schedule's "used by" list, and its page and card show no week and
 no mode. `PUT /api/zones/{id}` with `{"no_schedule": true}` is refused (400)
 while the zone has a heater, and the setting stops applying as soon as one is
