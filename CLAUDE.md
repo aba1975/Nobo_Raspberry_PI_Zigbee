@@ -26,8 +26,12 @@ a TCU 700 or another searchable model.
 **The power cut (1.6) has now been run** — 4 September 2026, mains pulled for two
 minutes. Clean boot, service up by itself 36 s later, hub reconnected, exactly
 one socket, and every zone, set point, schedule and persisted file identical
-afterwards. The set point guard came back with no false drift flags. Details at
-the end of `docs/TEST_MATRIX.md`.
+afterwards. The set point guard came back with no false drift flags. Run again on
+28 September 2026 with the Zigbee stack, by cutting the main breaker. The heating
+came back identical, but the sensors had two defects, both now fixed: the
+automation forgot every room while the hub was still booting, and the broker
+replayed a door state older than one already heard. Details at the end of
+`docs/TEST_MATRIX.md`.
 
 **Two lessons from the commissioning, both worth keeping.**
 

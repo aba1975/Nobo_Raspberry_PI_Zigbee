@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,8 @@ from sensor_provider import (
     ProviderUnavailable, RouterInfo, SensorEvent, SensorEventKind, SensorKind,
     SensorNotFound, check_kind_change, valid_reading,
 )
+
+logger = logging.getLogger(__name__)
 
 _READINGS = ("temperature", "humidity", "pressure")
 
@@ -116,6 +119,9 @@ class Zigbee2MqttContactSensorProvider:
         # has a mesh in it at all.
         self._routers: dict[str, RouterInfo] = {}
         self._metadata: dict[str, dict] = {}
+        # The device timestamp of the newest report accepted from each sensor,
+        # carried across restarts in the metadata. See _on_state.
+        self._newest_report: dict[str, datetime] = {}
         # Zigbee2MQTT addresses devices by friendly name on the wire, so a
         # topic has to be resolved back to the address that identifies them.
         self._topic_names: dict[str, str] = {}
@@ -134,6 +140,12 @@ class Zigbee2MqttContactSensorProvider:
         if self._started:
             return
         self._metadata = self._load_metadata() or {}
+        self._newest_report = {
+            address: stamp
+            for address, meta in self._metadata.items()
+            if isinstance(meta, dict)
+            and (stamp := _parse_stamp(meta.get("last_seen"))) is not None
+        }
         self._transport.on_message(self._handle_message)
         lost = getattr(self._transport, "on_connection_lost", None)
         if callable(lost):
@@ -454,6 +466,7 @@ class Zigbee2MqttContactSensorProvider:
             # a cleanup conditional on finding it there never ran.
             if self._metadata.pop(identifier, None) is not None:
                 self._save_metadata(self._metadata)
+            self._newest_report.pop(identifier, None)
             await self._forget(identifier)
             waiter.set_result(None)
         else:
@@ -553,6 +566,24 @@ class Zigbee2MqttContactSensorProvider:
         if snapshot is None:
             return
 
+        # A report older than one already heard is a replay, and is ignored
+        # whole. The broker saves its retained messages every half hour and
+        # Zigbee2MQTT its state cache every few minutes, so after a power cut
+        # either can hand back a door as it was before it last moved: open
+        # when it has since been shut, or shut when it has since been opened.
+        # Better unknown than that. An equal stamp is the ordinary case of the
+        # latest report being replayed after a restart, and is accepted.
+        reported = _parse_stamp(document.get("last_seen"))
+        newest = self._newest_report.get(address)
+        if reported is not None and newest is not None and reported < newest:
+            logger.info(
+                "Ignoring a replayed report for %s from %s: already heard from it at %s",
+                address, reported.isoformat(), newest.isoformat(),
+            )
+            return
+        if reported is not None:
+            self._newest_report[address] = reported
+
         state = _contact_state(document.get("contact"), snapshot.state)
         # A thermometer's readings, each kept from before when this report
         # left it out. Aqara sends all three together, but a partial report
@@ -574,7 +605,7 @@ class Zigbee2MqttContactSensorProvider:
         # which is exactly what this is for. Needs `last_seen: ISO_8601` in
         # Zigbee2MQTT; without it the receive time is the best available, and
         # is wrong only across a restart.
-        stamp = _parse_stamp(document.get("last_seen")) or self._aware_now()
+        stamp = reported or self._aware_now()
         changed = state != snapshot.state or any(
             readings[name] != getattr(snapshot, name) for name in readings
         )

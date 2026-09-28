@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -1193,6 +1194,82 @@ async def test_last_heard_survives_a_restart(rig, events):
     # come back with it is a fresh timestamp, which would dress three-day-old
     # news up as current.
     assert sensor.state is ContactState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_a_replay_older_than_what_was_heard_is_ignored_after_a_power_cut(rig, events):
+    """Found by pulling the main breaker, 28 September 2026.
+
+    The broker saves its retained messages every half hour, so after a power
+    cut it replayed the patio door as it was *before* it last moved: open,
+    when it had been shut a minute later. The provider took the older report
+    as current and the room read "open" — the kind of mistake that, the other
+    way round, hides a window left open. The metadata already knew better.
+    """
+    provider, z2m, _transport, clock, store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    opened_at = clock().isoformat()
+    await z2m.report(ADDRESS, contact=False, last_seen=opened_at)
+    clock.advance(80)
+    closed_at = clock().isoformat()
+    await z2m.report(ADDRESS, contact=True, last_seen=closed_at)
+    assert store[ADDRESS]["last_seen"] == closed_at
+
+    await provider.stop()
+    # What the broker had saved to disk before the power went.
+    z2m._broker._retained[f"zigbee2mqtt/{ADDRESS}"] = json.dumps(
+        {"contact": False, "last_seen": opened_at}
+    ).encode("utf-8")
+    clock.advance(300)
+    # A new process, as after any power cut: nothing but the metadata remains.
+    provider = Zigbee2MqttContactSensorProvider(
+        transport=FakeTransport(z2m._broker),
+        now=clock,
+        load_metadata=lambda: dict(store),
+        save_metadata=lambda data: (store.clear(), store.update(data)) and None,
+    )
+    await provider.start()
+    await z2m.publish_devices()
+
+    sensor = (await provider.list())[0]
+    assert sensor.state is ContactState.UNKNOWN
+    assert sensor.last_seen_at.isoformat() == closed_at
+    assert store[ADDRESS]["last_seen"] == closed_at
+
+    # The next genuine report is believed as usual.
+    clock.advance(60)
+    await z2m.report(ADDRESS, contact=True, last_seen=clock().isoformat())
+    assert (await provider.list())[0].state is ContactState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_a_report_arriving_out_of_order_does_not_undo_a_newer_one(rig, events):
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    earlier = clock().isoformat()
+    clock.advance(30)
+    await z2m.report(ADDRESS, contact=False, last_seen=clock().isoformat())
+
+    await z2m.report(ADDRESS, contact=True, last_seen=earlier)
+
+    assert (await provider.list())[0].state is ContactState.OPEN
+
+
+@pytest.mark.asyncio
+async def test_a_report_without_a_timestamp_is_still_believed(rig, events):
+    """Without `last_seen` configured there is nothing to compare, and
+    refusing every report would be far worse than trusting them."""
+    provider, z2m, _transport, clock, _store = rig
+    await started(rig, events)
+    await z2m.add_device(contact_device(ADDRESS))
+    await z2m.report(ADDRESS, contact=True, last_seen=clock().isoformat())
+    clock.advance(30)
+
+    await z2m.report(ADDRESS, contact=False)
+
+    assert (await provider.list())[0].state is ContactState.OPEN
 
 
 @pytest.mark.asyncio

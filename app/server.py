@@ -1719,6 +1719,13 @@ def connect_to_hub_sync(force: bool = False):
             # Register callback for hub updates
             new_hub.register_callback(hub_update_callback)
 
+            # The sensors have been waiting for rooms. Without this, a start
+            # where the sensors came up before the hub — every power cut —
+            # left warnings and rules idle until some sensor next moved.
+            loop = main_event_loop
+            if loop is not None and loop.is_running():
+                loop.call_soon_threadsafe(wake_sensor_automation)
+
         except Exception as e:
             logger.error(f"Failed to connect to Nobø Hub: {e}")
             with connection_lock:
@@ -2008,6 +2015,10 @@ def hub_update_callback(hub_instance):
     # Schedule the broadcast in the main event loop
     if main_event_loop is not None and main_event_loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_zone_update(), main_event_loop)
+        # A push is what the room is now running, and whether a sensor rule
+        # may act depends on exactly that — a mode chosen in the Nobø app
+        # arrives here and nowhere else.
+        main_event_loop.call_soon_threadsafe(wake_sensor_automation)
     else:
         logger.warning("Cannot broadcast zone update: main event loop not available")
 
@@ -2103,7 +2114,9 @@ def _global_override_mode() -> Optional[str]:
     return None
 
 
-def _sensor_heating_state() -> Dict[str, HeatingZone]:
+def _sensor_heating_state(
+    zones: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, HeatingZone]:
     """What each zone is doing, in the terms the contact automation reasons in.
 
     Two modes are reported per zone and they are not the same thing.
@@ -2119,7 +2132,7 @@ def _sensor_heating_state() -> Dict[str, HeatingZone]:
     """
     global_override = _global_override_mode()
     state: Dict[str, HeatingZone] = {}
-    for zone in _build_zones_data():
+    for zone in _build_zones_data() if zones is None else zones:
         zone_id = str(zone["zone_id"])
         fallback = (
             global_override
@@ -2754,23 +2767,31 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
 
     async with sensor_evaluation_lock:
         sensor_snapshots = list(await sensor_provider.list())
+        zones = _build_zones_data()
+        if not zones:
+            # The rooms come from the hub, so while it is disconnected — its
+            # own reboot every eighteen hours or so, or the minute after a
+            # power cut — there are none. Evaluating then told the engine that
+            # every room had been deleted, and it threw away each room's open
+            # timers and raised warnings. Nothing is decided without rooms;
+            # the loop is woken again when the hub connects.
+            globals()["sensor_alert_deadline"] = None
+            return None
         policies = {
             str(zone["zone_id"]): sensor_settings.zones.get(
                 str(zone["zone_id"]), ZoneSensorPolicy()
             )
-            for zone in _build_zones_data()
+            for zone in zones
         }
         result = await sensor_automation.evaluate(
             sensor_snapshots,
             policies,
-            _sensor_heating_state(),
+            _sensor_heating_state(zones),
             sensor_heating_links,
         )
         sensor_zone_aggregates = dict(result.zones)
 
-    zones_by_id = {
-        str(zone["zone_id"]): zone["name"] for zone in _build_zones_data()
-    }
+    zones_by_id = {str(zone["zone_id"]): zone["name"] for zone in zones}
     for event in result.events:
         name = zones_by_id.get(event.zone_id, f"Zone {event.zone_id}")
         raised = event.kind is SensorConditionEventKind.WARNING

@@ -405,6 +405,44 @@ written to `/tmp`, which Ubuntu clears on boot, so the before-and-after diff had
 to be done by eye against the printed output. Snapshots for a reboot test belong
 somewhere that survives one — `~/nobo-baselines` on the Pi.
 
+### Again, with sensors: 28 September 2026
+
+The owner cut the main breaker, so the hub, the Pi, the Zigbee router and the
+network all lost power together. By then the Pi was also running Mosquitto and
+Zigbee2MQTT, with 19 contacts and thermometers, and the snapshots were taken
+from a laptop, so they survived.
+
+| Checked | Result |
+|---|---|
+| Boot | 10:22:23; all four containers up by themselves, web control `healthy` |
+| Clock | no RTC, so NTP took until **10:23:46** |
+| Hub reconnected | 10:23:53, on the third retry, while the hub was still booting. That was **after** the clock synced, so the hub was given the right time. Exactly one socket |
+| Zones, set points, modes | all twelve identical to before |
+| Data files | identical, apart from the two sensor files that record what the sensors did |
+| Zigbee | every sensor and the router back online without re-pairing |
+
+**Two defects found**, both in the sensors and neither in the heating itself:
+
+1. **Rooms forgotten while the hub was down.** The sensors came up about a
+   minute and a half before the hub. The first evaluation saw no rooms,
+   because the rooms come from the hub, and took that to mean every room had
+   been deleted. It dropped each room's open timers and its raised left-open
+   warning. Nothing woke the automation when the hub connected, so the
+   Private Storage door, open since 09:30, lost its warning. The patio door's
+   Eco rule sat idle. The same thing would have happened on every one of the
+   hub's own eighteen-hourly reboots. `tests/test_sensor_hub_outage.py`.
+2. **A stale state replayed.** The patio door, shut at 10:17:43, came back
+   **open**, stamped 10:16:23. That was the broker's retained copy from its
+   last half-hourly save. The provider now ignores any report older than the
+   newest one it has already heard. `tests/test_sensor_zigbee2mqtt.py`.
+
+The second one is the more instructive. It mattered only because the door
+happened to be shut. Had it been opened just before the cut, the same replay
+would have said **closed**, which means no warning and no Eco for a door
+standing open. Every restart test before this one had been graceful. With a
+graceful stop the broker and Zigbee2MQTT both write their state on the way
+down, so the latest report is always the one replayed.
+
 ---
 
 ## Re-verifying that a heater can be removed and added back

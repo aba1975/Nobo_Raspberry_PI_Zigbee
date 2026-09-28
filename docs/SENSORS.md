@@ -626,6 +626,23 @@ registration made a sensor whose battery died days ago claim it had just been
 heard from, every time the application started — the one moment somebody is
 most likely to be looking at it.
 
+**An older report never undoes a newer one.** Mosquitto saves its retained
+messages every half hour and Zigbee2MQTT its state cache every few minutes, so
+after a power cut either can replay a door as it was *before* it last moved.
+On 28 September 2026 that showed the patio door open, a minute after it had
+been shut. A report stamped earlier than the newest one already heard from
+that sensor is now ignored, and the sensor reads **unknown** until it next
+speaks. An equal stamp is the ordinary replay of the latest report after a
+restart, and is believed. This needs `last_seen`; without it every report is
+believed, as before.
+
+**Nothing is decided without the hub's rooms.** The rooms come from the hub, so
+while it is disconnected there are none, and the automation waits rather than
+evaluating an empty house. Evaluating one used to read as "every room was
+deleted" and threw away each room's open timers and raised warnings, on every
+one of the hub's eighteen-hourly reboots as well as after a power cut. The
+automation is woken when the hub connects and on every push from it.
+
 ### When the sensor stack goes away
 
 Two different failures, and both must end with sensors reported as
