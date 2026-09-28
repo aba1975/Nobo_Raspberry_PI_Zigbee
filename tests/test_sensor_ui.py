@@ -108,7 +108,7 @@ def test_sensors_are_managed_in_their_room_with_the_heater_icon_language():
         assert icon in CORE
     # Settings stays a switch and a count; the long list lives on the rooms.
     assert "sensor-settings-summary" in CSS
-    assert "Open a zone to see status" in CABIN
+    assert "Open a room to see status" in CABIN
 
 
 def test_a_sensor_that_lost_its_room_can_still_be_reached():
@@ -320,6 +320,7 @@ def _render_zone_strip(zone):
         "function sensorKindLabel", "function sensorGroupNoun",
         "function sensorCountLabel", "function compactSensorNames",
         "function offlineNote", "function sensorZoneHeadline",
+        "function linkedHolds", "function sensorModeWord",
     ]
     lifted = []
     for marker in wanted:
@@ -330,6 +331,7 @@ def _render_zone_strip(zone):
       const esc = (v) => String(v == null ? '' : v);
       const sensorIcon = () => '<i/>';
       const sensorRuleLine = () => null;
+      const configuredSensor = () => null;
       const Nobo = { fmtAgo: () => '20 min ago', icon: (n) => `<svg data-icon="${n}"/>` };
       %s
       console.log(sensorZoneHeadline(%s));
@@ -1212,3 +1214,89 @@ def test_switching_no_longer_claims_the_sensors_are_lost():
     assert "starts again with none paired" not in CABIN
     assert "Nothing is unpaired and nothing is deleted" in CABIN
     assert "neither list is discarded" in CABIN
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_turned_down_by_a_door_elsewhere_says_which_and_where():
+    """The kitchen is in Eco with its own window shut. It must say why, and it
+    must not borrow the Living Room's warning colour to do it."""
+    markup = _render_zone_strip({
+        "zone_id": "9", "name": "Kitchen",
+        "sensors": [_sensor("Kitchen Window", "window", "closed")],
+        "sensor_summary": {
+            "sensor_count": 1, "open_count": 0, "unavailable_count": 0,
+            "warning_raised": False, "state": "closed", "owned_action": "eco",
+            "linked": [{
+                "zone_id": "2", "zone_name": "Living Room",
+                "sensors": [{"sensor_id": "p", "name": "Patio Door"}],
+                "open_started_at": 1, "action_when_open": "eco", "due": True,
+            }],
+        },
+    })
+    assert "Eco · Patio Door open" in markup, markup
+    assert "In Living Room" in markup
+    assert "zsensor-linked" in markup
+    assert "zsensor-warning" not in markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_a_room_with_no_sensors_of_its_own_still_shows_a_door_elsewhere():
+    markup = _render_zone_strip({
+        "zone_id": "5", "name": "Hallway", "sensors": [],
+        "sensor_summary": {
+            "sensor_count": 0, "open_count": 0, "state": "closed",
+            "warning_raised": False, "owned_action": "eco",
+            "linked": [{
+                "zone_id": "2", "zone_name": "Living Room",
+                "sensors": [{"sensor_id": "p", "name": "Patio Door"}],
+                "open_started_at": 1, "action_when_open": "eco", "due": True,
+            }],
+        },
+    })
+    assert "Patio Door open" in markup, markup
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
+def test_its_own_open_window_outranks_a_door_elsewhere():
+    markup = _render_zone_strip({
+        "zone_id": "9", "name": "Kitchen",
+        "sensors": [_sensor("Kitchen Window", "window", "open")],
+        "sensor_summary": {
+            "sensor_count": 1, "open_count": 1, "state": "open",
+            "warning_raised": True, "owned_action": "eco",
+            "linked": [{
+                "zone_id": "2", "zone_name": "Living Room",
+                "sensors": [{"sensor_id": "p", "name": "Patio Door"}],
+                "open_started_at": 1, "action_when_open": "eco", "due": True,
+            }],
+        },
+    })
+    assert "Window left open" in markup, markup
+    assert "zsensor-linked" not in markup
+
+
+def test_heating_it_controls_is_offered_for_contacts_only_and_saved_through_the_client():
+    assert "setSensorHeating" in CORE
+    assert "/heating`" in CORE
+    start = CABIN.index("function sensorMenuSheet")
+    body = CABIN[start:CABIN.index("\n  }\n", start)]
+    assert "'Heating it controls'" in body
+    assert "sensor.kind === 'climate' ? []" in body
+    assert "data-heating-sensor" in CABIN
+
+
+def test_the_heating_sheet_offers_only_rooms_with_a_heater_and_fixes_its_own():
+    start = CABIN.index("function heatableRooms")
+    body = CABIN[start:CABIN.index("\n  }\n", start)]
+    assert "(zone.components || []).length > 0" in body
+    start = CABIN.index("function sensorHeatingSheet")
+    body = CABIN[start:CABIN.index("\n  }\n\n  function sensorMenuSheet", start)]
+    assert "<input type=\"checkbox\" checked disabled>" in body
+    assert "The warning stays on" in body
+    # Names typed by a person are escaped on the way into the sheet.
+    assert "${esc(zone.name)}" in body
+    assert "${esc(sensor.name)}" in body
+
+
+def test_a_replacement_keeps_the_rooms_the_old_sensor_heated():
+    assert CABIN.count("await carryHeatingLinks(replacing,") == 2

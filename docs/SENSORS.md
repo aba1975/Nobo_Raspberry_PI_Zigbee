@@ -755,6 +755,49 @@ An unknown or unavailable contact is not closed, so it can neither clear a
 left-open warning nor release a hold. A room says why its rule is standing
 down: already colder, no heater, or no hub.
 
+### One door, several rooms
+
+A contact belongs to one room, but it can also turn down others — the patio
+door in the living room chills the kitchen and hallway just as much. Its menu
+has **Heating it controls**: this room, the room's group, or a chosen set. Only
+rooms with a heater are offered, and its own room is always included.
+
+The link lives in `data/sensor_heating_links.json` as
+`{"schema_version": 1, "links": {sensor_id: [zone_id, …]}}`, set through
+`PUT /api/sensors/{id}/heating` with `{"zone_ids": [...]}` (admin only; 400 for
+a thermometer, a sensor in no room, or a room without a heater; the sensor's own
+room is dropped rather than refused). Removing the sensor removes its links,
+taking it out of every room forgets them, moving it into a room it heated makes
+that room simply its own, and deleting a room strips it from every link, since
+the hub reuses ids. Replacing a sensor copies its links to the new one before
+the old one is removed.
+
+What a linked contact does is decided by **its own room's rule** — action,
+delay and "override colder modes" — never the target's. So a patio door on a
+60-second Eco rule sets the kitchen to Eco 60 seconds after it opens, even if
+the kitchen's own windows are set to do nothing. The delay is counted from when
+a linked contact in that room opened; the timestamp is kept per source room in
+`linked_open_since` in `data/sensor_automation.json`, which is written at
+automation schema **7**. Every other sensor file stays at 6, so rolling back
+to an older build sets aside only this ownership record: sensor names, rules
+and pairing survive, and a room the automation was holding at that moment stays
+held until a mode is chosen for it.
+
+Each target room still has one owner ledger. When several demands are due at
+once — its own window and a door elsewhere, say — the coldest wins, under the
+same ordering as above. The hold is released only when **nothing** open is
+still asking for it, its own contacts included: the kitchen stays on Eco while
+its own window is open even after the patio door has shut. Unavailable and
+unknown count as open here as everywhere else, and unlinking a door that is
+open releases what it was holding.
+
+Warnings and alert emails stay with the sensor's own room: an open patio door
+is a living-room problem. The kitchen shows why it is in Eco ("Eco because the
+Patio Door is open — In Living Room") in the Eco colour rather than amber, and
+lists "Also controlled by" under its sensors. The zone payload carries this as
+`sensor_summary.linked` (source room, open sensors, when, action, deadline,
+whether due) and `controlled_by`; each sensor carries `controls_zone_ids`.
+
 ### Leaving with something open
 
 The per-room warning answers "has this been open a while?". It does not answer
@@ -785,7 +828,8 @@ actions are unavailable because there is no heater to control. This avoids a
 second room model that would drift from the heating UI.
 
 Such a zone can also be set to have **no heating schedule** — from "Edit this
-room", from "Add a zone", or with the button under its week. The hub cannot
+room", from "Add room" under Settings → Rooms and Groups, or with the button
+under its week. The hub cannot
 express this: every zone record carries a week profile id, so the choice is
 kept on the Pi in `data/zones_without_schedule.json` and the zone is parked on
 the hub's built-in profile (`0` on the commissioned hub, which has no `1`),

@@ -428,6 +428,37 @@ sensor_wakeup: Optional[asyncio.Event] = None
 # notice that nothing has moved.
 sensor_alert_deadline: Optional[float] = None
 sensor_evaluation_lock = asyncio.Lock()
+# Other rooms a contact also turns down, by sensor id. See
+# sensor_persistence.load_heating_links.
+sensor_heating_links: Dict[str, List[str]] = sensor_persistence.load_heating_links()
+
+
+def _sensor_controls(snapshot: ContactSnapshot) -> List[str]:
+    """The other rooms this contact heats, never its own and never for a thermometer."""
+    if not snapshot.is_contact or snapshot.zone_id is None:
+        return []
+    own = str(snapshot.zone_id)
+    return [
+        zone_id for zone_id in sensor_heating_links.get(snapshot.sensor_id, [])
+        if zone_id != own
+    ]
+
+
+def _save_sensor_heating_links(links: Dict[str, List[str]]) -> None:
+    global sensor_heating_links
+    cleaned = {key: list(value) for key, value in links.items() if value}
+    sensor_persistence.save_heating_links(cleaned)
+    sensor_heating_links = cleaned
+
+
+def _forget_zone_in_heating_links(zone_id: str) -> None:
+    """A deleted room is heated by nothing; the hub will reuse its id."""
+    zone_id = str(zone_id)
+    if any(zone_id in zones for zones in sensor_heating_links.values()):
+        _save_sensor_heating_links({
+            key: [item for item in zones if item != zone_id]
+            for key, zones in sensor_heating_links.items()
+        })
 
 # ---------------------------------------------------------------------------
 # What the simulated hub is holding
@@ -1214,6 +1245,11 @@ class SensorUpdate(BaseModel):
     kind: Optional[SensorKind] = None
     zone_id: Optional[str] = None
     clear_zone: bool = False
+
+
+class SensorHeatingUpdate(BaseModel):
+    # The other rooms, besides its own, whose heating this contact changes.
+    zone_ids: List[str] = Field(default_factory=list, max_length=sensor_persistence.MAX_LINKED_ZONES)
 
 
 class SensorSimulationUpdate(BaseModel):
@@ -2042,6 +2078,9 @@ def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
         "temperature": snapshot.temperature,
         "humidity": snapshot.humidity,
         "pressure": snapshot.pressure,
+        # Other rooms whose heating this contact also changes. Its warning
+        # and its rule stay with its own room.
+        "controls_zone_ids": _sensor_controls(snapshot),
     }
 
 
@@ -2241,6 +2280,7 @@ def _sensor_view_signature() -> tuple:
                 aggregate.warning_raised,
                 aggregate.action_status.value,
                 aggregate.owned_action.value if aggregate.owned_action else None,
+                aggregate.linked,
                 # A reading going stale changes what the card shows without
                 # any sensor having said anything, so the climate summary is
                 # part of what a browser can see.
@@ -2724,6 +2764,7 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
             sensor_snapshots,
             policies,
             _sensor_heating_state(),
+            sensor_heating_links,
         )
         sensor_zone_aggregates = dict(result.zones)
 
@@ -2970,12 +3011,26 @@ def get_zones_data() -> List[Dict[str, Any]]:
     if sensor_settings.enabled:
         sensors_by_zone: Dict[str, List[Dict[str, Any]]] = {}
         climate_by_zone: Dict[str, List[Dict[str, Any]]] = {}
+        # Contacts in other rooms that also change this one's heating.
+        controlled_by: Dict[str, List[Dict[str, Any]]] = {}
+        zone_names = {str(zone["zone_id"]): zone["name"] for zone in zones}
         for snapshot in sensor_snapshots:
             if snapshot.zone_id is not None:
                 target = sensors_by_zone if snapshot.is_contact else climate_by_zone
                 target.setdefault(str(snapshot.zone_id), []).append(
                     _sensor_snapshot_dict(snapshot)
                 )
+                for linked_zone in _sensor_controls(snapshot):
+                    controlled_by.setdefault(linked_zone, []).append({
+                        "sensor_id": snapshot.sensor_id,
+                        "name": snapshot.name,
+                        "kind": snapshot.kind.value,
+                        "zone_id": str(snapshot.zone_id),
+                        "zone_name": zone_names.get(str(snapshot.zone_id)),
+                        "state": snapshot.state.value,
+                        "available": snapshot.available,
+                    })
+        sensor_names = {item.sensor_id: item.name for item in sensor_snapshots}
         for zone in zones:
             zone_id = str(zone["zone_id"])
             aggregate = sensor_zone_aggregates.get(zone_id)
@@ -2987,6 +3042,9 @@ def get_zones_data() -> List[Dict[str, Any]]:
             )
             zone["climate_sensors"] = sorted(
                 climate_by_zone.get(zone_id, []), key=lambda item: item["name"].lower()
+            )
+            zone["controlled_by"] = sorted(
+                controlled_by.get(zone_id, []), key=lambda item: item["name"].lower()
             )
             zone["climate"] = _zone_climate_summary(
                 zone, aggregate, policy, zone["climate_sensors"]
@@ -3029,6 +3087,24 @@ def get_zones_data() -> List[Dict[str, Any]]:
                     else None
                 ),
                 "action_available": bool(zone.get("components")),
+                # Doors elsewhere that are open and asking this room to
+                # change, so it can say why it is in Eco with its own windows
+                # shut. Their rule is their own room's.
+                "linked": [
+                    {
+                        "zone_id": hold.source_zone_id,
+                        "zone_name": zone_names.get(hold.source_zone_id),
+                        "sensors": [
+                            {"sensor_id": sensor_id, "name": sensor_names.get(sensor_id, sensor_id)}
+                            for sensor_id in hold.open_sensor_ids
+                        ],
+                        "open_started_at": hold.open_started_at,
+                        "action_when_open": hold.action.value,
+                        "action_deadline": hold.action_deadline,
+                        "due": hold.due,
+                    }
+                    for hold in (aggregate.linked if aggregate else ())
+                ],
             }
     return zones
 
@@ -3738,12 +3814,70 @@ async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
             zone_id=body.zone_id,
             clear_zone=body.clear_zone,
         )
+        # Moved into a room it used to heat from elsewhere: that room is now
+        # simply its own. Out of every room it heats nothing, and must not
+        # start again by surprise when it is put back.
+        links = sensor_heating_links.get(sensor.sensor_id, [])
+        if sensor.zone_id is None:
+            kept = []
+        else:
+            kept = [z for z in links if z != str(sensor.zone_id)]
+        if kept != links:
+            _save_sensor_heating_links({**sensor_heating_links, sensor.sensor_id: kept})
         await _finish_sensor_mutation()
         return _sensor_snapshot_dict(sensor)
     except SensorNotFound:
         raise HTTPException(status_code=404, detail="Sensor not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.put("/api/sensors/{sensor_id}/heating")
+async def update_sensor_heating(request: Request, sensor_id: str, body: SensorHeatingUpdate):
+    """Which other rooms, besides its own, this contact turns down.
+
+    Only rooms with a heater: there is nothing to turn down anywhere else, and
+    offering it would be offering a rule that can never act. The contact's own
+    room is always included, so it is dropped from the list rather than
+    refused.
+    """
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    sensor = next(
+        (item for item in await sensor_provider.list() if item.sensor_id == sensor_id),
+        None,
+    )
+    if sensor is None:
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    if not sensor.is_contact:
+        raise HTTPException(
+            status_code=400, detail="Only a door or window sensor can change the heating."
+        )
+    if sensor.zone_id is None:
+        raise HTTPException(
+            status_code=400, detail="Put this sensor in a room before choosing what it heats."
+        )
+    zones = {str(zone["zone_id"]): zone for zone in _build_zones_data()}
+    wanted: List[str] = []
+    for zone_id in body.zone_ids:
+        zone_id = str(zone_id)
+        if zone_id == str(sensor.zone_id) or zone_id in wanted:
+            continue
+        zone = zones.get(zone_id)
+        if zone is None:
+            raise HTTPException(status_code=400, detail=f"Room {zone_id} does not exist")
+        if not zone.get("components"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{zone['name']} has no heater, so there is nothing there to turn down.",
+            )
+        wanted.append(zone_id)
+    _save_sensor_heating_links({**sensor_heating_links, sensor_id: wanted})
+    await _finish_sensor_mutation()
+    refreshed = next(
+        (item for item in sensor_snapshots if item.sensor_id == sensor_id), sensor
+    )
+    return _sensor_snapshot_dict(refreshed)
 
 
 @app.delete("/api/sensors/{sensor_id}")
@@ -3756,6 +3890,10 @@ async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
             await remover(sensor_id, force=True)
         else:
             await remover(sensor_id)
+        if sensor_id in sensor_heating_links:
+            _save_sensor_heating_links(
+                {key: value for key, value in sensor_heating_links.items() if key != sensor_id}
+            )
         await _finish_sensor_mutation()
         return {"status": "success"}
     except SensorNotFound:
@@ -4922,6 +5060,7 @@ async def delete_zone(zone_id: str):
             # user of becomes deletable again.
             save_demo_week_profiles()
             _record_new_zone_schedule(zone_id, False)
+            _forget_zone_in_heating_links(zone_id)
             return {"status": "success", "zone_id": zone_id}
 
         # Real hub mode
@@ -4966,6 +5105,7 @@ async def delete_zone(zone_id: str):
         # The hub reuses zone ids, and the next zone to get this one must not
         # inherit a choice made about this one.
         _record_new_zone_schedule(zone_id, False)
+        _forget_zone_in_heating_links(zone_id)
         await broadcast_zone_update()
         return {"status": "success", "zone_id": zone_id}
 

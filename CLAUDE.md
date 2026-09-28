@@ -256,6 +256,19 @@ about *how many* connections exist, or how long they live, needs real sockets or
   is left out of "used by" and `shared_with_zones`. The zone field
   `no_schedule` is derived on read and is only ever true while the zone has no
   components: adding a heater brings the schedule back.
+- **"Room" in the interface, "zone" in the code.** The Cabin interface says
+  room everywhere a person reads it; the API, the hub and the code keep
+  `zone`. Adding a room lives under Settings → Rooms and Groups, not on the
+  front page. Write new user-facing strings with "room".
+- **A contact can heat other rooms.** `data/sensor_heating_links.json` maps a
+  sensor to extra zone ids (`PUT /api/sensors/{id}/heating`). A linked contact
+  follows **its own room's** rule and delay, never the target's; the target
+  runs the coldest due demand under its one ownership ledger and releases only
+  when nothing open still asks. Warnings stay on the sensor's own room. The
+  automation file is at schema 7 for `linked_open_since`; every other sensor
+  file stays at 6, so a rollback sets aside only the ownership record and
+  cannot lose Zigbee names or rules. See
+  `docs/SENSORS.md` → "One door, several rooms".
 - **A week profile is a shared object.** Several zones can follow one. Editing
   from a zone's week copies it when shared; editing from Settings changes the
   schedule itself and every zone on it. That distinction is the feature, not an

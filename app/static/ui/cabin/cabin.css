@@ -335,8 +335,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .grp-warn { color: var(--amber); font-weight: 600; }
 
 /* A link that looks like a link, for the one quiet way into group setup. It
-   lives in the Zones note, which is already small print, so it must not look
-   like another button competing with "Add a zone". */
+   lives in the Rooms note, which is already small print, so it must not look
+   like a button competing with the house's own controls. */
 .linkish {
   background: none; border: 0; padding: 0; font: inherit; font-size: inherit;
   color: var(--pine); text-decoration: underline; text-underline-offset: 2px;
@@ -622,6 +622,28 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .sensor-offline-note strong { color: var(--ink); font-size: .95rem; }
 .sensor-offline-note small { color: var(--ink-soft); }
+
+/* A door in another room turning this one down. Told in the Eco colour, not
+   amber: the warning belongs to the room the door is in, and this is only
+   why this room's heating changed. */
+.zsensor-linked {
+  border-left-color: var(--m-eco);
+  background: var(--m-eco-wash);
+}
+.sensor-linked {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .7rem .85rem; margin: .6rem 0 .9rem;
+  border-radius: var(--radius-sm);
+  border-left: 5px solid var(--m-eco);
+  background: var(--m-eco-wash);
+}
+.sensor-linked strong { display: block; color: var(--ink); font-size: .98rem; }
+.sensor-linked small { display: block; margin-top: .1rem; color: var(--ink-soft); }
+.sensor-controlled-by { margin: .5rem 0 .2rem; font-size: .85rem; color: var(--ink-soft); }
+.sensor-controlled-by strong { color: var(--ink); font-weight: 600; margin-right: .25rem; }
+.sensor-heating-list { margin: .8rem 0; }
+.sensor-heating-list .exc-name small { color: var(--ink-faint); margin-left: .3rem; }
+.rooms-add { margin: .6rem 0 .2rem; }
 
 .sensor-rule-line { margin: .2rem 0 .8rem; font-size: .85rem; color: var(--ink-soft); }
 .sensor-rule-line.is-active { color: var(--pine); font-weight: 600; }

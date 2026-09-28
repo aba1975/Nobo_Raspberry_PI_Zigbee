@@ -145,6 +145,9 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sensor_persistence, "PRESSURE_HISTORY_FILE", tmp_path / "pressure_history.json",
     )
+    monkeypatch.setattr(
+        sensor_persistence, "SENSOR_HEATING_LINKS_FILE", tmp_path / "sensor_heating_links.json",
+    )
     # A module-level history would carry one test's readings into the next.
     server_module = sys.modules.get("server")
     if server_module is not None and hasattr(server_module, "climate_history"):
@@ -153,6 +156,8 @@ def redirect_persistence(tmp_path, monkeypatch):
         monkeypatch.setattr(server_module, "climate_history", ClimateHistory(
             save=sensor_persistence.save_climate_history,
         ))
+    if server_module is not None and hasattr(server_module, "sensor_heating_links"):
+        monkeypatch.setattr(server_module, "sensor_heating_links", {})
     if server_module is not None and hasattr(server_module, "pressure_history"):
         from pressure_outlook import PressureHistory
 

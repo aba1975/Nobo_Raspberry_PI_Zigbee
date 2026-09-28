@@ -43,6 +43,17 @@ room being released in between; only when neither wants it is the override
 cancelled. A reading that has gone stale, or a sensor that has gone offline,
 counts as not knowing the temperature, and not knowing is never a reason to
 hold a room anywhere.
+
+**A contact can heat more than its own room.** A patio door lets the cold into
+the kitchen and the hallway as well as the living room it belongs to, so a
+sensor may name other rooms it also turns down. In each of those rooms it is
+one more *demand* beside the room's own contacts, following the rule of the
+room it belongs to — that room's action, delay and escape hatch — with its
+delay counted from when it opened. A room runs the coldest of its due demands
+and keeps the one zone override it always had, so ownership and release stay
+per room: the hold goes back only when nothing open is asking for it, the
+room's own windows included. Warnings do not travel; one open door is one
+warning, on its own room.
 """
 
 from __future__ import annotations
@@ -257,6 +268,8 @@ class ZoneAggregate:
     owned_action: Optional[ActionWhenOpen]
     action_status: ActionStatus = ActionStatus.IDLE
     block_reason: Optional[BlockReason] = None
+    #: Contacts in other rooms currently asking this one to change.
+    linked: tuple = ()
     #: Contacts only. ``owned_action`` above is the contact rule's hold and is
     #: None while the temperature rule owns the zone; that one is here.
     climate: Optional[ClimateStatus] = None
@@ -298,6 +311,63 @@ class AutomationResult:
     next_deadline: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class LinkedHold:
+    """A contact in another room that is also asking this one to change.
+
+    Only for the interface, which has to say *why* a kitchen is in Eco when
+    none of the kitchen's own windows is open.
+    """
+
+    source_zone_id: str
+    open_sensor_ids: tuple
+    open_started_at: float
+    action: ActionWhenOpen
+    action_deadline: float
+    due: bool
+
+
+@dataclass(frozen=True)
+class _Demand:
+    """One reason a room's contact rule may want its heating changed.
+
+    A room's own contacts are one; each other room with a contact that also
+    heats this one is another, under that room's rule.
+    """
+
+    source_zone_id: str
+    action: ActionWhenOpen
+    delay_seconds: int
+    override_all_modes: bool
+    started_at: Optional[float]
+    contacts: Sequence[ContactSnapshot]
+    open: bool
+
+    @property
+    def acts(self) -> bool:
+        return self.open and self.action is not ActionWhenOpen.NOTHING
+
+    @property
+    def deadline(self) -> Optional[float]:
+        return None if self.started_at is None else self.started_at + self.delay_seconds
+
+    def due(self, now: float) -> bool:
+        return self.acts and now >= self.deadline
+
+
+def _contacts_all_closed(contacts: Sequence[ContactSnapshot]) -> bool:
+    """Every contact reachable and explicitly closed; unknown is not closed."""
+    return bool(contacts) and all(
+        item.available and item.state is ContactState.CLOSED for item in contacts
+    )
+
+
+def _contacts_any_open(contacts: Sequence[ContactSnapshot]) -> bool:
+    return any(
+        item.available and item.state is ContactState.OPEN for item in contacts
+    )
+
+
 @dataclass
 class _ZonePass:
     """Everything one zone's evaluation needs, gathered in one place.
@@ -314,6 +384,10 @@ class _ZonePass:
     zone: Optional[HeatingZone]
     now: float
     climate: ClimateReading = field(default_factory=ClimateReading)
+    #: Contacts in other rooms that also heat this one, by their own room.
+    linked: Mapping[str, Sequence[ContactSnapshot]] = field(default_factory=dict)
+    #: The rules of those rooms, which is what their contacts follow here.
+    source_policies: Mapping[str, ZoneSensorPolicy] = field(default_factory=dict)
 
     settling: bool = False
     changed: bool = False
@@ -343,13 +417,50 @@ class _ZonePass:
         because the house is already colder. While it is true, the
         temperature rule watches and warns but does not touch the heating.
         """
-        state, policy = self.state, self.policy
-        return (
-            policy.action_when_open is not ActionWhenOpen.NOTHING
-            and state.open_started_at is not None
-            and not self.contacts_settled
-            and self.now >= state.open_started_at + policy.action_delay_seconds
-        )
+        return any(demand.due(self.now) for demand in self.demands())
+
+    def demands(self) -> list[_Demand]:
+        """This room's own contacts, then each other room's that heat it.
+
+        Built from the state each time it is asked for, because the phases of
+        a pass start and end cycles and every later phase must see that.
+        """
+        policy, state = self.policy, self.state
+        result = [_Demand(
+            source_zone_id=self.zone_id,
+            action=policy.action_when_open,
+            delay_seconds=policy.action_delay_seconds,
+            override_all_modes=policy.override_all_modes,
+            started_at=state.open_started_at,
+            contacts=self.contacts,
+            open=state.open_started_at is not None and not self.contacts_settled,
+        )]
+        for source, contacts in sorted(self.linked.items()):
+            rule = self.source_policies.get(source)
+            since = state.linked_open_since.get(source)
+            if rule is None:
+                continue
+            result.append(_Demand(
+                source_zone_id=source,
+                action=rule.action_when_open,
+                delay_seconds=rule.action_delay_seconds,
+                override_all_modes=rule.override_all_modes,
+                started_at=since,
+                contacts=contacts,
+                open=since is not None and not _contacts_all_closed(contacts),
+            ))
+        return result
+
+    @property
+    def heating_demand_open(self) -> bool:
+        """Whether anything open is still entitled to the room's contact hold.
+
+        The room's own cycle counts whatever its rule, as it always has; a
+        contact from elsewhere counts only while its rule would change
+        anything.
+        """
+        own, *others = self.demands()
+        return own.open or any(demand.acts for demand in others)
 
     @property
     def ambient_mode(self) -> str:
@@ -370,10 +481,7 @@ class _ZonePass:
 
     @property
     def any_open(self) -> bool:
-        return any(
-            item.available and item.state is ContactState.OPEN
-            for item in self.contacts
-        )
+        return _contacts_any_open(self.contacts)
 
     @property
     def all_closed(self) -> bool:
@@ -382,10 +490,7 @@ class _ZonePass:
         Unknown and unavailable are deliberately not closed. A sensor whose
         battery died mid-gesture must not be read as "the window was shut".
         """
-        return bool(self.contacts) and all(
-            item.available and item.state is ContactState.CLOSED
-            for item in self.contacts
-        )
+        return _contacts_all_closed(self.contacts)
 
     @property
     def contacts_settled(self) -> bool:
@@ -421,6 +526,7 @@ class SensorAutomation:
                 humidity_since=state.humidity_since,
                 humidity_raised=state.humidity_raised,
                 frost_raised=state.frost_raised,
+                linked_open_since=dict(state.linked_open_since),
             )
             for zone_id, state in (states or {}).items()
         }
@@ -466,8 +572,14 @@ class SensorAutomation:
         sensors: Sequence[ContactSnapshot],
         policies: Mapping[str, ZoneSensorPolicy],
         heating: Mapping[str, HeatingZone],
+        links: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> AutomationResult:
-        """Aggregate the contacts, advance the timers, and run what is due."""
+        """Aggregate the contacts, advance the timers, and run what is due.
+
+        ``links`` maps a sensor id to the other rooms that contact also heats.
+        A link to its own room, to a room that does not exist, or from a
+        thermometer or an unassigned sensor means nothing and is ignored.
+        """
         now = self._clock()
         grouped: dict[str, list[ContactSnapshot]] = {
             str(zone_id): [] for zone_id in policies
@@ -481,6 +593,18 @@ class SensorAutomation:
                 # every room with a thermometer read "state unknown".
                 target = grouped if sensor.is_contact else thermometers
                 target[str(sensor.zone_id)].append(sensor)
+        # target zone -> source zone -> the source's contacts that heat it
+        linked: dict[str, dict[str, list[ContactSnapshot]]] = {}
+        for sensor in sensors:
+            if not sensor.is_contact or sensor.zone_id is None:
+                continue
+            source = str(sensor.zone_id)
+            if source not in grouped:
+                continue
+            for target in dict.fromkeys(str(z) for z in (links or {}).get(sensor.sensor_id, ())):
+                if target != source and target in grouped:
+                    linked.setdefault(target, {}).setdefault(source, []).append(sensor)
+        source_policies = {str(zone_id): policy for zone_id, policy in policies.items()}
 
         actions: list[RequestedAction] = []
         events: list[ConditionEvent] = []
@@ -497,11 +621,14 @@ class SensorAutomation:
                 zone=heating.get(zone_id),
                 now=now,
                 climate=climate_reading(thermometers[zone_id], now),
+                linked=linked.get(zone_id, {}),
+                source_policies=source_policies,
                 settling=self._settling(zone_id, now),
             )
 
             self._drop_ownership_taken_by_others(step)
             self._begin_cycle_if_newly_open(step)
+            self._track_linked_cycles(step)
             self._raise_warning_if_due(step, events)
             await self._run_action_if_due(step, actions)
             self._update_climate_condition(step, events)
@@ -536,7 +663,7 @@ class SensorAutomation:
             aggregate.open_started_at is not None
             and policies[zone_id].action_when_open is not ActionWhenOpen.NOTHING
             for zone_id, aggregate in aggregates.items()
-        ) or any(
+        ) or any(aggregate.linked for aggregate in aggregates.values()) or any(
             # A held temperature rule depends on the schedule in the same way,
             # and the moment a reading goes stale is an event nothing reports.
             aggregate.climate is not None
@@ -597,6 +724,25 @@ class SensorAutomation:
         state.warning_raised = False
         step.changed = True
 
+    def _track_linked_cycles(self, step: _ZonePass) -> None:
+        """Start and end the cycles of contacts in other rooms that heat this one.
+
+        A cycle starts when one of them opens and ends once all of them report
+        closed, or once none of them heats this room any more — unlinked,
+        moved or removed. Ending it here releases nothing by itself; the hold
+        goes back at the end of the pass, once nothing open is asking for it.
+        """
+        state, before = step.state, dict(step.state.linked_open_since)
+        for source in list(state.linked_open_since):
+            contacts = step.linked.get(source)
+            if not contacts or _contacts_all_closed(contacts):
+                del state.linked_open_since[source]
+        for source, contacts in step.linked.items():
+            if source not in state.linked_open_since and _contacts_any_open(contacts):
+                state.linked_open_since[source] = step.now
+        if state.linked_open_since != before:
+            step.changed = True
+
     def _raise_warning_if_due(
         self, step: _ZonePass, events: list[ConditionEvent]
     ) -> None:
@@ -621,11 +767,9 @@ class SensorAutomation:
         pressing Away lets Away through — without either being remembered as
         having "won".
         """
-        state, policy, zone = step.state, step.policy, step.zone
-        action = policy.action_when_open
-        if action is ActionWhenOpen.NOTHING:
-            return
-        if state.open_started_at is None or step.contacts_settled:
+        state, zone = step.state, step.zone
+        acting = [demand for demand in step.demands() if demand.acts]
+        if not acting:
             return
         if zone is not None and not zone.sensors_may_act:
             # Before the delay, not after it, so the room never says it is
@@ -637,7 +781,8 @@ class SensorAutomation:
             step.status = ActionStatus.BLOCKED
             step.block_reason = BlockReason.DEMO_SENSORS
             return
-        if step.now < state.open_started_at + policy.action_delay_seconds:
+        due = [demand for demand in acting if demand.due(step.now)]
+        if not due:
             step.status = ActionStatus.PENDING
             return
         if zone is None or not zone.connected:
@@ -649,11 +794,26 @@ class SensorAutomation:
             step.block_reason = BlockReason.NO_EQUIPMENT
             return
 
-        if action not in HOLD_ACTIONS:
-            await self._return_zone_to_its_schedule(step, actions)
+        # Each due demand asks for its own mode against what the house is
+        # doing; the room runs the coldest of what is left.
+        holds = [
+            wanted
+            for demand in due
+            if demand.action in HOLD_ACTIONS
+            for wanted in (self.mode_to_hold(
+                demand.action, step.ambient_mode, demand.override_all_modes
+            ),)
+            if wanted is not None
+        ]
+        releasing = [demand for demand in due if demand.action not in HOLD_ACTIONS]
+        if not holds and releasing:
+            await self._return_zone_to_its_schedule(
+                step, actions,
+                override_all_modes=any(d.override_all_modes for d in releasing),
+            )
             return
 
-        wanted = self.mode_to_hold(action, step.ambient_mode, policy.override_all_modes)
+        wanted = min(holds, key=lambda mode: HEATING_PRIORITY[mode.value]) if holds else None
         if wanted is None:
             # The house is asking for something at least as cold as the rule,
             # so there is nothing for the rule to add. Anything we were holding
@@ -889,7 +1049,10 @@ class SensorAutomation:
         step.changed = True
 
     async def _return_zone_to_its_schedule(
-        self, step: _ZonePass, actions: list[RequestedAction]
+        self,
+        step: _ZonePass,
+        actions: list[RequestedAction],
+        override_all_modes: bool,
     ) -> None:
         """Cancel the hold on a room so the house decides what it does.
 
@@ -910,7 +1073,7 @@ class SensorAutomation:
         # Letting go warms the room whenever the schedule is warmer than the
         # hold, so it answers to the same ordering as everything else.
         if not (
-            step.policy.override_all_modes
+            override_all_modes
             or is_colder(zone.fallback_mode, zone.effective_mode)
         ):
             step.status = ActionStatus.BLOCKED
@@ -934,19 +1097,22 @@ class SensorAutomation:
     ) -> None:
         """Close the books once every contact reports shut.
 
-        The override we own is cancelled first. If that cannot be done — the hub
-        is unreachable, or the command failed — the cycle stays open on purpose
-        so the next evaluation tries again. A room must never be left holding an
-        override nobody is tracking any more.
+        The override we own is cancelled first — once nothing open is asking
+        for it, which includes contacts in other rooms that heat this one. If
+        that cannot be done — the hub is unreachable, or the command failed —
+        the cycle stays open on purpose so the next evaluation tries again. A
+        room must never be left holding an override nobody is tracking any
+        more. The room's own warning ends when its own contacts close,
+        whatever another room's door is doing to its heating.
         """
         state = step.state
-        if not step.contacts_settled:
-            return
         # Only the window's own hold. One the temperature rule has taken over
         # on this pass, or held all along, is not the window's to give back.
-        if step.contact_owns:
+        if step.contact_owns and not step.heating_demand_open:
             if not await self._hand_back_ownership(step, actions):
                 return
+        if not step.contacts_settled:
+            return
         if state.open_started_at is None and not state.warning_raised:
             return
 
@@ -981,16 +1147,17 @@ class SensorAutomation:
 
     def _summarise(self, step: _ZonePass) -> ZoneAggregate:
         state, policy = step.state, step.policy
-        open_cycle = state.open_started_at is not None and not step.contacts_settled
+        own, *others = step.demands()
+        own_open = own.open
+        acting = [demand for demand in (own, *others) if demand.acts]
         warning_deadline = (
             state.open_started_at + policy.warning_delay_seconds
-            if open_cycle and not state.warning_raised
+            if own_open and not state.warning_raised
             else None
         )
         action_deadline = (
-            state.open_started_at + policy.action_delay_seconds
-            if open_cycle
-            and policy.action_when_open is not ActionWhenOpen.NOTHING
+            min(demand.deadline for demand in acting)
+            if acting
             and not step.contact_owns
             and step.block_reason is not BlockReason.DEMO_SENSORS
             else None
@@ -998,7 +1165,7 @@ class SensorAutomation:
         status = step.status
         if step.contact_owns:
             status = ActionStatus.ACTIVE
-        elif not open_cycle:
+        elif not (own_open or any(demand.acts for demand in others)):
             status = ActionStatus.IDLE
         climate_status = step.climate_status
         if step.climate_owns:
@@ -1021,6 +1188,21 @@ class SensorAutomation:
             owned_action=state.owned_action if step.contact_owns else None,
             action_status=status,
             block_reason=step.block_reason if status is ActionStatus.BLOCKED else None,
+            linked=tuple(
+                LinkedHold(
+                    source_zone_id=demand.source_zone_id,
+                    open_sensor_ids=tuple(
+                        item.sensor_id for item in demand.contacts
+                        if item.available and item.state is ContactState.OPEN
+                    ),
+                    open_started_at=demand.started_at,
+                    action=demand.action,
+                    action_deadline=demand.deadline,
+                    due=demand.due(step.now),
+                )
+                for demand in others
+                if demand.acts
+            ),
             climate=ClimateStatus(
                 reading=step.climate,
                 condition=state.climate_condition,

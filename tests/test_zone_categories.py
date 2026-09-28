@@ -22,6 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 CABIN = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CSS = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
+HTML = (ROOT / "app" / "static" / "ui" / "cabin" / "index.html").read_text(encoding="utf-8")
 CORE = (ROOT / "app" / "static" / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
 SERVER = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
 PERSIST = (ROOT / "app" / "config_persistence.py").read_text(encoding="utf-8")
@@ -172,8 +173,8 @@ class TestTheHeadingEarnsItsLine:
     read at all."""
 
     def test_it_counts_the_zones(self):
-        assert "2 zones" in _summary([_zone("a", temp=20), _zone("b", temp=21)])
-        assert "1 zone" in _summary([_zone("a")])
+        assert "2 rooms" in _summary([_zone("a", temp=20), _zone("b", temp=21)])
+        assert "1 room" in _summary([_zone("a")])
 
     def test_a_group_all_doing_one_thing_says_so(self):
         zones = [_zone("a", mode="comfort"), _zone("b", mode="comfort")]
@@ -191,7 +192,7 @@ class TestTheHeadingEarnsItsLine:
         nothing measured."""
         zones = [_zone("a", mode="comfort"), _zone("b", mode="eco")]
         summary = _summary(zones)
-        assert "2 zones" in summary
+        assert "2 rooms" in summary
         assert "coldest" not in summary
 
     def test_a_room_worth_walking_to_is_counted(self):
@@ -382,8 +383,9 @@ class TestTheWayInIsQuietAndConditional:
         assert "Group them" in body
 
     def test_it_is_a_link_rather_than_another_button(self):
-        """The Zones heading already carries Add a zone, which is the action
-        people came for. A second button there would compete with it."""
+        """The Rooms heading is a line of small print under the house's own
+        controls. A button there would compete with them, which is also why
+        Add room moved to Settings."""
         assert ".linkish" in CSS
         start = CABIN.index("function renderZones")
         body = CABIN[start:CABIN.index("\n  }\n", start)]
@@ -398,3 +400,41 @@ def test_an_empty_group_is_not_persisted():
     start = SERVER.index('@app.put("/api/zone-categories")')
     body = SERVER[start:SERVER.index("\n\n\n", start)]
     assert "groups" not in body.split("categories")[0].split("def ")[-1]
+
+
+
+class TestAddRoomLivesInSettings:
+    def test_the_front_page_heading_is_rooms_with_no_add_button(self):
+        assert 'id="roomsHeading">Rooms</h2>' in HTML
+        assert "btnAddZone" not in HTML
+        assert "btnAddZone" not in CABIN
+
+    def test_rooms_and_groups_offers_add_room_to_an_admin(self):
+        start = CABIN.index("function renderZoneGroupsCard")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert 'data-act="add-room">Add room</button>' in body
+        assert "const addRoom = isAdmin" in body
+        start = CABIN.index("function wireZoneGroups")
+        body = CABIN[start:CABIN.index("\n  }\n", start)]
+        assert "addRoom.onclick = addZoneSheet" in body
+
+    def test_the_add_sheet_says_room_and_can_put_it_in_a_group(self):
+        start = CABIN.index("function addZoneSheet")
+        body = CABIN[start:CABIN.index("\n  function deleteZone", start)]
+        assert "'Add a room'" in body
+        assert ">Add room</button>" in body
+        assert 'id="azGroup"' in body
+        assert "saveZoneCategories(map)" in body
+        for old in ("Add a zone", "Zone name", "Give the zone a name", "Add zone<"):
+            assert old not in body
+
+
+def test_the_cabin_interface_says_room_not_zone():
+    """One word for one thing. The API and the code keep "zone"; nothing a
+    person reads in the Cabin interface does."""
+    for old in (
+        "Add a zone", "Delete this zone?", "Zone settings", "Heaters in this zone",
+        "This zone's week", "Move to another zone", "'Zone details'",
+        "No zones yet", "Zone deleted", "Zone saved",
+    ):
+        assert old not in CABIN, old

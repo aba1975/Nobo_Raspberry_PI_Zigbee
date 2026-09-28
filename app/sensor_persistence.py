@@ -13,11 +13,18 @@ from typing import Any, Dict, Mapping, Optional
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 6
+# The automation's own in-flight state moved on once more, to remember when a
+# contact that also heats other rooms opened. Only that file carries v7: the
+# settings, sensors and Zigbee names stay at v6, so going back to an older
+# build costs at most the automation's bookkeeping and never a sensor's name
+# or room.
+AUTOMATION_SCHEMA_VERSION = 7
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SENSOR_SETTINGS_FILE = DATA_DIR / "sensor_settings.json"
 SIMULATED_SENSORS_FILE = DATA_DIR / "simulated_contact_sensors.json"
 SENSOR_AUTOMATION_STATE_FILE = DATA_DIR / "sensor_automation_state.json"
 ZIGBEE_METADATA_FILE = DATA_DIR / "zigbee_sensor_metadata.json"
+SENSOR_HEATING_LINKS_FILE = DATA_DIR / "sensor_heating_links.json"
 CLIMATE_HISTORY_FILE = DATA_DIR / "climate_history.json"
 PRESSURE_HISTORY_FILE = DATA_DIR / "pressure_history.json"
 
@@ -214,6 +221,11 @@ class AutomationZoneState:
     humidity_since: Optional[float] = None
     humidity_raised: bool = False
     frost_raised: bool = False
+    # For each other room with a contact that also heats this one: when one of
+    # those contacts first opened. Its own delay counts from here, which is
+    # not when this room's own windows opened, nor when the other room's
+    # first window did.
+    linked_open_since: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.owned_action is not None:
@@ -314,10 +326,17 @@ _AUTOMATION_FIELDS = {
         "owned_reason", "climate_condition", "climate_since",
         "humidity_since", "humidity_raised", "frost_raised",
     }),
+    7: frozenset({
+        "open_started_at", "warning_raised", "owned_action",
+        "owned_reason", "climate_condition", "climate_since",
+        "humidity_since", "humidity_raised", "frost_raised",
+        "linked_open_since",
+    }),
 }
 
 # Every version this build can read. Older files migrate on the next save.
 _READABLE = (1, 2, 3, 4, 5, SCHEMA_VERSION)
+_AUTOMATION_READABLE = (*_READABLE, AUTOMATION_SCHEMA_VERSION)
 
 
 def _document(payload: Any, versions: tuple[int, ...] = (SCHEMA_VERSION,)) -> dict:
@@ -643,7 +662,7 @@ def _reading(value: Any, ceiling: int, where: str) -> Optional[int]:
 
 
 def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
-    doc = _document(payload, _READABLE)
+    doc = _document(payload, _AUTOMATION_READABLE)
     version = doc["schema_version"]
     result = {}
     for zone_id, raw in _require_dict(doc.get("zones"), "zones").items():
@@ -693,6 +712,20 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
                 raise InvalidSensorData("humidity_since must be a non-negative number or null")
             humidity_raised = _require_bool(row["humidity_raised"], "humidity_raised")
             frost_raised = _require_bool(row["frost_raised"], "frost_raised")
+        linked: Dict[str, float] = {}
+        if version >= 7:
+            for source, since in _require_dict(
+                row["linked_open_since"], f"zones.{zone_id}.linked_open_since"
+            ).items():
+                if not isinstance(source, str) or not source or source == zone_id:
+                    raise InvalidSensorData(
+                        "linked_open_since is keyed by another zone's id"
+                    )
+                if type(since) not in (int, float) or since < 0:
+                    raise InvalidSensorData(
+                        "linked_open_since values must be non-negative numbers"
+                    )
+                linked[source] = float(since)
         result[zone_id] = AutomationZoneState(
             open_started_at=float(stamp) if stamp is not None else None,
             warning_raised=_require_bool(row["warning_raised"], "warning_raised"),
@@ -703,6 +736,7 @@ def _parse_automation(payload: Any) -> Dict[str, AutomationZoneState]:
             humidity_since=float(humidity_since) if humidity_since is not None else None,
             humidity_raised=humidity_raised,
             frost_raised=frost_raised,
+            linked_open_since=linked,
         )
     return result
 
@@ -715,11 +749,55 @@ def save_automation_state(
     states: Mapping[str, AutomationZoneState], path: Optional[Path] = None
 ) -> None:
     payload = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": AUTOMATION_SCHEMA_VERSION,
         "zones": {str(zone_id): asdict(state) for zone_id, state in states.items()},
     }
     _parse_automation(payload)
     _atomic_write(path or SENSOR_AUTOMATION_STATE_FILE, payload)
+
+
+# ---------------------------------------------------------------------------
+# Which other rooms a contact also turns down
+# ---------------------------------------------------------------------------
+# A sensor belongs to one room: that is where it warns, and whose rule it
+# follows. Some also heat others - a patio door that lets the cold into the
+# kitchen and the hallway as well as the living room. Kept apart from both
+# providers' sensor records, keyed by sensor id, so the same choice works for
+# simulated and Zigbee sensors alike and neither strict schema has to change.
+HEATING_LINKS_VERSION = 1
+MAX_LINKED_ZONES = 32
+
+
+def _parse_heating_links(payload: Any) -> Dict[str, list[str]]:
+    doc = _document(payload, (HEATING_LINKS_VERSION,))
+    result: Dict[str, list[str]] = {}
+    for sensor_id, zones in _require_dict(doc.get("links"), "links").items():
+        if not isinstance(sensor_id, str) or not sensor_id:
+            raise InvalidSensorData("sensor ids must be non-empty strings")
+        if type(zones) is not list or len(zones) > MAX_LINKED_ZONES:
+            raise InvalidSensorData(f"links.{sensor_id} must be a short list of zone ids")
+        if any(not isinstance(zone, str) or not zone for zone in zones):
+            raise InvalidSensorData(f"links.{sensor_id} must hold non-empty zone ids")
+        if len(set(zones)) != len(zones):
+            raise InvalidSensorData(f"links.{sensor_id} repeats a zone")
+        if zones:
+            result[sensor_id] = list(zones)
+    return result
+
+
+def load_heating_links(path: Optional[Path] = None) -> Dict[str, list[str]]:
+    return _load(path or SENSOR_HEATING_LINKS_FILE, {}, _parse_heating_links)
+
+
+def save_heating_links(
+    links: Mapping[str, list[str]], path: Optional[Path] = None
+) -> None:
+    payload = {
+        "schema_version": HEATING_LINKS_VERSION,
+        "links": {str(key): list(value) for key, value in links.items() if value},
+    }
+    _parse_heating_links(payload)
+    _atomic_write(path or SENSOR_HEATING_LINKS_FILE, payload)
 
 
 # ---------------------------------------------------------------------------

@@ -33,7 +33,7 @@
   const AWAY_TEMP_LABEL = () => `${AWAY_TEMP}°C`;
   const AWAY_EXPLAINER = () =>
     `Away is a fixed ${AWAY_TEMP}°C anti-frost setting from Nobø and cannot be raised. ` +
-    `To keep a zone warmer than that, use Eco and set its Eco temperature.`;
+    `To keep a room warmer than that, use Eco and set its Eco temperature.`;
 
   /* ------------------------------------------------------------------
    * State
@@ -285,7 +285,7 @@
     if (state.hub && state.hub.demo_mode) {
       el.classList.add('is-demo');
       text.textContent = 'Demo';
-      el.title = 'Demo mode - example zones and devices, no hub connected.';
+      el.title = 'Demo mode - example rooms and devices, no hub connected.';
     } else if (state.status && state.status.connected) {
       el.classList.add('is-ok');
       text.textContent = 'Hub';
@@ -503,13 +503,13 @@
       card.classList.add('is-away');
       if (a.end_at) {
         stateEl.textContent = 'Empty until ' + Nobo.fmtWhen(a.end_at);
-        detail.textContent  = `Every zone is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
+        detail.textContent  = `Every room is holding at the away temperature. Normal schedules resume ${Nobo.fmtUntil(a.end_at)}.`;
         drawTimeline(a.start_at, a.end_at);
       } else {
         /* No return date, on purpose. Nothing will end this, so the card says
            so plainly and keeps the way out in front of you. */
         stateEl.textContent = 'Empty, with no return date';
-        detail.textContent  = `Away since ${Nobo.fmtWhen(a.start_at)}. Every zone holds the away temperature until somebody says they are back.`;
+        detail.textContent  = `Away since ${Nobo.fmtWhen(a.start_at)}. Every room holds the away temperature until somebody says they are back.`;
       }
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
@@ -520,8 +520,8 @@
       card.classList.add('is-away');
       stateEl.textContent = 'Away from ' + Nobo.fmtWhen(a.start_at);
       detail.textContent  = a.end_at
-        ? `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then zones follow their normal schedules.`
-        : `Starts ${Nobo.fmtUntil(a.start_at)}, with no return date set. Until then zones follow their normal schedules.`;
+        ? `Starts ${Nobo.fmtUntil(a.start_at)}, back ${Nobo.fmtWhen(a.end_at)}. Until then rooms follow their normal schedules.`
+        : `Starts ${Nobo.fmtUntil(a.start_at)}, with no return date set. Until then rooms follow their normal schedules.`;
       if (a.end_at) drawTimeline(a.start_at, a.end_at);
       actions.innerHTML = `
         <button class="btn btn-primary" data-act="plan" type="button">Change plan</button>
@@ -533,7 +533,7 @@
            It never ends by itself, so the way out has to be on this card. */
         card.classList.add('is-away');
         stateEl.textContent = 'Away until you say otherwise';
-        detail.textContent  = 'Every zone is on away and nothing will bring the heating back automatically. Set a return date and it will warm up before you arrive.';
+        detail.textContent  = 'Every room is on away and nothing will bring the heating back automatically. Set a return date and it will warm up before you arrive.';
         actions.innerHTML = `
           <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
           <button class="btn" data-act="plan" type="button">Set a return date</button>`;
@@ -542,16 +542,16 @@
       } else if (mode === 'comfort') {
         card.classList.add('is-heat');
         stateEl.textContent = `Warming all of ${SITE_IN()}`;
-        detail.textContent  = 'Every zone is held at its comfort temperature until you change it.';
+        detail.textContent  = 'Every room is held at its comfort temperature until you change it.';
       } else if (mode === 'eco') {
         stateEl.textContent = 'Ticking over on eco';
-        detail.textContent  = 'Every zone is held at its eco temperature.';
+        detail.textContent  = 'Every room is held at its eco temperature.';
       } else if (mode === 'mixed') {
-        stateEl.textContent = 'Zones set individually';
-        detail.textContent  = 'Some zones are overridden and some are following their schedule.';
+        stateEl.textContent = 'Rooms set individually';
+        detail.textContent  = 'Some rooms are overridden and some are following their schedule.';
       } else {
         stateEl.textContent = "Someone's here";
-        detail.textContent  = 'Zones are following their normal schedules.';
+        detail.textContent  = 'Rooms are following their normal schedules.';
       }
       actions.innerHTML = `<button class="btn btn-primary" data-act="leave" type="button">I'm leaving &rarr;</button>`;
     }
@@ -630,9 +630,9 @@
     const leavingNow = !a.enabled || !a.start_at || new Date(a.start_at) <= now;
 
     openSheet(a.enabled ? 'Change your away period' : "You're leaving", `
-      <p class="zd-sub">Every zone drops to Away — a fixed ${AWAY_TEMP_LABEL()} anti-frost
+      <p class="zd-sub">Every room drops to Away — a fixed ${AWAY_TEMP_LABEL()} anti-frost
       temperature set by Nobø — and returns to its normal schedule when you get back.
-      Zones that must stay warmer can be held on Eco instead, under Settings.</p>
+      Rooms that must stay warmer can be held on Eco instead, under Settings.</p>
 
       <label class="field">
         <span>Leaving</span>
@@ -677,7 +677,7 @@
       <div class="sheet-alt">
         <p class="zd-sub">Leaving this minute?</p>
         <button class="btn btn-wide" data-act="constant" type="button">Go to Away right now</button>
-        <small class="field-hint">Skips the dates entirely: every zone holds the away
+        <small class="field-hint">Skips the dates entirely: every room holds the away
         temperature from this moment until you end it yourself.</small>
       </div>
 
@@ -766,7 +766,7 @@
 
   async function arriveNow() {
     confirmSheet("You're back",
-      'The away period ends now and every zone returns to its normal schedule.',
+      'The away period ends now and every room returns to its normal schedule.',
       "I'm back", async () => {
         try {
           /* There may be no window to clear - the cabin can be on constant
@@ -786,7 +786,7 @@
    */
   function stayAwayIndefinitely() {
     confirmSheet('Stay away with no return date?',
-      'Every zone drops to the away temperature and stays there until you end it yourself. Any away period you had planned is removed.',
+      'Every room drops to the away temperature and stays there until you end it yourself. Any away period you had planned is removed.',
       'Stay away', async () => {
         try {
           await Nobo.api.clearAwaySchedule().catch(() => {});
@@ -823,10 +823,10 @@
     btn.addEventListener('click', () => {
       const mode = btn.dataset.global;
       const labels = {
-        home:    ['Back to schedules?', 'Every zone returns to its own weekly schedule.'],
-        comfort: [`Warm all of ${SITE_IN()}?`, 'Every zone is held at its comfort temperature until you change it.'],
-        eco:     [`All of ${SITE_IN()} on eco?`, 'Every zone is held at its eco temperature.'],
-        away:    [`All of ${SITE_IN()} on away?`, 'Every zone drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
+        home:    ['Back to schedules?', 'Every room returns to its own weekly schedule.'],
+        comfort: [`Warm all of ${SITE_IN()}?`, 'Every room is held at its comfort temperature until you change it.'],
+        eco:     [`All of ${SITE_IN()} on eco?`, 'Every room is held at its eco temperature.'],
+        away:    [`All of ${SITE_IN()} on away?`, 'Every room drops to the away temperature and stays there until you change it. To have the heating come back on its own, use "I\u2019m leaving" instead.'],
       };
       const [title, msg] = labels[mode];
       confirmSheet(title, msg, 'Yes, ' + mode, async () => {
@@ -1069,10 +1069,27 @@
   function sensorRuleLine(zone) {
     const summary = zone.sensor_summary || {};
     const action = summary.action_when_open || 'nothing';
+    const ownOpen = (zone.sensors || []).some(sensor => sensor.state !== 'closed');
+    const linked = linkedHolds(zone);
     if (summary.owned_action) {
+      /* Held for a door in another room, with this room's own shut: say
+         which door, or "while this is open" points at nothing. */
+      if (!ownOpen && linked.length) {
+        return {
+          tone: 'active',
+          text: `Holding ${esc(sensorModeWord(summary.owned_action))} while ${esc(linkedCause(linked[0]))} is open.`,
+        };
+      }
       return {
         tone: 'active',
         text: `Holding ${esc(sensorModeWord(summary.owned_action))} while this is open.`,
+      };
+    }
+    const waiting = linked.find(hold => !hold.due && hold.action_when_open !== 'nothing');
+    if (!ownOpen && waiting && summary.action_status === 'pending') {
+      return {
+        tone: 'muted',
+        text: `${esc(linkedCause(waiting))} is open, so this room is about to be set to ${esc(sensorModeWord(waiting.action_when_open))}.`,
       };
     }
     if (action === 'nothing') return null;
@@ -1090,6 +1107,33 @@
 
   function sensorModeWord(action) {
     return { away: 'Away', eco: 'Eco', comfort: 'Comfort' }[action] || action;
+  }
+
+  /* Contacts in other rooms that are open and asking this one to change.
+     Their rule is their own room's; their warning stays there too. */
+  function linkedHolds(zone) {
+    const summary = zone.sensor_summary || {};
+    return (summary.linked || []).filter(hold => (hold.sensors || []).length);
+  }
+
+  /* "the Patio Door in Living Room", or "2 sensors in Living Room". */
+  function linkedCause(hold) {
+    const sensors = hold.sensors || [];
+    const what = sensors.length === 1 ? `the ${sensors[0].name}` : `${sensors.length} sensors`;
+    return hold.zone_name ? `${what} in ${hold.zone_name}` : what;
+  }
+
+  function zoneName(zoneId) {
+    const zone = state.zones.find(item => String(item.zone_id) === String(zoneId));
+    return zone ? zone.name : '';
+  }
+
+  /* The rooms a contact may turn down besides its own: only rooms with a
+     heater, since anywhere else there is nothing to turn down. */
+  function heatableRooms(exceptZoneId) {
+    return state.zones.filter(zone =>
+      String(zone.zone_id) !== String(exceptZoneId)
+      && (zone.components || []).length > 0);
   }
 
   function sensorPendingWord(action) {
@@ -1130,7 +1174,27 @@
   function sensorZoneHeadline(zone) {
     const summary = zone.sensor_summary;
     const items = zone.sensors || [];
-    if (!summary || !summary.sensor_count) return '';
+    if (!summary) return '';
+    const linked = linkedHolds(zone);
+    // Anything wrong with this room's own sensors outranks a door elsewhere.
+    const ownAttention = items.some(sensor => !sensor.available || sensor.state !== 'closed');
+    /* A door in another room is turning this one down. It is not this room's
+       warning, so it is never amber here — just why the room is in Eco. */
+    if (linked.length && !ownAttention) {
+      const hold = linked[0];
+      const names = hold.sensors.map(sensor => sensor.name).join(', ');
+      const mode = summary.owned_action ? `${sensorModeWord(summary.owned_action)} · ` : '';
+      const rule = sensorRuleLine(zone);
+      return `<div class="zsensor zsensor-linked">
+        ${sensorIcon(configuredSensor(hold.sensors[0].sensor_id))}
+        <span class="zsensor-copy">
+          <strong>${esc(`${mode}${names} open`)}</strong>
+          <small>${esc(hold.zone_name ? `In ${hold.zone_name}` : '')}</small>
+        </span>
+        ${rule && !summary.owned_action ? `<small class="zsensor-rule">${rule.text}</small>` : ''}
+      </div>`;
+    }
+    if (!summary.sensor_count) return '';
 
     const open = items.filter(sensor => sensor.available && sensor.state === 'open');
     const unavailable = items.filter(sensor => !sensor.available);
@@ -1296,7 +1360,9 @@
        So the age of that last word is shown once it gets old, well before
        anything is willing to call it offline. */
     const extras = climate ? climateExtras(sensor) : '';
-    const kindText = extras ? `${sensorKindLabel(sensor)} · ${extras}` : sensorKindLabel(sensor);
+    const controls = (sensor.controls_zone_ids || []).map(zoneName).filter(Boolean);
+    const also = controls.length ? ` · also heats ${controls.join(', ')}` : '';
+    const kindText = (extras ? `${sensorKindLabel(sensor)} · ${extras}` : sensorKindLabel(sensor)) + also;
     const quiet = sensor.available
       && (climate ? climateReadingIsStale(sensor) : sensorIsStale(sensor));
     const detail = !sensor.available
@@ -1323,6 +1389,8 @@
             title="Edit this sensor" aria-label="Edit ${esc(sensor.name)}">${Nobo.icon('rename')}</button>
           <button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
             title="Move to another room" aria-label="Move ${esc(sensor.name)}">${Nobo.icon('move')}</button>
+          ${climate ? '' : `<button class="icon-btn act-move" type="button" data-heating-sensor="${esc(sensor.sensor_id)}"
+            title="Heating it controls" aria-label="Heating ${esc(sensor.name)} controls">${Nobo.icon('rooms')}</button>`}
           <button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
             title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>
           <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
@@ -1364,6 +1432,39 @@
       </div>`;
   }
 
+  /* On the room a door elsewhere is turning down: which door, where, and for
+     how long, so a room in Eco with its own windows shut explains itself. */
+  function linkedStrips(zone) {
+    const summary = zone.sensor_summary || {};
+    return linkedHolds(zone).map(hold => {
+      const names = hold.sensors.map(sensor => sensor.name).join(', ');
+      const opened = hold.open_started_at
+        ? Nobo.fmtAgo(new Date(hold.open_started_at * 1000).toISOString()) : '';
+      const mode = sensorModeWord(summary.owned_action || hold.action_when_open);
+      const what = hold.sensors.length === 1 ? `the ${names} is` : `${names} are`;
+      const title = hold.due && summary.owned_action
+        ? `${mode} because ${what} open`
+        : `${names} open`;
+      const detail = [
+        hold.zone_name ? `In ${hold.zone_name}` : '',
+        opened ? `opened ${opened}` : '',
+        !hold.due && hold.action_when_open !== 'nothing' ? `${mode} soon` : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="sensor-linked">
+        ${sensorIcon(configuredSensor((hold.sensors[0] || {}).sensor_id))}
+        <span><strong>${esc(title.charAt(0).toUpperCase() + title.slice(1))}</strong>
+          <small>${esc(detail)}</small></span>
+      </div>`;
+    }).join('');
+  }
+
+  function controlledByLine(zone) {
+    const sources = zone.controlled_by || [];
+    if (!sources.length) return '';
+    const text = sources.map(item => `${item.name}${item.zone_name ? ` in ${item.zone_name}` : ''}`).join(', ');
+    return `<p class="sensor-controlled-by"><strong>Also controlled by</strong> ${esc(text)}</p>`;
+  }
+
   function sensorStatus(zone, detailed = false) {
     const summary = zone.sensor_summary;
     if (!summary) return '';
@@ -1373,6 +1474,8 @@
     const open = items.filter(sensor => sensor.available && sensor.state === 'open');
     const admin = state.me && state.me.role === 'admin';
     const rule = sensorRuleLine(zone);
+    // Says the same as the rule line when only a door elsewhere is open.
+    const linked = linkedStrips(zone);
 
     /* The live region is the warning only. The card around it re-renders on
        every zone update, so announcing the whole thing would read the sensor
@@ -1410,11 +1513,13 @@
             data-add-sensor="${esc(zone.zone_id)}">+ Add</button>` : ''}
         </div>
         <div aria-live="polite">${warning}${offline}</div>
-        ${rule && !summary.warning_raised
+        ${linked}
+        ${rule && !summary.warning_raised && !(linked && !open.length)
           ? `<p class="sensor-rule-line is-${rule.tone}">${rule.text}</p>` : ''}
         ${items.length
           ? `<ul class="sensor-list">${items.map(item => sensorRow(item, admin)).join('')}</ul>`
           : '<p class="zd-sub">No contact sensors are assigned to this room yet.</p>'}
+        ${controlledByLine(zone)}
         ${sensorRuleSummary(zone)}
         ${admin ? `<div class="sheet-actions card-add-row">
           <button class="btn" type="button" data-add-sensor="${esc(zone.zone_id)}">Add sensor</button>
@@ -2193,7 +2298,7 @@
         <input id="pairSensorName" type="text" maxlength="80" autocomplete="off"
           value="${esc(sensor ? sensor.name : '')}" placeholder="Kitchen window">
       </label>
-      <label class="field"><span>Zone</span>
+      <label class="field"><span>Room</span>
         <select id="pairSensorZone">${sensorZoneOptions(
           sensor && sensor.zone_id ? sensor.zone_id : defaultZoneId)}</select>
       </label>`;
@@ -2227,12 +2332,15 @@
         const pressed = event.currentTarget;
         pressed.disabled = true;
         try {
-          await Nobo.api.pairSensor({
+          const created = await Nobo.api.pairSensor({
             name,
             kind: root.querySelector('#pairSensorKind').value,
             zone_id: root.querySelector('#pairSensorZone').value,
           });
-          if (replacing) await Nobo.api.removeSensor(replacing.sensor_id);
+          if (replacing) {
+            await carryHeatingLinks(replacing, created);
+            await Nobo.api.removeSensor(replacing.sensor_id);
+          }
           closeSheet();
           Nobo.toast(replacing ? `${name} replaced` : `${name} added`);
           await refresh(true);
@@ -2242,6 +2350,14 @@
         }
       };
     });
+  }
+
+  /* A replacement heats what the old sensor heated. Copied before the old one
+     is removed, because removing it forgets its rooms. */
+  async function carryHeatingLinks(old, replacement) {
+    const zoneIds = (old && old.controls_zone_ids) || [];
+    if (!zoneIds.length || !replacement || replacement.kind === 'climate') return;
+    await Nobo.api.setSensorHeating(replacement.sensor_id, zoneIds);
   }
 
   /* Real pairing is two steps because a radio join takes anywhere from seconds
@@ -2338,12 +2454,15 @@
         const pressed = event.currentTarget;
         pressed.disabled = true;
         try {
-          await Nobo.api.updateSensor(joined.sensor_id, {
+          const saved = await Nobo.api.updateSensor(joined.sensor_id, {
             name,
             kind: sheetBody.querySelector('#pairSensorKind').value,
             zone_id: sheetBody.querySelector('#pairSensorZone').value,
           });
-          if (replacing) await removeSensorWithRetry(replacing);
+          if (replacing) {
+            await carryHeatingLinks(replacing, saved);
+            await removeSensorWithRetry(replacing);
+          }
           closeSheet();
           Nobo.toast(`${name} added`);
           await refresh(true);
@@ -2537,8 +2656,8 @@
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
     openSheet(`Move ${sensor.name}`, `
-      <p class="zd-sub">Choose the zone that should monitor this ${sensorKindLabel(sensor).toLowerCase()}.</p>
-      <label class="field"><span>Zone</span>
+      <p class="zd-sub">Choose the room that should monitor this ${sensorKindLabel(sensor).toLowerCase()}.</p>
+      <label class="field"><span>Room</span>
         <select id="moveSensorZone">${sensorZoneOptions(sensor.zone_id)}</select>
       </label>
       <div class="sheet-actions">
@@ -2705,6 +2824,116 @@
     });
   }
 
+  function heatingControlsHint(sensor) {
+    const own = zoneName(sensor.zone_id) || 'Its own room';
+    const others = (sensor.controls_zone_ids || []).map(zoneName).filter(Boolean);
+    return others.length ? [own, ...others].join(', ') : `${own} only`;
+  }
+
+  /* Which rooms' heating one contact changes. Its own room always; others
+     are chosen here. The rule — what to set, after how long — stays its own
+     room's, and so does the warning: an open patio door is a Living Room
+     problem even when it also turns the kitchen down. */
+  function sensorHeatingSheet(sensorId) {
+    const sensor = configuredSensor(sensorId);
+    if (!sensor || sensor.kind === 'climate') return;
+    const ownZone = state.zones.find(zone => String(zone.zone_id) === String(sensor.zone_id));
+    if (!ownZone) {
+      Nobo.toast('Put this sensor in a room first', 'error');
+      return;
+    }
+    const rooms = heatableRooms(ownZone.zone_id);
+    const group = String(ownZone.category || '').trim();
+    const groupRooms = group
+      ? rooms.filter(zone => String(zone.category || '').trim() === group) : [];
+    const chosen = new Set((sensor.controls_zone_ids || []).map(String));
+    const policy = sensorPolicyFor(ownZone.zone_id);
+    const action = policy ? policy.action_when_open : (ownZone.sensor_summary || {}).action_when_open;
+
+    const sameSet = (ids) => ids.length === chosen.size && ids.every(id => chosen.has(id));
+    const groupIds = groupRooms.map(zone => String(zone.zone_id));
+    const current = !chosen.size ? 'own'
+      : (groupIds.length && sameSet(groupIds) ? 'group' : 'choose');
+    const choices = [['own', 'This room']];
+    if (groupRooms.length) choices.push(['group', group]);
+    choices.push(['choose', 'Choose\u2026']);
+
+    const ruleNote = !ownZone.components || !ownZone.components.length
+      ? `${ownZone.name} has no heater, so its rule never changes the heating. The rooms chosen here follow ${ownZone.name}'s rule all the same.`
+      : action && action !== 'nothing'
+        ? `They follow ${ownZone.name}'s rule: ${sensorActionLabel(action).toLowerCase()} after ${Nobo.fmtDuration(policy ? policy.action_delay_seconds : 0)}, back when every door that asked has closed.`
+        : `${ownZone.name}'s rule leaves the heating alone, so nothing will change until it has one. Set it under ${ownZone.name}'s sensor rules.`;
+
+    openSheet('Heating it controls', `
+      <p class="zd-sub">When <strong>${esc(sensor.name)}</strong> is open, these rooms
+      are turned down together. The warning stays on ${esc(ownZone.name)}.</p>
+      ${segControl('sensor-heating', choices, current, { label: 'Which rooms' })}
+      <div class="exc-list sensor-heating-list" id="shRooms">
+        <label class="exc-row notify-row is-fixed">
+          <input type="checkbox" checked disabled>
+          <span class="exc-name">${esc(ownZone.name)} <small>its own room</small></span>
+        </label>
+        ${rooms.map(zone => `
+          <label class="exc-row notify-row">
+            <input type="checkbox" data-heating-zone="${esc(zone.zone_id)}"
+              ${chosen.has(String(zone.zone_id)) ? 'checked' : ''}>
+            <span class="exc-name">${esc(zone.name)}${zone.category
+              ? ` <small>${esc(zone.category)}</small>` : ''}</span>
+          </label>`).join('')}
+      </div>
+      <div class="note">${esc(ruleNote)}</div>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save</button>
+      </div>`, (root) => {
+      const boxes = [...root.querySelectorAll('[data-heating-zone]')];
+      const list = root.querySelector('#shRooms');
+      const segs = [...root.querySelectorAll('[data-seg="sensor-heating"]')];
+      const pick = (value) => {
+        segs.forEach(button => button.setAttribute('aria-pressed',
+          String(button.dataset.value === value)));
+        if (value === 'own') boxes.forEach(box => { box.checked = false; });
+        if (value === 'group') {
+          boxes.forEach(box => { box.checked = groupIds.includes(box.dataset.heatingZone); });
+        }
+        list.hidden = value === 'own';
+      };
+      list.hidden = current === 'own';
+      segs.forEach(button => { button.onclick = () => pick(button.dataset.value); });
+      /* Ticking a box is choosing, whatever the shortcut said before. */
+      boxes.forEach(box => {
+        box.onchange = () => {
+          const ids = boxes.filter(item => item.checked).map(item => item.dataset.heatingZone);
+          const shortcut = !ids.length ? 'own'
+            : (groupIds.length && ids.length === groupIds.length
+               && ids.every(id => groupIds.includes(id)) ? 'group' : 'choose');
+          segs.forEach(button => button.setAttribute('aria-pressed',
+            String(button.dataset.value === shortcut)));
+        };
+      });
+
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        // Held, because currentTarget is null again once the handler has awaited.
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        const ids = list.hidden ? []
+          : boxes.filter(box => box.checked).map(box => box.dataset.heatingZone);
+        try {
+          await Nobo.api.setSensorHeating(sensor.sensor_id, ids);
+          closeSheet();
+          Nobo.toast(ids.length
+            ? `${sensor.name} now controls ${[ownZone.name, ...ids.map(zoneName)].join(', ')}`
+            : `${sensor.name} controls ${ownZone.name} only`);
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
   function sensorMenuSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
@@ -2727,6 +2956,10 @@
         run: () => editSensorSheet(sensorId) },
       { icon: 'move', cls: 'act-move', label: 'Move to another room',
         run: () => moveSensorSheet(sensorId) },
+      ...(sensor.kind === 'climate' ? [] : [{
+        icon: 'rooms', cls: 'act-move', label: 'Heating it controls',
+        hint: heatingControlsHint(sensor),
+        run: () => sensorHeatingSheet(sensorId) }]),
       { icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
         hint: 'Pair a new one in its place',
         run: () => pairSensorSheet('', configuredSensor(sensorId)) },
@@ -2747,6 +2980,9 @@
     });
     root.querySelectorAll('[data-move-sensor]').forEach(button => {
       button.onclick = () => moveSensorSheet(button.dataset.moveSensor);
+    });
+    root.querySelectorAll('[data-heating-sensor]').forEach(button => {
+      button.onclick = () => sensorHeatingSheet(button.dataset.heatingSensor);
     });
     root.querySelectorAll('[data-replace-sensor]').forEach(button => {
       button.onclick = () => pairSensorSheet('', configuredSensor(button.dataset.replaceSensor));
@@ -2825,7 +3061,7 @@
     const stepTitle = adjustable
       ? ''
       : (!remote
-          ? 'Turn the dial on the heater to change this zone'
+          ? 'Turn the dial on the heater to change this room'
           : 'Away uses a fixed system temperature');
 
     let setCell;
@@ -2835,7 +3071,7 @@
       setCell = `<div class="zt-cell"><span class="set-label">Contains</span>${note('Nothing yet', 'No heater or sensor')}</div>`;
     } else if (!remote) {
       setCell = `<div class="zt-cell"><span class="set-label">Set to</span>${note('On the heater', 'Adjust by hand',
-        'No heater in this zone can be adjusted from here. Turn the dial on the heater to change its temperature.')}</div>`;
+        'No heater in this room can be adjusted from here. Turn the dial on the heater to change its temperature.')}</div>`;
     } else {
       /* + above −, stacked beside the number so the buttons add no height to
          the card. The label and number keep the top of the cell, level with
@@ -2965,7 +3201,7 @@
    *  simply does not appear rather than inventing a number.
    */
   function groupSummary(zones) {
-    const parts = [`${zones.length} ${zones.length === 1 ? 'zone' : 'zones'}`];
+    const parts = [`${zones.length} ${zones.length === 1 ? 'room' : 'rooms'}`];
 
     /* A room with no heating schedule has no mode, so it neither makes a
        group "all at Eco" nor splits one that otherwise is. */
@@ -3005,8 +3241,8 @@
   function renderZones() {
     const list = $('#zoneList');
     if (!state.zones.length) {
-      list.innerHTML = `<li class="zone"><div class="zone-meta">No zones yet.
-        Add one, then put its heaters in it.</div></li>`;
+      list.innerHTML = `<li class="zone"><div class="zone-meta">No rooms yet.
+        Add one under Settings, in Rooms and Groups, then put its heaters in it.</div></li>`;
       $('#roomsNote').textContent = '';
       return;
     }
@@ -3016,7 +3252,7 @@
           groupHeadingRow(name, zones) + zones.map(zoneRow).join('')).join('')
       : state.zones.map(zoneRow).join('');
     const manual = state.zones.filter(z => z.has_manual_devices).length;
-    const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'zone' : 'zones'}`;
+    const zoneCount = `${state.zones.length} ${state.zones.length === 1 ? 'room' : 'rooms'}`;
     const note = $('#roomsNote');
     note.textContent = manual
       ? `${zoneCount} · ${manual} with a dial-only heater`
@@ -3121,11 +3357,11 @@
     const info = state.hubInfo || {};
     const sensorLine = sensorSystemLine(state.zones);
     const rows = [
-      ['Zones', String(s.zoneCount)],
+      ['Rooms', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
-      ['Coldest zone', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
+      ['Coldest room', s.coldest ? `${s.coldest.name} at ${Nobo.fmtTemp(s.coldest.current_temperature)}\u00B0` : 'Unknown'],
       ['Likely heating now', `${s.heatingCount} of ${s.zoneCount} (estimated from temperatures)`],
-      ['Zones overridden', String(s.overriddenCount)],
+      ['Rooms overridden', String(s.overriddenCount)],
       /* Sensors sit with the house, not with the hub: a separate radio and a
          separate failure. The row is absent, not empty, when the feature is
          off, so a Nobø-only installation gains nothing to explain. */
@@ -3207,7 +3443,7 @@
     if (!follows) {
       note = `
         <div class="note note-warn">
-          <strong>This zone ignores Home and Away</strong>
+          <strong>This room ignores Home and Away</strong>
           <div>${held
             ? `It is holding ${esc(modeLabel)} and will stay there until you change it on this screen.`
             : `It follows its own schedule. Choosing a mode on the front page will not change it.`}</div>
@@ -3225,7 +3461,7 @@
       <div class="switch zd-follow">
         <div class="switch-text">
           <strong>Follow Home and Away</strong>
-          <span>Modes chosen on the front page apply to this zone.</span>
+          <span>Modes chosen on the front page apply to this room.</span>
         </div>
         <button class="btn" type="button" data-act="follow-global"
           aria-pressed="${follows ? 'true' : 'false'}">${follows ? 'On' : 'Off'}</button>
@@ -3264,10 +3500,10 @@
   function renderZoneDetail() {
     const zone = state.zones.find(z => String(z.zone_id) === state.zoneId);
     const root = $('#viewZone');
-    if (!zone) { root.innerHTML = `<div class="card">This zone is no longer available.</div>`; return; }
+    if (!zone) { root.innerHTML = `<div class="card">This room is no longer available.</div>`; return; }
 
     $('#topTitle').textContent = zone.name;
-    $('#topSub').textContent = 'Zone';
+    $('#topSub').textContent = 'Room';
 
     const mode = Nobo.effectiveMode(zone);
     const key = setpointKey(zone);
@@ -3301,11 +3537,11 @@
     const actualHumidity = climate && climate.humidity != null
       ? `${fmtHumidity(climate.humidity)} humidity \u00B7 ` : '';
     const headSub = monitoringOnly
-      ? `${actual == null ? '' : esc(actualHumidity + actualSource) + ' \u00B7 '}Monitoring only \u2014 there is no heater in this zone`
+      ? `${actual == null ? '' : esc(actualHumidity + actualSource) + ' \u00B7 '}Monitoring only \u2014 there is no heater in this room`
       : noSchedule
-      ? 'There is no heater in this zone'
+      ? 'There is no heater in this room'
       : !remote
-      ? 'The temperature in this zone is set by the dial on each heater'
+      ? 'The temperature in this room is set by the dial on each heater'
       : `${esc(modeLabel)}${actual == null ? ' \u00B7 no temperature sensor in this zone' : ''}`;
     const actualBlock = measuredHead || actual == null ? '' : `
           <div class="zd-actual" title="Actual temperature, measured by the ${esc(actualSource)}">
@@ -3353,12 +3589,12 @@
             <span class="zd-temp-note">set by Nobø</span>
           </div>
         </div>` : ''}
-        ${remote || measuredHead ? '' : `<div class="note note-warn">No heater in this zone can be adjusted
-          from here. You can still switch the zone between comfort, eco, away and its schedule -
+        ${remote || measuredHead ? '' : `<div class="note note-warn">No heater in this room can be adjusted
+          from here. You can still switch the room between comfort, eco, away and its schedule -
           turn the dial on the heater to change the temperature itself.</div>`}
         ${renderSetpointDrift(zone)}
         ${noSchedule ? '' : `
-        <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this zone">
+        <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this room">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
               aria-pressed="${(zone.current_mode || 'normal') === m}">
@@ -3374,11 +3610,11 @@
 
       <section class="card">
         <div class="card-head is-caps">
-          <h2>Heaters in this zone (${devices.length})</h2>
+          <h2>Heaters in this room (${devices.length})</h2>
           <button class="card-add phone-only" type="button" data-add-device>+ Add</button>
         </div>
         ${devices.length ? `<ul class="dev-list">${devices.map(devRow).join('')}</ul>`
-          : `<p class="zd-sub">No heaters are assigned to this zone. Add one by typing the
+          : `<p class="zd-sub">No heaters are assigned to this room. Add one by typing the
              12-digit serial printed on it.</p>`}
         <div class="sheet-actions card-add-row">
           <button class="btn" type="button" data-act="add-device">Add a heater</button>
@@ -3388,7 +3624,7 @@
       ${noSchedule ? `
       <section class="card zd-no-schedule">
         <h2>Heating schedule</h2>
-        <p class="zd-sub">None. There is no heater in this zone, so it has no
+        <p class="zd-sub">None. There is no heater in this room, so it has no
           heating schedule and no mode.${monitoringOnly ? ' Its sensors still watch and warn.' : ''}</p>
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="schedule-on">Give it a schedule</button>
@@ -3396,7 +3632,7 @@
       </section>` : `
       <section class="card">
         <div class="card-head">
-          <h2>This zone's week</h2>
+          <h2>This room's week</h2>
           <button class="btn" type="button" data-act="edit-week">Edit week</button>
         </div>
         ${renderScheduleSummary()}
@@ -3405,16 +3641,16 @@
             Use a different schedule
           </button>
           ${noHeaters ? `<button class="btn" type="button" data-act="schedule-off"
-            title="There is no heater here for a schedule to drive">No schedule for this zone</button>` : ''}
+            title="There is no heater here for a schedule to drive">No schedule for this room</button>` : ''}
         </div>
         ${renderSchedule()}
       </section>`}
 
       <section class="card">
-        <h2>Zone settings</h2>
+        <h2>Room settings</h2>
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="rename-zone">Edit this room</button>
-          <button class="btn btn-danger" type="button" data-act="delete-zone">Delete zone</button>
+          <button class="btn btn-danger" type="button" data-act="delete-zone">Delete room</button>
         </div>
       </section>`;
 
@@ -3495,7 +3731,7 @@
           <button class="icon-btn act-rename" type="button" data-rename-device="${esc(d.serial)}"
             title="Rename this heater" aria-label="Rename ${esc(name)}">${Nobo.icon('rename')}</button>
           <button class="icon-btn act-move" type="button" data-move-device="${esc(d.serial)}"
-            title="Move to another zone" aria-label="Move ${esc(name)} to another zone">${Nobo.icon('move')}</button>
+            title="Move to another room" aria-label="Move ${esc(name)} to another room">${Nobo.icon('move')}</button>
           <button class="icon-btn act-replace" type="button" data-replace-device="${esc(d.serial)}"
             title="Replace with a different heater" aria-label="Replace ${esc(name)}">${Nobo.icon('replace')}</button>
           <button class="icon-btn act-remove" type="button" data-remove-device="${esc(d.serial)}"
@@ -3520,9 +3756,9 @@
         </span>
       </div>`, [
       { icon: 'rename', cls: 'act-rename', label: 'Rename', run: () => renameDevice(serial) },
-      { icon: 'move', cls: 'act-move', label: 'Move to another zone', run: () => moveDevice(serial) },
+      { icon: 'move', cls: 'act-move', label: 'Move to another room', run: () => moveDevice(serial) },
       { icon: 'replace', cls: 'act-replace', label: 'Replace with a different heater',
-        hint: 'Keeps its name and zone', run: () => replaceDevice(serial) },
+        hint: 'Keeps its name and room', run: () => replaceDevice(serial) },
       { icon: 'remove', cls: 'act-remove', label: 'Remove from the hub', run: () => removeDevice(serial) },
     ]);
   }
@@ -3642,7 +3878,7 @@
     const shared = (meta && meta.shared_with_zones) || [];
     const sharedNote = !opts.compact && shared.length
       ? `<div class="note note-warn">This schedule is shared with ${esc(listSentence(shared))}.
-         When you save, choose whether to change just this zone or every zone using it.</div>`
+         When you save, choose whether to change just this room or every room using it.</div>`
       : '';
 
     return `<div class="sched${opts.compact ? ' sched-compact' : ''}">${rows}${axis}</div>
@@ -3723,7 +3959,7 @@
       beforeHtml: `
         ${shared.length ? `<div class="note note-warn">This schedule is shared with
           ${esc(listSentence(shared))}. You will choose who to change when you save.</div>` : ''}
-        <p class="zd-sub">Each row says what the zone does from that time until the next
+        <p class="zd-sub">Each row says what the room does from that time until the next
         change. The day always starts at 00:00, so there can never be a gap.</p>`,
       onSave: async (payload, root) => {
         if (shared.length) {
@@ -4005,19 +4241,19 @@
   function chooseScheduleSaveScope(zone, payload, shared) {
     const everyone = listSentence([zone.name].concat(shared));
     openSheet('Who should this change?', `
-      <p class="zd-sub">This schedule is shared. Choose whether this edit changes one zone or every zone using it.</p>
+      <p class="zd-sub">This schedule is shared. Choose whether this edit changes one room or every room using it.</p>
       <div class="schedule-choices">
         <button class="schedule-choice" type="button" data-apply-to="zone">
           <span class="schedule-choice-icon" aria-hidden="true">${Nobo.icon('normal')}</span>
           <span>
-            <strong>Just this zone</strong>
-            <small>${esc(zone.name)} gets its own copy. The other zones keep the schedule as it is.</small>
+            <strong>Just this room</strong>
+            <small>${esc(zone.name)} gets its own copy. The other rooms keep the schedule as it is.</small>
           </span>
         </button>
         <button class="schedule-choice" type="button" data-apply-to="profile">
           <span class="schedule-choice-icon" aria-hidden="true">${Nobo.icon('normal')}</span>
           <span>
-            <strong>Every zone using it</strong>
+            <strong>Every room using it</strong>
             <small>Changes ${esc(everyone)}.</small>
           </span>
         </button>
@@ -4105,14 +4341,14 @@
       .filter(Boolean);
     const affected = used.length
       ? `Changes ${listSentence(used)}.`
-      : 'This schedule is not used by any zone.';
+      : 'This schedule is not used by any room.';
 
     editWeek({
       title: `${name} · schedule`,
       schedule: profile.schedule,
       beforeHtml: `
         <p class="zd-sub">${esc(affected)}</p>
-        <p class="zd-sub">Each row says what zones using this schedule do from that
+        <p class="zd-sub">Each row says what rooms using this schedule do from that
         time until the next change. The day always starts at 00:00, so there can
         never be a gap.</p>`,
       onSave: async (payload, root) => {
@@ -4129,7 +4365,7 @@
       schedule: startingWeekSchedule(),
       nameField: true,
       beforeHtml: `
-        <p class="zd-sub">Create a named schedule that can be assigned to any zone.</p>
+        <p class="zd-sub">Create a named schedule that can be assigned to any room.</p>
         <p class="zd-sub">It starts as Comfort all day, every day.</p>`,
       onSave: async (payload, root, name) => {
         const btn = root.querySelector('[data-act="save"]');
@@ -4246,7 +4482,7 @@
     root.querySelector('[data-act="log-refresh"]').onclick = () => loadLog();
     root.querySelector('[data-act="log-clear"]').onclick = () => {
       confirmSheet('Clear the log?',
-        'Every entry is discarded. This does not change any setting or any zone - it only throws away the record of what happened.',
+        'Every entry is discarded. This does not change any setting or any room - it only throws away the record of what happened.',
         'Clear', async () => {
           try {
             await Nobo.api.clearLog();
@@ -4325,7 +4561,7 @@
       .join('');
     openSheet('Move heater', `
       <p class="zd-sub">${esc((d && (d.display_name || d.name)) || serial)}</p>
-      <label class="field"><span>Zone</span><select id="mvZone">${options}</select></label>
+      <label class="field"><span>Room</span><select id="mvZone">${options}</select></label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Move</button>
@@ -4571,7 +4807,7 @@
 
     openSheet('Replace this heater', `
       <p class="zd-sub">The new heater takes over everything <strong>${esc(label)}</strong>
-      had - the same zone, the same schedule and the same temperatures.</p>
+      had - the same room, the same schedule and the same temperatures.</p>
       <label class="field">
         <span>Serial number of the new heater</span>
         <input type="text" id="rpSerial" inputmode="numeric" autocomplete="off"
@@ -4642,10 +4878,10 @@
     const used = [...new Set(state.zones
       .map(z => String(z.category || '').trim())
       .filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    openSheet('Zone details', `
-      <label class="field"><span>Zone name</span>
+    openSheet('Room details', `
+      <label class="field"><span>Room name</span>
         <input type="text" id="rzName" value="${esc(zone.name)}" autocomplete="off"></label>
-      <label class="field"><span>Part of the building <small class="field-hint">Optional. Zones sharing a
+      <label class="field"><span>Part of the building <small class="field-hint">Optional. Rooms sharing a
         category are grouped together on the front page, once there are enough to be worth it.</small></span>
         <input type="text" id="rzCategory" list="rzCategories" autocomplete="off"
           placeholder="Bathrooms, Upstairs, Boathouse\u2026"
@@ -4654,7 +4890,7 @@
       ${noHeaters ? `
       <label class="switch">
         <span class="switch-text"><strong>Heating schedule</strong>
-          <span>This zone has no heater. Turn this off if it should have no
+          <span>This room has no heater. Turn this off if it should have no
           schedule at all, such as a store with only a door sensor.</span>
         </span>
         <input type="checkbox" id="rzSchedule" ${zone.no_schedule === true ? '' : 'checked'}>
@@ -4666,7 +4902,7 @@
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       root.querySelector('[data-act="ok"]').onclick = async () => {
         const name = root.querySelector('#rzName').value.trim();
-        if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
+        if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
         const typed = root.querySelector('#rzCategory').value.trim();
         /* Match an existing category that differs only by case, so "upstairs"
            joins "Upstairs" instead of starting a second group beside it. */
@@ -4677,7 +4913,7 @@
         try {
           await Nobo.api.updateZone(zone.zone_id, body);
           closeSheet();
-          Nobo.toast('Zone saved');
+          Nobo.toast('Room saved');
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
       };
@@ -4701,7 +4937,7 @@
       <p class="zd-sub">${esc(d.device_type || 'Heater')} &middot; ${esc(d.serial_display || serial)}</p>
       <label class="field"><span>Heater name</span>
         <input type="text" id="rdName" value="${esc(current)}" autocomplete="off"></label>
-      <small class="field-hint">Often the room it stands in, when a zone covers more than one.</small>
+      <small class="field-hint">Often where it stands, when a room has more than one heater.</small>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Save</button>
@@ -4728,29 +4964,39 @@
    * empty: heaters are moved or added into it afterwards, from inside it.
    */
   function addZoneSheet() {
-    openSheet('Add a zone', `
-      <p class="zd-sub">A new zone starts empty and on the standard week. Open it
+    const groups = knownGroupNames();
+    openSheet('Add a room', `
+      <p class="zd-sub">A new room starts empty and on the standard week. Open it
       afterwards to add its heaters and set its temperatures.</p>
       <label class="field">
-        <span>Zone name</span>
+        <span>Room name</span>
         <input type="text" id="azName" autocomplete="off" placeholder="e.g. Loft">
       </label>
+      ${groups.length ? `<label class="field">
+        <span>Group</span>
+        <select id="azGroup">
+          <option value="">— Other —</option>
+          ${groups.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('')}
+        </select>
+        <small class="field-hint">Where it is shown on the front page. It can be
+        changed later, here under Rooms and Groups.</small>
+      </label>` : ''}
       <label class="field">
         <span>Icon (optional)</span>
         <input type="text" id="azIcon" autocomplete="off" maxlength="2" placeholder="e.g. \u{1F6CF}">
-        <small class="field-hint">Stored for the current app, which shows an icon per zone.
-        Concept D identifies a zone by its name alone.</small>
+        <small class="field-hint">Stored for the classic interface, which shows an
+        icon per room. This one identifies a room by its name alone.</small>
       </label>
       <label class="switch">
         <span class="switch-text"><strong>Heating schedule</strong>
-          <span>Turn this off for a zone that will never have a heater, such
+          <span>Turn this off for a room that will never have a heater, such
           as a store with only a door sensor.</span>
         </span>
         <input type="checkbox" id="azSchedule" checked>
       </label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-primary" data-act="ok" type="button">Add zone</button>
+        <button class="btn btn-primary" data-act="ok" type="button">Add room</button>
       </div>`, (root) => {
       const nameEl = root.querySelector('#azName');
       const okBtn = root.querySelector('[data-act="ok"]');
@@ -4759,16 +5005,32 @@
       okBtn.onclick = async () => {
         const name = nameEl.value.trim();
         const icon = root.querySelector('#azIcon').value.trim();
-        if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
+        const groupEl = root.querySelector('#azGroup');
+        const group = groupEl ? groupEl.value : '';
+        if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
         okBtn.disabled = true;
         try {
-          await Nobo.api.addZone({
+          const created = await Nobo.api.addZone({
             name, icon: icon || undefined,
             no_schedule: !root.querySelector('#azSchedule').checked,
           });
           closeSheet();
-          Nobo.toast(`${name} added`);
           await refresh(true);
+          /* A group is this app's own, so it is set after the hub has made
+             the room, on the id the hub gave it. The room exists either way;
+             only the grouping can fail here. */
+          if (group && created && created.zone_id != null) {
+            try {
+              const map = currentCategoryMap();
+              map[String(created.zone_id)] = group;
+              await saveZoneCategories(map);
+            } catch (e) {
+              Nobo.toast(`${name} added, but not to ${group}: ${e.message}`, 'error');
+              return;
+            }
+          }
+          Nobo.toast(`${name} added`);
+          if (state.view === 'settings') renderSettings();
         } catch (e) {
           okBtn.disabled = false;
           Nobo.toast(e.message, 'error');
@@ -4779,12 +5041,12 @@
   }
 
   function deleteZone(zone) {
-    confirmSheet('Delete this zone?',
+    confirmSheet('Delete this room?',
       `${zone.name} and its schedule are removed. Its heaters are not deleted.`,
-      'Delete zone', async () => {
+      'Delete room', async () => {
         try {
           await Nobo.api.removeZone(zone.zone_id);
-          Nobo.toast('Zone deleted');
+          Nobo.toast('Room deleted');
           showHome();
           await refresh(true);
         } catch (e) { Nobo.toast(e.message, 'error'); }
@@ -4907,19 +5169,19 @@
           </div>
           <div class="sensor-settings-summary">
             <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
-            <span>Open a zone to see status and battery, edit or move sensors, and choose what that zone should do when a window stays open or the temperature leaves its limits.</span>
+            <span>Open a room to see status and battery, edit or move sensors, and choose what that room should do when a window stays open or the temperature leaves its limits.</span>
           </div>
           ${sensorMeshNote()}
           ${unassigned.length ? `
             <div class="note note-warn">
-              <strong>${unassigned.length} unassigned ${unassigned.length === 1 ? 'sensor needs' : 'sensors need'} a zone</strong>
+              <strong>${unassigned.length} unassigned ${unassigned.length === 1 ? 'sensor needs' : 'sensors need'} a room</strong>
               <ul class="sensor-unassigned-list">${unassigned.map(sensor => `
                 <li><span>${sensorIcon(sensor)} <strong>${esc(sensor.name)}</strong></span>
                   <span class="dev-actions sensor-actions">
                     <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
                       title="Edit this sensor" aria-label="Edit ${esc(sensor.name)}">${Nobo.icon('rename')}</button>
                     <button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
-                      title="Assign to a zone" aria-label="Assign ${esc(sensor.name)} to a zone">${Nobo.icon('move')}</button>
+                      title="Assign to a room" aria-label="Assign ${esc(sensor.name)} to a room">${Nobo.icon('move')}</button>
                     <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
                       title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
                   </span>
@@ -5093,7 +5355,20 @@
   }
 
   function renderZoneGroupsCard(isAdmin) {
-    if (!state.zones.length) return '';
+    /* Adding a room is set-up, not something done from the front page, so it
+       lives here beside the groups it will join. With no rooms yet there is
+       nothing else to show, but the way to add the first must still be here. */
+    const addRoom = isAdmin
+      ? `<div class="section-head rooms-add">
+           <button class="btn btn-add" type="button" data-act="add-room">Add room</button>
+         </div>`
+      : '';
+    if (!state.zones.length) {
+      return settingsSection('rooms', 'Rooms and Groups', '<b>no rooms yet</b>', `
+        <p class="zd-sub">A room is what the hub heats as one: its heaters share a
+        mode and a schedule. A room with no heater can still watch a door.</p>
+        ${addRoom}`, { icon: 'rooms' });
+    }
     const names = knownGroupNames();
     const saved = savedGroupOrder();
     const countIn = name => state.zones.filter(z => String(z.category || '').trim() === name).length;
@@ -5105,6 +5380,8 @@
         there are enough of them to be worth it, in the order listed here. Rooms in no group
         come last, under "Other". Everything here is this app's own — the hub
         does not know about groups.</p>
+
+        ${addRoom}
 
         ${names.length ? `
           <div class="group-list">
@@ -5191,6 +5468,9 @@
   function wireZoneGroups(root) {
     const card = root.querySelector('[data-section="rooms"]');
     if (!card) return;
+
+    const addRoom = card.querySelector('[data-act="add-room"]');
+    if (addRoom) addRoom.onclick = addZoneSheet;
 
     card.querySelectorAll('[data-assign-zone]').forEach(select => {
       select.onchange = async () => {
@@ -5554,17 +5834,17 @@
         <div class="section-head">
           <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
         </div>
-        <p class="zd-sub">Schedules can be shared by several zones. Open one here to
+        <p class="zd-sub">Schedules can be shared by several rooms. Open one here to
         see and edit the week it contains.</p>
         ${renderScheduleSettings()}
       `, { icon: 'normal' })}
 
       ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
-        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the zones that should hold their
+        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the rooms that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
         goes Away — a bathroom with pipes, a workshop, a wine store.</p>
         <div id="awayExc" class="exc-list">
-          <p class="zd-sub">Loading zones…</p>
+          <p class="zd-sub">Loading rooms…</p>
         </div>
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
@@ -6068,7 +6348,7 @@
       const chosen = new Set((data.zone_ids || []).map(String));
       const zones = state.zones.length ? state.zones : (await Nobo.api.zones() || []);
       if (!zones.length) {
-        box.innerHTML = `<p class="zd-sub">No zones to choose from yet.</p>`;
+        box.innerHTML = `<p class="zd-sub">No rooms to choose from yet.</p>`;
         return;
       }
       box.innerHTML = zones.map(z => `
@@ -6087,10 +6367,10 @@
       if (state_) {
         state_.innerHTML = chosen.size
           ? `<b>${chosen.size}</b> kept above ${esc(AWAY_TEMP_LABEL())}`
-          : 'every zone follows Away';
+          : 'every room follows Away';
       }
     } catch (e) {
-      box.innerHTML = `<p class="zd-sub">Could not load the zones: ${esc(e.message)}</p>`;
+      box.innerHTML = `<p class="zd-sub">Could not load the rooms: ${esc(e.message)}</p>`;
     }
   }
 
@@ -6103,8 +6383,8 @@
     try {
       const res = await Nobo.api.setAwayExceptions(zone_ids);
       Nobo.toast(zone_ids.length
-        ? `${zone_ids.length} zone${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
-        : 'Every zone will follow Away');
+        ? `${zone_ids.length} room${zone_ids.length > 1 ? 's' : ''} will stay on Eco when away`
+        : 'Every room will follow Away');
       if (res && res.applied_now && res.applied_now.length) {
         Nobo.toast(`Applied now, because ${SITE_IN()} is away`);
       }
@@ -6115,7 +6395,7 @@
   function toggleDemo(next) {
     confirmSheet(next ? 'Switch to demo mode?' : 'Connect to a real hub?',
       next
-        ? 'The app shows example zones instead of your hub. You will be signed out so it reloads cleanly.'
+        ? 'The app shows example rooms instead of your hub. You will be signed out so it reloads cleanly.'
         : 'The app connects to the hub using the serial and IP below. You will be signed out so it reloads cleanly.',
       next ? 'Switch to demo' : 'Connect to hub', async () => {
         const serial = ($('#stSerial') && $('#stSerial').value || '').replace(/\s/g, '');
@@ -6190,7 +6470,6 @@
   $('#btnSettings').addEventListener('click', () => {
     if (state.view === 'settings') showHome(); else showSettings();
   });
-  $('#btnAddZone').addEventListener('click', addZoneSheet);
 
   function renderHome() {
     renderTrip();

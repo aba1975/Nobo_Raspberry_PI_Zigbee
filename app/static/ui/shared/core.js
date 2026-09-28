@@ -113,6 +113,9 @@ const Nobo = (() => {
                                 req(`/api/sensors/${encodeURIComponent(id)}`
                                     + (force ? '?force=true' : ''), {
                                   method: 'DELETE' }),
+    // The other rooms, besides its own, whose heating a contact changes.
+    setSensorHeating: (id, zoneIds) => req(`/api/sensors/${encodeURIComponent(id)}/heating`, {
+                                   method: 'PUT', body: JSON.stringify({ zone_ids: zoneIds }) }),
     simulateSensor: (id, body) => req(`/api/sensors/${encodeURIComponent(id)}/simulate`, {
                                    method: 'POST', body: JSON.stringify(body) }),
     sensorPairing:  ()        => req('/api/sensors/pairing'),
@@ -407,9 +410,9 @@ const Nobo = (() => {
   }
 
   const HEAT_STATE = {
-    heating: { label: 'Heating',        hint: 'Measured temperature is below the target, so this zone is calling for heat.' },
-    holding: { label: 'At temperature', hint: 'The zone has reached its target temperature.' },
-    unknown: { label: 'No sensor',      hint: 'This zone has no temperature sensor, so its state cannot be reported.' },
+    heating: { label: 'Heating',        hint: 'Measured temperature is below the target, so this room is calling for heat.' },
+    holding: { label: 'At temperature', hint: 'The room has reached its target temperature.' },
+    unknown: { label: 'No sensor',      hint: 'This room has no temperature sensor, so its state cannot be reported.' },
   };
 
   /**
