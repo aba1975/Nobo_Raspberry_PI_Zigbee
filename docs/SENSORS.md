@@ -344,12 +344,22 @@ blinks. Close the window early with `{"time": 0}`. Nothing needs removing in the
 app first. The name, room, rules and heating links are all kept against the
 sensor's address, and come back when it rejoins.
 
-Afterwards, `scripts/zigbee-map.sh` shows which parent the sensor took. Compare
-the link over the next hour, not the first minute. Reports through a router
-carry the LQI of the **sensor→router** hop, which is the one that decides the
-sensor's reliability and battery. The router→coordinator hop is a separate link
-and needs to be healthy too. The map does not print it, but the full map it
-leaves on disk has it.
+Afterwards, `scripts/zigbee-map.sh` shows which parent the sensor took and
+scores the **sensor→parent** hop from that parent's neighbour table. That hop
+decides the sensor's reliability and battery life, and the map is the only place
+it can be read. The link quality shown in the interface cannot be used for this
+comparison. It is measured by the coordinator on the last hop, so a sensor
+reporting through a router shows the router's own link to the coordinator. On
+28 September every one of the 14 sensors on Router 1 showed 153 or 156, while
+their links to the router ranged from 105 to 168. Compare the map's figure
+before and after the move, and ignore the jump in the interface's number.
+
+Tried on the production Pi that day with the Small Bathroom Window, which had
+always chosen the coordinator. It took Router 1 on the first attempt, and its
+name, room and rules came back unchanged. By the neighbour tables its link went
+from 123 (to the coordinator) to 105 (to Router 1): no better, and still
+comfortably good. So the coordinator had not been a poor choice. It was simply
+the radio the sensor heard best.
 
 **Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
 ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
