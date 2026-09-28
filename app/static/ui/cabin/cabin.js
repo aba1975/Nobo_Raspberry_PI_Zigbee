@@ -2790,7 +2790,11 @@
 
     const scheduled = (zone.current_mode || 'normal') === 'normal';
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
-    const modeBadge = `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
+    /* A room set to have no heating schedule has no mode worth naming:
+       "Schedule · Comfort" on a storeroom with no heater described a week
+       nothing follows. */
+    const modeBadge = zone.no_schedule === true ? ''
+      : `<span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span>`;
 
     const manualBadge = monitoring
       ? `<span class="badge badge-empty" title="This zone has sensors but no heater, so it is watched and warns, but its heating cannot be changed.">Monitoring only</span>`
@@ -3240,6 +3244,20 @@
     }
   }
 
+  async function setZoneSchedule(zone, on) {
+    hold();
+    try {
+      await Nobo.api.updateZone(zone.zone_id, { no_schedule: !on });
+      Nobo.toast(on
+        ? `${zone.name} follows the standard week`
+        : `${zone.name} has no heating schedule`);
+      await refresh(true);
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+      await refresh(true);
+    }
+  }
+
   function renderZoneDetail() {
     const zone = state.zones.find(z => String(z.zone_id) === state.zoneId);
     const root = $('#viewZone');
@@ -3255,8 +3273,12 @@
     const devices = devicesOfZone(zone.zone_id);
     const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
 
-    const monitoringOnly = !(zone.components || []).length
+    const noHeaters = !(zone.components || []).length;
+    const monitoringOnly = noHeaters
       && ((zone.sensors || []).length + (zone.climate_sensors || []).length) > 0;
+    /* Only ever true for a zone with no heater: the server refuses the
+       setting otherwise, and drops it the moment a heater is added. */
+    const noSchedule = zone.no_schedule === true;
     const actual = zone.current_temperature;
     const climate = climateOf(zone);
     /* What the room is set to and what it measures, side by side and each
@@ -3327,6 +3349,7 @@
           from here. You can still switch the zone between comfort, eco, away and its schedule -
           turn the dial on the heater to change the temperature itself.</div>`}
         ${renderSetpointDrift(zone)}
+        ${noSchedule ? '' : `
         <div class="mode-row" style="margin-top:1rem" role="group" aria-label="Mode for this zone">
           ${['comfort', 'eco', 'away', 'normal'].map(m => `
             <button class="mode-btn" type="button" data-zmode="${m}"
@@ -3335,7 +3358,7 @@
               ${esc((Nobo.MODES[m] || {}).label || m)}
             </button>`).join('')}
         </div>
-        ${renderFollowGlobal(zone)}
+        ${renderFollowGlobal(zone)}`}
       </section>
 
       ${sensorStatus(zone, true)}
@@ -3354,6 +3377,15 @@
         </div>
       </section>
 
+      ${noSchedule ? `
+      <section class="card zd-no-schedule">
+        <h2>Heating schedule</h2>
+        <p class="zd-sub">None. There is no heater in this zone, so it has no
+          heating schedule and no mode.${monitoringOnly ? ' Its sensors still watch and warn.' : ''}</p>
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="schedule-on">Give it a schedule</button>
+        </div>
+      </section>` : `
       <section class="card">
         <div class="card-head">
           <h2>This zone's week</h2>
@@ -3364,9 +3396,11 @@
           <button class="btn" type="button" data-act="change-schedule" ${state.scheduleMeta ? '' : 'disabled'}>
             Use a different schedule
           </button>
+          ${noHeaters ? `<button class="btn" type="button" data-act="schedule-off"
+            title="There is no heater here for a schedule to drive">No schedule for this zone</button>` : ''}
         </div>
         ${renderSchedule()}
-      </section>
+      </section>`}
 
       <section class="card">
         <h2>Zone settings</h2>
@@ -3417,6 +3451,9 @@
     });
     root.querySelector('[data-act="rename-zone"]').onclick = () => renameZone(zone);
     root.querySelector('[data-act="delete-zone"]').onclick = () => deleteZone(zone);
+    root.querySelectorAll('[data-act="schedule-off"], [data-act="schedule-on"]').forEach(b => {
+      b.onclick = () => setZoneSchedule(zone, b.dataset.act === 'schedule-on');
+    });
     const weekBtn = root.querySelector('[data-act="edit-week"]');
     if (weekBtn) {
       weekBtn.disabled = !state.schedule;
@@ -4593,6 +4630,7 @@
    * invites "Upstairs" and "upstairs" to become two groups. The datalist is
    * the smallest thing that avoids both. */
   function renameZone(zone) {
+    const noHeaters = !(zone.components || []).length;
     const used = [...new Set(state.zones
       .map(z => String(z.category || '').trim())
       .filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -4605,6 +4643,14 @@
           placeholder="Bathrooms, Upstairs, Boathouse\u2026"
           value="${esc(zone.category || '')}"></label>
       <datalist id="rzCategories">${used.map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>
+      ${noHeaters ? `
+      <label class="switch">
+        <span class="switch-text"><strong>Heating schedule</strong>
+          <span>This zone has no heater. Turn this off if it should have no
+          schedule at all, such as a store with only a door sensor.</span>
+        </span>
+        <input type="checkbox" id="rzSchedule" ${zone.no_schedule === true ? '' : 'checked'}>
+      </label>` : ''}
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Save</button>
@@ -4617,8 +4663,11 @@
         /* Match an existing category that differs only by case, so "upstairs"
            joins "Upstairs" instead of starting a second group beside it. */
         const category = used.find(c => c.toLowerCase() === typed.toLowerCase()) || typed;
+        const body = { name, category };
+        const scheduleBox = root.querySelector('#rzSchedule');
+        if (scheduleBox) body.no_schedule = !scheduleBox.checked;
         try {
-          await Nobo.api.updateZone(zone.zone_id, { name, category });
+          await Nobo.api.updateZone(zone.zone_id, body);
           closeSheet();
           Nobo.toast('Zone saved');
           await refresh(true);
@@ -4684,6 +4733,13 @@
         <small class="field-hint">Stored for the current app, which shows an icon per zone.
         Concept D identifies a zone by its name alone.</small>
       </label>
+      <label class="switch">
+        <span class="switch-text"><strong>Heating schedule</strong>
+          <span>Turn this off for a zone that will never have a heater, such
+          as a store with only a door sensor.</span>
+        </span>
+        <input type="checkbox" id="azSchedule" checked>
+      </label>
       <div class="sheet-actions">
         <button class="btn" data-act="cancel" type="button">Cancel</button>
         <button class="btn btn-primary" data-act="ok" type="button">Add zone</button>
@@ -4698,7 +4754,10 @@
         if (!name) { Nobo.toast('Give the zone a name', 'error'); return; }
         okBtn.disabled = true;
         try {
-          await Nobo.api.addZone({ name, icon: icon || undefined });
+          await Nobo.api.addZone({
+            name, icon: icon || undefined,
+            no_schedule: !root.querySelector('#azSchedule').checked,
+          });
           closeSheet();
           Nobo.toast(`${name} added`);
           await refresh(true);

@@ -38,6 +38,7 @@ HUB_CONFIG_FILE = DATA_DIR / "hub_config.json"
 ZONE_ICONS_FILE = DATA_DIR / "zone_icons.json"
 ZONE_CATEGORIES_FILE = DATA_DIR / "zone_categories.json"
 ZONE_GROUP_ORDER_FILE = DATA_DIR / "zone_group_order.json"
+ZONES_WITHOUT_SCHEDULE_FILE = DATA_DIR / "zones_without_schedule.json"
 AWAY_EXCEPTIONS_FILE = DATA_DIR / "away_exceptions.json"
 # Which exception zones are *currently* held on a zone-level Eco override.
 #
@@ -330,6 +331,54 @@ def load_zone_group_order() -> list:
         )
         _backup_corrupt(ZONE_GROUP_ORDER_FILE)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Zones with no heating schedule
+# ---------------------------------------------------------------------------
+# The ids of the rooms the user has said should have no heating schedule. Pi
+# only: the hub's A00/U00 always carry a week profile id, so every hub zone
+# follows *some* schedule and "none" cannot be expressed on the wire. The flag
+# only takes effect while a zone has no heaters -- a schedule with nothing to
+# drive is what it hides -- so it is stored as asked and applied on read.
+
+def save_zones_without_schedule(zone_ids) -> None:
+    """Persist the ids of the zones with no heating schedule, atomically."""
+    try:
+        _atomic_write(
+            ZONES_WITHOUT_SCHEDULE_FILE,
+            sorted({str(z) for z in zone_ids}, key=lambda z: (len(z), z)),
+        )
+    except Exception as exc:
+        logger.error("Failed to save zones without a schedule: %s", exc)
+
+
+def load_zones_without_schedule() -> set:
+    """
+    Load the ids of the zones with no heating schedule.
+
+    Returns an empty set when the file does not exist or is corrupt (backed up
+    as .backup), which means every zone shows its schedule -- the behaviour
+    before this setting existed.
+    """
+    try:
+        with ZONES_WITHOUT_SCHEDULE_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, list):
+            logger.warning(
+                "zones_without_schedule.json has unexpected format (expected list, got %s) — using empty set",
+                type(data).__name__,
+            )
+            return set()
+        return {str(z) for z in data}
+    except FileNotFoundError:
+        return set()
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "zones_without_schedule.json is corrupt: %s — backing up and using empty set", exc
+        )
+        _backup_corrupt(ZONES_WITHOUT_SCHEDULE_FILE)
+        return set()
 
 
 # ---------------------------------------------------------------------------

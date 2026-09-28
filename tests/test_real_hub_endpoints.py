@@ -175,6 +175,73 @@ class TestZoneManagement:
         wait_until(lambda: "1" not in fake.zones)
 
 
+class TestZoneWithoutASchedule:
+    """The Pi-only "no heating schedule" setting, against the hub protocol."""
+
+    @pytest.fixture(autouse=True)
+    def isolated(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            server.config_persistence, "ZONES_WITHOUT_SCHEDULE_FILE",
+            tmp_path / "zones_without_schedule.json",
+        )
+        server.zones_without_schedule.clear()
+        yield
+        server.zones_without_schedule.clear()
+
+    def _zones(self, client):
+        return {z["zone_id"]: z for z in client.get("/api/zones").json()["zones"]}
+
+    def test_a_new_zone_can_start_without_one(self, client, fake):
+        response = client.post("/api/zones", json={"name": "Storage", "no_schedule": True})
+        assert response.status_code == 200, response.text
+        zone_id = response.json()["zone_id"]
+        assert self._zones(client)[zone_id]["no_schedule"] is True
+        # Still on the built-in profile as far as the hub is concerned -- the
+        # protocol has no "none" -- but not reported as sharing it.
+        assert fake.zones[zone_id][2] == "1"
+        shared = client.get("/api/zones/1/schedule").json()["shared_with_zones"]
+        assert "Storage" not in shared
+        default = next(p for p in client.get("/api/week_profiles").json()["week_profiles"]
+                       if p["profile_id"] == "1")
+        assert zone_id not in {u["zone_id"] for u in default["used_by"]}
+
+    def test_a_zone_with_heaters_is_refused(self, client):
+        response = client.put("/api/zones/1", json={"no_schedule": True})
+        assert response.status_code == 400
+        assert self._zones(client)["1"]["no_schedule"] is False
+
+    def test_it_is_parked_on_the_built_in_profile(self, client, fake):
+        zone_id = client.post("/api/zones", json={"name": "Storage"}).json()["zone_id"]
+        wait_until(lambda: zone_id in fake.zones)
+        before = set(fake.week_profiles)
+        created = client.post("/api/week_profiles", json={
+            "name": "Storage week",
+            "schedule": {day: [{"start": "00:00", "end": "24:00", "mode": "eco"}]
+                         for day in ("monday", "tuesday", "wednesday", "thursday",
+                                     "friday", "saturday", "sunday")},
+        })
+        assert created.status_code == 200, created.text
+        wait_until(lambda: set(fake.week_profiles) != before)
+        profile_id = created.json()["profile_id"]
+        assert client.post(f"/api/zones/{zone_id}/week-profile",
+                           json={"profile_id": profile_id}).status_code == 200
+        wait_until(lambda: fake.zones[zone_id][2] == profile_id)
+
+        response = client.put(f"/api/zones/{zone_id}",
+                              json={"name": "Private Storage", "no_schedule": True})
+        assert response.status_code == 200, response.text
+        # One U00 carries both, so neither undoes the other.
+        wait_until(lambda: fake.zones[zone_id][2] == "1")
+        wait_until(lambda: fake.zone_named("Private Storage") is not None)
+        assert client.delete(f"/api/week_profiles/{profile_id}").status_code == 200
+
+    def test_deleting_the_zone_forgets_it(self, client, fake):
+        zone_id = client.post("/api/zones", json={"name": "Storage",
+                                                   "no_schedule": True}).json()["zone_id"]
+        assert client.delete(f"/api/zones/{zone_id}").status_code == 200
+        assert zone_id not in server.zones_without_schedule
+
+
 # ---------------------------------------------------------------------------
 # Week profiles / schedules
 # ---------------------------------------------------------------------------

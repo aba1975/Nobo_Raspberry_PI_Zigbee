@@ -88,7 +88,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Heating when something is open** | Optionally put the room into Away, Eco or Comfort, or hand it back to its schedule, while a contact stays open. Only an override this feature applied is ever released, and Comfort is never sent to "put things back". |
 | **Leaving with something open** | If the house is on Away and anything is open, the front page says so and names the rooms, with no delay — being away is what changes the stakes. |
 | **Room thermometers** | Aqara temperature, humidity and pressure sensors pair the same way. A room with one shows its temperature where the heater reports none, and humidity and pressure in the room. The measured value is always labelled **Actual**, beside what the room is set to. Each room can have a maximum and a minimum: warn only, or warn and hold Eco or Away while too warm, or Eco or Comfort while too cold, until it is half a degree back inside. It also warns about air that stays damp (a humidity maximum, after a delay so a shower is not an alarm), and about any room below 5 °C, and shows the last 24 hours' lowest and highest. See [Room thermometers](docs/SENSORS.md#room-thermometers). Not yet tested with a real thermometer. |
-| **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. |
+| **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. Such a room can be set to have no heating schedule at all, so it shows no week and no mode. |
 
 ### Heating control
 

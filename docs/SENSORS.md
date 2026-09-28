@@ -784,6 +784,17 @@ Nobø components: it still receives sensor state and warnings, while heating
 actions are unavailable because there is no heater to control. This avoids a
 second room model that would drift from the heating UI.
 
+Such a zone can also be set to have **no heating schedule** — from "Edit this
+room", from "Add a zone", or with the button under its week. The hub cannot
+express this: every zone record carries a week profile id, so the choice is
+kept on the Pi in `data/zones_without_schedule.json` and the zone is parked on
+the built-in profile `1`, which cannot be edited or deleted. It is then left
+out of every schedule's "used by" list, and its page and card show no week and
+no mode. `PUT /api/zones/{id}` with `{"no_schedule": true}` is refused (400)
+while the zone has a heater, and the setting stops applying as soon as one is
+added — derived on read, like set point drift. Deleting the zone forgets it,
+because the hub reuses zone ids.
+
 ## Room thermometers
 
 Aqara temperature, humidity and pressure sensors (WSDCGQ11LM, and anything

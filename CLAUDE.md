@@ -249,6 +249,12 @@ about *how many* connections exist, or how long they live, needs real sockets or
 - **Both set points are editable regardless of mode.** Making the stepper act on
   whichever set point the zone was running meant changing the zone's mode to
   edit the other one — and a mode left switched is how a cabin gets cold.
+- **A zone with no heater may have no heating schedule.** The hub cannot say
+  "none" — `A00`/`U00` always carry a week profile id — so the choice lives in
+  `data/zones_without_schedule.json`, the zone is parked on profile `1`, and it
+  is left out of "used by" and `shared_with_zones`. The zone field
+  `no_schedule` is derived on read and is only ever true while the zone has no
+  components: adding a heater brings the schedule back.
 - **A week profile is a shared object.** Several zones can follow one. Editing
   from a zone's week copies it when shared; editing from Settings changes the
   schedule itself and every zone on it. That distinction is the feature, not an

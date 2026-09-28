@@ -398,6 +398,23 @@ zone_categories: Dict[str, str] = config_persistence.load_zone_categories()
 # listed ones; see _category_rank.
 zone_group_order: List[str] = config_persistence.load_zone_group_order()
 
+# Rooms the user has said should have no heating schedule. The hub insists on a
+# week profile for every zone, so this lives here, and it only takes effect
+# while the room has no heater: see zone_schedule_off().
+zones_without_schedule: set = config_persistence.load_zones_without_schedule()
+
+
+def zone_schedule_off(zone_id, components) -> bool:
+    """Whether a zone is shown with no heating schedule.
+
+    True only when the user asked for it *and* the zone has no heaters. A
+    schedule with nothing to drive is noise in a door-sensor-only storeroom;
+    one that drives a heater is the whole point, so adding a heater brings the
+    schedule back without anybody having to remember to switch it on again.
+    Derived on read, never stored, like set point drift.
+    """
+    return str(zone_id) in zones_without_schedule and not list(components or [])
+
 # Optional contact sensors. The provider is started only when the persisted
 # master switch is on; disabled installations pay no runtime or UI cost.
 sensor_settings: SensorSettings = sensor_persistence.load_sensor_settings()
@@ -1120,6 +1137,8 @@ DEFAULT_NEW_ZONE_ECO = 18
 class ZoneAdd(BaseModel):
     name: str
     icon: str = ""
+    # A new zone has no heaters, so it may start with no heating schedule.
+    no_schedule: bool = False
 
 
 class ZoneUpdate(BaseModel):
@@ -1132,6 +1151,8 @@ class ZoneUpdate(BaseModel):
     # True: Home, Away, Comfort and Eco from the front page apply to this zone.
     # False: the zone keeps whatever it was set to and ignores them.
     follow_global_mode: Optional[bool] = None
+    # True: this room has no heating schedule. Refused while it has heaters.
+    no_schedule: Optional[bool] = None
 
 
 class HubConfigUpdate(BaseModel):
@@ -3171,6 +3192,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 # demo and hardware apart.
                 'follows_global_mode': zone_follows_global_mode(demo_zone),
                 'has_zone_override': str(demo_zone['zone_id']) in DEMO_ZONE_OVERRIDES,
+                'no_schedule': zone_schedule_off(demo_zone['zone_id'], demo_zone['components']),
                 'device_type': device_name,
                 'supports_comfort': any_supports_temp,
                 'supports_eco': any_supports_temp,
@@ -3264,6 +3286,7 @@ def _build_zones_data() -> List[Dict[str, Any]]:
                 # sit on Eco while the rest of the house is told to come Home.
                 'follows_global_mode': zone_follows_global_mode(zone),
                 'has_zone_override': str(zone_id) in zones_holding_override,
+                'no_schedule': zone_schedule_off(zone_id, zone_components),
                 'device_type': device_name,
                 'supports_comfort': any_supports_temp,
                 'supports_eco': any_supports_temp,
@@ -4463,6 +4486,21 @@ async def get_zones():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _record_new_zone_schedule(zone_id: str, no_schedule: bool) -> None:
+    """Set the no-schedule flag for a zone id that has just been created or deleted.
+
+    Always settled explicitly, even to False: the hub reuses zone ids, so a flag
+    left behind by an earlier zone with this id must not pass to a new one.
+    """
+    if no_schedule:
+        zones_without_schedule.add(str(zone_id))
+    elif str(zone_id) in zones_without_schedule:
+        zones_without_schedule.discard(str(zone_id))
+    else:
+        return
+    config_persistence.save_zones_without_schedule(zones_without_schedule)
+
+
 @app.post("/api/zones")
 async def add_zone(zone: ZoneAdd):
     """Create a new zone"""
@@ -4516,6 +4554,7 @@ async def add_zone(zone: ZoneAdd):
             config_persistence.save_demo_zones(DEMO_ZONES)
             # A new room starts on the built-in schedule, as it does on the hub.
             save_demo_week_profiles()
+            _record_new_zone_schedule(new_id, zone.no_schedule)
             return {"status": "success", "zone_id": new_id, "name": name}
 
         # Real hub mode
@@ -4547,6 +4586,7 @@ async def add_zone(zone: ZoneAdd):
                 detail="The hub did not confirm the new zone. Please try again.",
             )
         new_id = sorted(new_ids)[0]
+        _record_new_zone_schedule(new_id, zone.no_schedule)
 
         add_log_entry(
             "sent",
@@ -4670,6 +4710,27 @@ def _apply_zone_category(zone_id: str, update: "ZoneUpdate") -> None:
     _prune_zone_group_order()
 
 
+def _refuse_schedule_off_with_heaters(update: "ZoneUpdate", components) -> None:
+    """A room with a heater keeps its schedule: that is what drives the heater."""
+    if update.no_schedule and list(components or []):
+        raise HTTPException(
+            status_code=400,
+            detail="This zone has heaters, so it needs a heating schedule. "
+                   "Only a zone with no heater can go without one.",
+        )
+
+
+def _apply_zone_schedule_off(zone_id: str, update: "ZoneUpdate") -> None:
+    """Record whether a zone has no heating schedule, in both modes alike."""
+    if update.no_schedule is None:
+        return
+    if update.no_schedule:
+        zones_without_schedule.add(str(zone_id))
+    else:
+        zones_without_schedule.discard(str(zone_id))
+    config_persistence.save_zones_without_schedule(zones_without_schedule)
+
+
 @app.put("/api/zones/{zone_id}")
 async def update_zone(zone_id: str, update: ZoneUpdate):
     """Rename a zone and/or change its icon"""
@@ -4686,6 +4747,7 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             if not demo_zone:
                 raise HTTPException(status_code=404, detail="Zone not found")
 
+            _refuse_schedule_off_with_heaters(update, demo_zone['components'])
             old_name = demo_zone['name']
             if update.name is not None:
                 demo_zone['name'] = update.name.strip()
@@ -4694,6 +4756,13 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             if update.follow_global_mode is not None:
                 demo_zone['override_allowed'] = '1' if update.follow_global_mode else '0'
             _apply_zone_category(zone_id, update)
+            _apply_zone_schedule_off(zone_id, update)
+            if (update.no_schedule
+                    and demo_week_profiles.profile_id_for(zone_id) != demo_week.DEFAULT_PROFILE_ID):
+                # Park it on the built-in week, as the hub branch does, so a
+                # schedule it no longer uses can still be deleted.
+                demo_week_profiles.assign(zone_id, demo_week.DEFAULT_PROFILE_ID)
+                save_demo_week_profiles()
 
             add_log_entry(
                 "sent",
@@ -4716,15 +4785,29 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
 
         zone = current_hub.zones[zone_id]
         old_name = decode_hub_name(zone.get('name', zone_id))
+        _refuse_schedule_off_with_heaters(update, [
+            serial for serial, comp in current_hub.components.items()
+            if comp.get('zone_id') == zone_id
+        ])
+        # A room with no schedule still has a week profile on the hub, because
+        # the protocol has no way to say "none". It is moved to the built-in
+        # one, which cannot be edited or deleted, so it neither keeps a custom
+        # schedule from being deleted nor changes when one is edited.
+        park_on_default = bool(update.no_schedule) and (
+            str(zone.get('week_profile_id')) != DEFAULT_WEEK_PROFILE_ID
+        )
 
-        # Name and the follow-global flag are both fields of the same U00
+        # Name, the follow-global flag and the week profile are both fields of the same U00
         # record, and pynobo rebuilds that record from its cached copy of the
         # zone. Sending them as two commands would have the second one write
         # back the name from a cache the hub had not yet refreshed, silently
         # undoing the rename. One command carries both.
-        if update.name is not None or update.follow_global_mode is not None:
+        if update.name is not None or update.follow_global_mode is not None or park_on_default:
             kwargs: Dict[str, Any] = {}
             described: List[str] = []
+            if park_on_default:
+                kwargs['week_profile_id'] = DEFAULT_WEEK_PROFILE_ID
+                described.append(f"week_profile_id={DEFAULT_WEEK_PROFILE_ID} (no heating schedule)")
             if update.name is not None:
                 kwargs['name'] = update.name.strip()
                 described.append(f"name='{update.name.strip()}'")
@@ -4752,6 +4835,7 @@ async def update_zone(zone_id: str, update: ZoneUpdate):
             config_persistence.save_zone_icons(zone_icons)
 
         _apply_zone_category(zone_id, update)
+        _apply_zone_schedule_off(zone_id, update)
 
         await asyncio.sleep(0.3)
         return {
@@ -4822,6 +4906,7 @@ async def delete_zone(zone_id: str):
             # Stop counting it as following a schedule, so one it was the last
             # user of becomes deletable again.
             save_demo_week_profiles()
+            _record_new_zone_schedule(zone_id, False)
             return {"status": "success", "zone_id": zone_id}
 
         # Real hub mode
@@ -4863,6 +4948,9 @@ async def delete_zone(zone_id: str):
             command=f"R00 {zone_id}",
             source="api",
         )
+        # The hub reuses zone ids, and the next zone to get this one must not
+        # inherit a choice made about this one.
+        _record_new_zone_schedule(zone_id, False)
         await broadcast_zone_update()
         return {"status": "success", "zone_id": zone_id}
 
@@ -6138,6 +6226,12 @@ async def get_week_profiles():
             ]
             can_delete, why_not = _week_profile_deletable(str(profile_id), used_by)
             can_edit, why_not_edit = _week_profile_editable(str(profile_id))
+            # A room with no heating schedule is still on a profile as far as
+            # the hub is concerned, but it is not *using* it, and listing it
+            # would say editing this changes a room it cannot change. It still
+            # counts above: the hub will not delete a profile a zone is on.
+            used_by = [u for u in used_by
+                       if not _hub_zone_schedule_off(current_hub, u['zone_id'])]
             # The decoded week, so the interface can show what a schedule
             # actually does. Without it the list is a set of names and choosing
             # one from it is guesswork -- which is exactly how it first shipped.
@@ -6459,6 +6553,20 @@ def _plain_schedule(schedule) -> Dict[str, Any]:
     }
 
 
+def _hub_zone_schedule_off(current_hub, zone_id) -> bool:
+    """zone_schedule_off() for a zone on the real hub."""
+    return zone_schedule_off(zone_id, [
+        serial for serial, comp in current_hub.components.items()
+        if str(comp.get('zone_id')) == str(zone_id)
+    ])
+
+
+def _demo_zone_schedule_off(zone_id) -> bool:
+    """zone_schedule_off() for a demo zone."""
+    demo_zone = next((z for z in DEMO_ZONES if str(z.get("zone_id")) == str(zone_id)), None)
+    return demo_zone is not None and zone_schedule_off(zone_id, demo_zone.get("components"))
+
+
 def _demo_week_profile_list() -> List[Dict[str, Any]]:
     """Every simulated week profile, and which zones follow it."""
     names = {str(z.get("zone_id")): z.get("name", "") for z in DEMO_ZONES}
@@ -6476,9 +6584,11 @@ def _demo_week_profile_list() -> List[Dict[str, Any]]:
             "profile": row["schedule"],
             "schedule": row["schedule"],
             "unreadable": None,
+            # A room with no heating schedule is parked here, not using it.
             "used_by": [
                 {"zone_id": zone_id, "name": names.get(zone_id, "")}
                 for zone_id in users
+                if not _demo_zone_schedule_off(zone_id)
             ],
             "can_delete": not built_in and not users,
             "why_not": (
@@ -6680,6 +6790,7 @@ async def get_zone_schedule(zone_id: str):
                     for z in DEMO_ZONES
                     if demo_week_profiles.profile_id_for(str(z.get("zone_id"))) == profile_id
                     and str(z.get("zone_id")) != str(zone_id)
+                    and not zone_schedule_off(z.get("zone_id"), z.get("components"))
                 ],
                 "schedule": demo_week_profiles.schedule_for(zone_id),
             }
@@ -6722,6 +6833,7 @@ async def get_zone_schedule(zone_id: str):
                 decode_hub_name(z.get('name', f'Zone {zid}'))
                 for zid, z in current_hub.zones.items()
                 if z.get('week_profile_id') == week_profile_id and zid != zone_id
+                and not _hub_zone_schedule_off(current_hub, zid)
             ],
             "schedule": parsed,
             "week_profile": week_profile,
