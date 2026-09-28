@@ -131,6 +131,9 @@ if [ -n "$ZIGBEE_VOLUME" ]; then
     fi
 fi
 
+# Mosquitto's volume is left out on purpose: it holds only retained copies of
+# messages Zigbee2MQTT republishes at start, and a restored copy is stale news.
+
 # Create tarball
 tar -czf "$BACKUP_FILE" -C "$TMPDIR" backup
 rm -rf "$TMPDIR"

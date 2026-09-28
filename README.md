@@ -2103,8 +2103,19 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 - `data/` volume — user accounts, away schedules, demo zone state, zone icons
   (`zone_icons.json`), zone groups and their order (`zone_categories.json`,
   `zone_group_order.json`), the system name (`site.json`), the intended set points
-  (`intended_setpoints.json`, see [When somebody turns a dial](#when-somebody-turns-a-dial))
-  and server state
+  (`intended_setpoints.json`, see [When somebody turns a dial](#when-somebody-turns-a-dial)),
+  rooms with no heating schedule (`zones_without_schedule.json`), alert settings
+  (`notifications.json`, SMTP password included, so keep the backup private) and
+  server state
+- The sensors' side of the same volume: settings and each room's rules
+  (`sensor_settings.json`), sensor names, kinds and rooms
+  (`zigbee_sensor_metadata.json`), which rooms a door also controls
+  (`sensor_heating_links.json`), what the automation is currently holding
+  (`sensor_automation_state.json`), room climate and pressure history, and the
+  demo's simulated sensors
+- `zigbee2mqtt-data` volume — the Zigbee network key and the database of paired
+  devices. Only present when the Zigbee stack is switched on. It is what saves
+  re-pairing every sensor, at every window, after moving to another Pi
 - `caddy-data` volume — TLS certificates and, if you use Caddy's own CA, its
   private root. Only present when HTTPS is switched on. Worth having: that root
   is the one you installed on every phone and laptop, and losing it means
@@ -2112,7 +2123,14 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
 
 Zone icons are worth calling out: the hub has no icon field, so they exist only
 on the Pi. The same goes for the system name. Everything else about a real hub's
-zones and devices lives on the hub itself and is not part of this backup.
+zones, heaters and schedules lives on the hub itself and is not part of this
+backup.
+
+Mosquitto's volume is deliberately left out. It holds only the broker's retained
+copies of messages, which Zigbee2MQTT republishes as it starts. A restored copy
+would be old news: after the power cut of 28 September 2026 it replayed a patio
+door as open that had closed two hours earlier. The application now ignores such
+replays, but nothing is gained by restoring one.
 
 ### Restore from backup
 
@@ -2128,6 +2146,12 @@ sudo systemctl restart nobo-control
 
 The restart is not optional: the running application keeps its own copy of this
 data in memory and would overwrite what you just restored.
+
+The optional volumes, `backup/caddy-data` and `backup/zigbee2mqtt-data`, are
+restored into their Docker volumes with the service stopped. For Zigbee, follow
+*Moving the dongle to another installation* in [docs/SENSORS.md](docs/SENSORS.md):
+the order matters, and a Zigbee2MQTT that starts on an empty volume forms a new
+network on the stick.
 
 ## Differences from the Windows Version
 

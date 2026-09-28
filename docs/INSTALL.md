@@ -208,7 +208,8 @@ paired again.
 
 **To pair a sensor:**
 
-1. **Settings → Sensors**, turn *Use contact sensors* on
+1. **Settings → Door and Window Sensor Configuration**, turn *Use contact
+   sensors* on
 2. Press **Add a sensor**
 3. Take the sensor to **where it will actually live** — a window or door. A
    sensor paired next to the Pi may fail once you move it.
@@ -219,6 +220,9 @@ paired again.
 
 Repeat for each sensor. Then open a room and choose what should happen when
 something is left open — a warning, and optionally turning the heating down.
+A door that lets the cold into more than one room, such as a patio door
+between two rooms, can turn the heating down in those rooms too. Pick them
+under the sensor's **Heating it controls**.
 
 > **The battery reading will be blank at first.** That is normal and not a
 > fault: these sensors report their battery on their own schedule, usually
@@ -236,9 +240,11 @@ something is left open — a warning, and optionally turning the heating down.
 | Change the install answers | `sudo bash /opt/nobo-control/scripts/install.sh --reconfigure` |
 
 **Back up before any change you are unsure about.** The backup includes your
-rooms, schedules, accounts and — importantly — the Zigbee network. Without that
-last part, moving to another Pi means re-pairing every sensor by hand, at every
-window.
+settings, accounts, room groups, sensor names and rules, alerts and — importantly
+— the Zigbee network. Without that last part, moving to another Pi means
+re-pairing every sensor by hand, at every window. With a real hub, the rooms,
+heaters and schedules themselves are stored in the hub, so they are not in the
+backup and are not lost if the Pi is.
 
 It starts itself after a power cut. Nothing to do.
 
@@ -306,6 +312,7 @@ Useful only if you are curious, or asking for help:
 | --- | --- |
 | The application | `/opt/nobo-control` |
 | Your settings | `/opt/nobo-control/.env` |
-| Rooms, schedules, accounts | a Docker volume, captured by `backup.sh` |
+| Accounts, sensors, alerts and other settings | a Docker volume, captured by `backup.sh` |
+| Paired Zigbee sensors and the network key | a second Docker volume, also captured by `backup.sh` |
 | Starts at boot via | `systemd`, service `nobo-control` |
 | Sensors, when enabled | two extra containers, off unless asked for |

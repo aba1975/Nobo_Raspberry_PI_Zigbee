@@ -105,15 +105,15 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Frontend:** Two interfaces sharing one backend (`app/static/`), with live updates over a WebSocket
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
-- **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`) and optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`)
-- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`) and `caddy-data` (TLS certificates and, with the internal CA, its private root)
+- **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, and every `sensor_*`/`zigbee_*`/climate file), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire
 
 ## Key Files
 
 - `app/server.py` — the FastAPI application (~4,300 lines), every API endpoint, and both interfaces' HTML for the sign-in page
 - `app/auth.py` — session auth with bcrypt. Five failed attempts lock a username for 60s, which is sized for a LAN and thin for the internet
 - `app/away_schedule.py` — the scheduled away window. `away_schedule_loop()` is the only thing that writes to the hub unprompted, and both its paths require `enabled: true`
-- `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, away exceptions, applied away exceptions, intended set points, site identity
+- `app/config_persistence.py` — atomic JSON persistence: demo zones and schedules, hub config, zone icons, room groups and their order, rooms without a schedule, away exceptions, applied away exceptions, intended set points, site identity. The sensor files are in `app/sensor_persistence.py`
 - `app/setpoint_guard.py` — what temperatures this system *means* each zone to have. A dial on a thermostat rewrites the hub's set point outright and the hub keeps no history, so this is the only record that a room was ever meant to be something else. Drift is derived on read, never stored
 - `app/sensor_*.py` — the optional Zigbee sensors: the provider contract,
   simulator, Zigbee2MQTT provider, persistence and the automation engine.
@@ -137,7 +137,9 @@ docker compose down                  # stop
 ```
 
 With HTTPS enabled, `COMPOSE_PROFILES=tls` in `.env` makes those same commands
-include the proxy. Do not rely on `--profile tls` on the command line: the
+include the proxy, and `tls,zigbee` adds Mosquitto and Zigbee2MQTT (`zigbee`
+alone for the sensor stack without the proxy). Do not rely on `--profile tls`
+on the command line: the
 systemd unit does not pass it, so a reboot would start the application alone —
 and with `NOBO_BIND=127.0.0.1` that leaves nothing answering the network.
 
