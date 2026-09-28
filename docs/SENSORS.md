@@ -315,10 +315,41 @@ neighbour table, the interface reads what arrives over MQTT. The neighbour
 table runs a little high and a little stale, so treat the two as agreeing
 rather than as one contradicting the other.
 
-What it still has not seen is **a sensor routed through a router**. There is
-one in the network now (24 September 2026), but it sits beside the
-coordinator, and the two sensors were paired before it, so "which parent did it
-choose" has so far only ever been answered "the coordinator".
+It has since seen sensors routed through a router. On the production Pi after
+the power cut of 28 September 2026, 13 of 20 sensors reported through Router 1
+and 7 through the coordinator. Router 1 and the coordinator scored each other
+153 and 147.
+
+#### Making a sensor join through a particular router
+
+A battery sensor chooses its parent **once, when it joins**, from whichever
+radios are accepting joins at that moment. It then keeps that parent until it
+loses contact with it. It does not move because a better router was plugged in
+later. Pairing from the app opens joining on every radio at once, so the sensor
+picks by its own scoring. That is often the coordinator, whenever the sensor can
+hear it at all, even if a router would serve it better. So re-pairing the same
+sensor from the app in the same spot tends to give the same answer.
+
+To try a particular parent, open joining on that radio alone. Here that is
+Router 1, by its address, for the 254-second maximum:
+
+```bash
+docker exec nobo-mosquitto mosquitto_pub -h 127.0.0.1 \
+    -t zigbee2mqtt/bridge/request/permit_join \
+    -m '{"time": 254, "device": "0x00124b003a239e4e"}'
+```
+
+Then hold the sensor's reset button for about five seconds, until its light
+blinks. Close the window early with `{"time": 0}`. Nothing needs removing in the
+app first. The name, room, rules and heating links are all kept against the
+sensor's address, and come back when it rejoins.
+
+Afterwards, `scripts/zigbee-map.sh` shows which parent the sensor took. Compare
+the link over the next hour, not the first minute. Reports through a router
+carry the LQI of the **sensor→router** hop, which is the one that decides the
+sensor's reliability and battery. The router→coordinator hop is a separate link
+and needs to be healthy too. The map does not print it, but the full map it
+leaves on disk has it.
 
 **Transmit power** is set to 20 dBm by `NOBO_ZIGBEE_TRANSMIT_POWER`. The
 ZBDongle-P is a CC2652P with an amplifier, and its firmware default is 5, so
