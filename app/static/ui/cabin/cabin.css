@@ -847,7 +847,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   padding: .1rem .4rem; border-radius: 999px; background: var(--danger-wash);
 }
 .sensor-signal.is-unknown { color: var(--ink-faint); }
-.sensor-actions { grid-template-columns: repeat(4, auto); }
+/* One row, however many actions the sensor has. A fixed four columns dropped
+   a door or window's fifth action, Remove, onto a line of its own, while a
+   thermometer, which has no heating to control, has only four. */
+.sensor-actions { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: auto; }
 
 /* The rule, summarised. Read often, changed rarely, so it is one line with the
    editing behind a button rather than a form sitting open in the card. */

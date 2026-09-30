@@ -76,6 +76,16 @@ def test_outside_a_phone_the_menu_and_header_add_are_hidden():
     assert "display: contents" in _rule(base, ".sensor-health")
 
 
+def test_on_a_wide_screen_a_sensors_actions_stay_on_one_line():
+    # A door or window has five actions and a thermometer four. A fixed
+    # four-column grid put Remove on a line of its own beside the others.
+    assert CABIN.count("icon-btn act-", CABIN.index("function sensorRow("),
+                       CABIN.index("moreButton(`data-sensor-menu")) == 5
+    actions = _rule(CSS, ".sensor-actions")
+    assert "grid-auto-flow: column" in actions
+    assert "repeat(4" not in actions
+
+
 def test_on_a_phone_the_icons_give_way_to_the_menu():
     media = _phone_media()
     assert "display: inline-flex" in _rule(media, ".more-btn, .card-add")
