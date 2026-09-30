@@ -134,7 +134,7 @@ def _trip_alert(zones, status):
       console.log(tripAlertHtml());
     """ % (json.dumps(zones), json.dumps(status), _lift(
         "function sensorKindLabel", "function sensorGroupNoun",
-        "function sensorCountLabel", "function compactSensorNames",
+        "function sensorCountLabel", "function countedSensors", "function compactSensorNames",
         "function awayNow", "function alarmLeaving", "function leavingSentence",
         "function openWhileAway", "function tripAlertHtml",
     ))
@@ -236,9 +236,11 @@ def _settings_card(settings, protocol="https:"):
       console.log(renderAlarmSettingsCard(true));
     """ % (json.dumps(protocol), json.dumps(settings), _lift(
         "const ARM_LABELS", "const ALARM_PROVIDER_LABELS",
-        "function alarmLockWords", "function alarmTransportSecure",
+        "function alarmLockWords", "const LOCK_METHOD_LABELS", "function lockMethodLabel",
+        "const ALARM_OWNED_WORDS", "function alarmTransportSecure",
         "function alarmAccountBlock", "function alarmStatusBlock", "function alarmOption",
-        "function alarmDemoControls", "function renderAlarmSettingsCard",
+        "function alarmDemoControls", "function alarmLockHeatingRows",
+        "function alarmLockSidesBlock", "function renderAlarmSettingsCard",
         "function settingsSection", "function segControl", "function settingRow",
     ))
     return _node(script)
@@ -248,7 +250,11 @@ BASE = {
     "enabled": True, "provider": "verisure", "providers": ["verisure"],
     "away_when_armed_away": True, "away_when_armed_home": False,
     "warn_when_armed_away": True, "warn_when_armed_home": True,
-    "warn_when_locked_outside": True, "autolock_counts_as_leaving": False,
+    "warn_when_locked_outside": True, "warn_when_locked_inside": False,
+    "heating_when_locked_outside": "none", "heating_when_locked_inside": "none",
+    "lock_sides": {"thumb": "inside", "auto": "inside", "code": "outside", "star": "outside",
+                   "remote": "outside", "tag": "outside", "key": "outside"},
+    "lock_methods": ["thumb", "auto", "code", "star", "remote", "tag", "key"],
     "sensors_enabled": True,
     "verisure": {"signed_in": False, "email": None, "installation": None,
                  "installations": [], "awaiting_code": False},
@@ -281,12 +287,13 @@ def test_signed_in_shows_the_masked_account_and_no_sign_in_button():
     markup = _settings_card({**BASE, "verisure": {
         "signed_in": True, "email": "a***@example.no", "installation": "Mostugu",
         "installations": [{"giid": "1", "alias": "Mostugu"}], "awaiting_code": False,
-    }, "status": {"connection": "ok", "arm_state": "armed_away", "locks": [], "owns_away": True}})
+    }, "status": {"connection": "ok", "arm_state": "armed_away", "locks": [], "owns_away": True,
+               "owned_mode": "away"}})
     assert "a***@example.no" in markup and "Mostugu" in markup
     assert 'data-act="alarm-signout"' in markup
     assert 'data-act="alarm-signin"' not in markup
     assert "Armed away" in markup
-    assert "The heating is on Away because the alarm is armed." in markup
+    assert "The heating is on Away because of the alarm or the lock." in markup
 
 
 @needs_node
@@ -316,3 +323,45 @@ def test_the_demo_alarm_has_its_own_panel():
 def test_warnings_explain_that_they_need_sensors():
     markup = _settings_card({**BASE, "sensors_enabled": False})
     assert "The warnings need door and window sensors, which are off." in markup
+
+
+@needs_node
+def test_the_lock_can_change_the_heating_from_either_side():
+    markup = _settings_card({**BASE, "verisure": {**BASE["verisure"], "signed_in": True},
+                             "heating_when_locked_outside": "eco",
+                             "status": {"connection": "ok", "arm_state": "disarmed",
+                                        "owned_mode": "eco", "locks": []}})
+    outside = markup[markup.index('data-seg="alarm-lock-outside" data-value="eco"'):]
+    assert 'aria-pressed="true"' in outside[:120]
+    # Away from outside, but never from inside: somebody is in.
+    assert 'data-seg="alarm-lock-outside" data-value="away"' in markup
+    assert 'data-seg="alarm-lock-inside" data-value="away"' not in markup
+    assert 'data-seg="alarm-lock-inside" data-value="eco"' in markup
+    assert "The heating is on Eco because the door is locked." in markup
+    assert 'data-alarm-opt="warn_when_locked_inside"' in markup
+    # A manual Away, with or without a return date, is left alone.
+    assert "disarming does not lift it" in markup
+
+
+@needs_node
+def test_each_way_of_locking_is_the_users_to_place_and_the_last_one_is_marked():
+    markup = _settings_card({**BASE, "verisure": {**BASE["verisure"], "signed_in": True},
+                             "lock_sides": {**BASE["lock_sides"], "star": "inside"},
+                             "status": {"connection": "ok", "arm_state": "disarmed", "locks": [
+                                 {"name": "Front door", "locked": True, "method": "star",
+                                  "outside": False, "side": "inside"}]}})
+    assert "Which way of locking counts as outside" in markup
+    star = markup[markup.index("The \u2731 button"):]
+    assert "How the door is locked right now." in star[:200]
+    inside = markup[markup.index('data-seg="alarm-lock-side-star" data-value="inside"'):]
+    assert 'aria-pressed="true"' in inside[:120]
+    # A method Verisure reports that this system has never heard of is offered too.
+    odd = _settings_card({**BASE, "verisure": {**BASE["verisure"], "signed_in": True},
+                          "status": {"connection": "ok", "arm_state": "disarmed", "locks": [
+                              {"name": "Front door", "locked": True, "method": "pin",
+                               "outside": True, "side": "outside"}]}})
+    assert 'data-seg="alarm-lock-side-pin"' in odd
+
+
+def test_the_old_auto_lock_switch_is_gone():
+    assert "autolock_counts_as_leaving" not in CABIN

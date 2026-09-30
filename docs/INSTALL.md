@@ -262,6 +262,7 @@ re-pairing every sensor by hand, at every window. With a real hub, the rooms,
 heaters and schedules themselves are stored in the hub, so they are not in the
 backup and are not lost if the Pi is.
 The Verisure sign-in is deliberately left out: after restoring, sign in again.
+Which of the alarm's sensors you added to rooms is kept.
 
 It starts itself after a power cut. Nothing to do.
 

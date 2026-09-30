@@ -41,14 +41,16 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import alarm_persistence
-from alarm_provider import AlarmReading, AlarmUnavailable, LockReading
+from alarm_provider import AlarmDevice, AlarmReading, AlarmUnavailable, LockReading
 
 logger = logging.getLogger(__name__)
 logging.getLogger("verisure").setLevel(logging.ERROR)
 
-# The only GraphQL operations this application may send. All three are
+# The only GraphQL operations this application may send. All of them are
 # queries. Everything else vsure offers is refused by ``check_read_only``.
-ALLOWED_OPERATIONS = frozenset({"fetchAllInstallations", "ArmState", "SmartLock"})
+ALLOWED_OPERATIONS = frozenset({
+    "fetchAllInstallations", "ArmState", "SmartLock", "DoorWindow", "Climate",
+})
 
 # Verisure's cookie lasts about fifteen minutes; refresh a little before that,
 # as Home Assistant does.
@@ -73,7 +75,7 @@ class ReadOnlyViolation(RuntimeError):
 
 
 def check_read_only(operation: Any) -> None:
-    """Refuse anything but the three read-only queries this module needs."""
+    """Refuse anything but the read-only queries this module needs."""
     if not isinstance(operation, dict):
         raise ReadOnlyViolation("operation must be a GraphQL document")
     name = operation.get("operationName")
@@ -161,7 +163,63 @@ def parse_reading(response: Any, now: float) -> AlarmReading:
         arm_changed_at=arm.get("date"),
         locks=tuple(readings),
         read_at=now,
+        devices=parse_devices(response),
     )
+
+
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return round(float(value), 1)
+
+
+def _label(value: Any) -> str:
+    return str(value or "").strip()[:64]
+
+
+def parse_devices(response: Any) -> Tuple[AlarmDevice, ...]:
+    """The alarm's door and window contacts and its climate readings.
+
+    Both lists are optional: an installation with no such devices, or an
+    answer without them, is simply one with no sensors to offer. A device
+    without a label cannot be told apart from the next one and is skipped.
+    """
+    devices: List[AlarmDevice] = []
+    doors = _unpack(response, "installation", "doorWindows") or []
+    for item in doors if isinstance(doors, list) else []:
+        if not isinstance(item, dict):
+            continue
+        label = _label((item.get("device") or {}).get("deviceLabel"))
+        if not label:
+            continue
+        state = item.get("state")
+        devices.append(AlarmDevice(
+            device_id=f"contact:{label}",
+            kind="contact",
+            name=_label(item.get("area")) or label,
+            model=_label(item.get("type")).replace("_", " ").capitalize() or "Door/window",
+            open=True if state == "OPEN" else False if state == "CLOSE" else None,
+            reported_at=item.get("reportTime") if isinstance(item.get("reportTime"), str) else None,
+        ))
+    climates = _unpack(response, "installation", "climates") or []
+    for item in climates if isinstance(climates, list) else []:
+        if not isinstance(item, dict):
+            continue
+        device = item.get("device") or {}
+        label = _label(device.get("deviceLabel"))
+        if not label:
+            continue
+        stamp = item.get("temperatureTimestamp")
+        devices.append(AlarmDevice(
+            device_id=f"climate:{label}",
+            kind="climate",
+            name=_label(device.get("area")) or label,
+            model=_label((device.get("gui") or {}).get("label")).capitalize() or None,
+            temperature=_number(item.get("temperatureValue")),
+            humidity=_number(item.get("humidityValue")) if item.get("humidityEnabled") else None,
+            reported_at=stamp if isinstance(stamp, str) else None,
+        ))
+    return tuple(devices)
 
 
 class VerisureError(Exception):
@@ -393,6 +451,15 @@ class VerisureAlarm:
 
     # -- reading ----------------------------------------------------------------
 
+    @staticmethod
+    def _queries(session: Any) -> tuple:
+        # One request for all four, as Home Assistant does: the rate limit is
+        # counted in requests, so the sensors cost nothing extra.
+        return (
+            session.arm_state(), session.smart_lock(),
+            session.door_window(), session.climate(),
+        )
+
     def _read_sync(self) -> AlarmReading:
         with self._lock:
             stored = alarm_persistence.load_session()
@@ -410,7 +477,7 @@ class VerisureAlarm:
                     if self._clock() - stored["refreshed_at"] >= COOKIE_REFRESH_SECONDS:
                         session.update_cookie()
                         stored = self._store(session, {**stored, "refreshed_at": self._clock()})
-                    response = session.request(session.arm_state(), session.smart_lock())
+                    response = session.request(*self._queries(session))
                     try:
                         return parse_reading(response, self._clock())
                     except ValueError:
@@ -418,7 +485,7 @@ class VerisureAlarm:
                         # refresh, then it is a real failure.
                         session.update_cookie()
                         stored = self._store(session, {**stored, "refreshed_at": self._clock()})
-                        response = session.request(session.arm_state(), session.smart_lock())
+                        response = session.request(*self._queries(session))
                         return parse_reading(response, self._clock())
                 except (errors.AuthenticationError, errors.CookieReadError) as exc:
                     logger.warning("Verisure session ended: %s", type(exc).__name__)

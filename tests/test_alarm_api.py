@@ -254,6 +254,82 @@ def test_settings_persist(client):
     assert saved.enabled is True and saved.warn_when_armed_home is False
 
 
+# -- the lock and the heating ------------------------------------------------
+
+def test_locked_from_outside_can_turn_the_house_down_and_back(client):
+    turn_on(client, heating_when_locked_outside="eco")
+    status = simulate(client, lock="outside")
+    assert global_mode(client) == "eco"
+    assert status["owned_mode"] == "eco"
+    assert server.global_mode_source == "alarm"
+    simulate(client, lock="unlocked")
+    assert global_mode(client) is None
+    assert server.alarm_ledger.owned_mode is None
+
+
+def test_locked_from_inside_can_be_eco_too(client):
+    turn_on(client, heating_when_locked_inside="eco")
+    simulate(client, lock="inside")
+    assert global_mode(client) == "eco"
+    simulate(client, lock="unlocked")
+    assert global_mode(client) is None
+
+
+def test_away_is_refused_for_locked_from_inside(client):
+    response = client.put("/api/alarm/settings", json={
+        "enabled": True, "provider": "simulated", "heating_when_locked_inside": "away"})
+    assert response.status_code == 400
+
+
+def test_which_side_a_method_counts_as_is_the_users_to_say(client):
+    turn_on(client, heating_when_locked_outside="away",
+            lock_sides={"star": "outside", "code": "inside"})
+    simulate(client, lock_method="code")
+    assert global_mode(client) is None, "code now means inside"
+    simulate(client, lock="unlocked")
+    status = simulate(client, lock_method="star")
+    assert status["leaving"]["reason"] == "locked_outside"
+    assert global_mode(client) == "away"
+
+
+def test_the_alarm_outranks_the_lock_and_away_is_never_made_eco(client):
+    turn_on(client, heating_when_locked_outside="eco")
+    simulate(client, arm_state="armed_away")
+    simulate(client, lock="outside")
+    assert global_mode(client) == "away"
+    simulate(client, lock="unlocked")
+    assert global_mode(client) == "away", "still armed"
+    simulate(client, arm_state="disarmed")
+    assert global_mode(client) is None
+
+
+def test_a_lock_eco_does_not_touch_an_away_set_by_hand(client):
+    turn_on(client, heating_when_locked_outside="eco")
+    assert client.post("/api/global/override/away").status_code == 200
+    simulate(client, lock="outside")
+    simulate(client, lock="unlocked")
+    assert global_mode(client) == "away"
+
+
+def test_arming_over_a_manual_away_adds_no_return_time_and_lifts_nothing(client):
+    """The alarm's own Away holds until cancelled; one chosen beforehand is
+    the person's, including its end time, and disarming leaves it."""
+    turn_on(client)
+    simulate(client, arm_state="armed_away")
+    assert server.away_schedule.load_schedule().get("enabled") is not True
+    simulate(client, arm_state="disarmed")
+    assert client.post("/api/global/override/away").status_code == 200
+    simulate(client, arm_state="armed_away")
+    assert server.alarm_ledger.owned_mode is None
+    simulate(client, arm_state="disarmed")
+    assert global_mode(client) == "away"
+
+
+def test_the_demo_lock_refuses_an_unknown_method(client):
+    turn_on(client)
+    assert client.post("/api/alarm/simulate", json={"lock_method": "magic"}).status_code == 400
+
+
 # -- Verisure over HTTP ----------------------------------------------------
 
 
@@ -291,6 +367,12 @@ class _FakeVerisureSession:
 
     def smart_lock(self):
         return {"operationName": "SmartLock", "query": "query SmartLock {}"}
+
+    def door_window(self):
+        return {"operationName": "DoorWindow", "query": "query DoorWindow {}"}
+
+    def climate(self):
+        return {"operationName": "Climate", "query": "query Climate {}"}
 
     def request(self, *operations):
         return [

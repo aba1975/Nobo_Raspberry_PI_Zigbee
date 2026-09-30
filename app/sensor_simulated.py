@@ -335,6 +335,8 @@ class SimulatedContactSensorProvider:
     @staticmethod
     def _to_row(item: ContactSnapshot) -> dict:
         row = item.__dict__.copy()
+        # Where a reading came from is decided when it is read, not stored.
+        row.pop("source", None)
         row["state"] = item.state.value
         row["kind"] = item.kind.value
         row["changed_at"] = item.changed_at.isoformat()

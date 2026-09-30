@@ -122,6 +122,11 @@ const Nobo = (() => {
     startSensorPairing: (seconds) => req('/api/sensors/pairing', {
                                   method: 'POST', body: JSON.stringify({ seconds }) }),
     cancelSensorPairing: ()   => req('/api/sensors/pairing', { method: 'DELETE' }),
+    /* Door, window and temperature devices the alarm reports, offered as
+       sensors. Nothing is paired: the device is already the alarm's. */
+    verisureDevices: ()       => req('/api/sensors/verisure'),
+    addVerisureSensor: (body) => req('/api/sensors/verisure', {
+                                  method: 'POST', body: JSON.stringify(body) }),
 
     /* The alarm integration. Admin only. The Verisure password goes to the
        server once, over HTTPS, and is never sent back or kept. */

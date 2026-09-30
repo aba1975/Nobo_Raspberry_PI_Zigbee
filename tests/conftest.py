@@ -19,6 +19,7 @@ import auth
 import config_persistence
 import sensor_persistence
 import alarm_persistence
+import sensor_verisure
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +160,10 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         alarm_persistence, "VERISURE_SESSION_FILE", tmp_path / "verisure" / "session.json",
     )
+    monkeypatch.setattr(sensor_verisure, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        sensor_verisure, "VERISURE_SENSORS_FILE", tmp_path / "verisure_sensors.json",
+    )
     # A module-level history would carry one test's readings into the next.
     server_module = sys.modules.get("server")
     if server_module is not None and hasattr(server_module, "climate_history"):
@@ -181,6 +186,11 @@ def redirect_persistence(tmp_path, monkeypatch):
             monkeypatch.setattr(server_module, name, value)
     if server_module is not None and hasattr(server_module, "sensor_heating_links"):
         monkeypatch.setattr(server_module, "sensor_heating_links", {})
+    if server_module is not None and hasattr(server_module, "verisure_sensors"):
+        monkeypatch.setattr(server_module, "verisure_sensors", {})
+        monkeypatch.setattr(server_module, "sensor_precedence", sensor_verisure.Precedence(
+            counted=[], standing_by={}, stood_in_for={},
+        ))
     if server_module is not None and hasattr(server_module, "pressure_history"):
         from pressure_outlook import PressureHistory
 

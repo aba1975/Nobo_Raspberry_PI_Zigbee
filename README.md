@@ -96,8 +96,10 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | Feature | What it does |
 | --- | --- |
 | **Verisure alarm and Yale Doorman** | Reads your Verisure alarm, and a Yale Doorman that shows up in the Verisure app. Off unless you turn it on under **Settings → Alarm System**. No extra hardware: the Pi reads Verisure's servers, as the Verisure app does. **It only ever reads** — nothing here can arm, disarm or unlock anything. |
-| **Away when the alarm is armed** | Armed away puts the house on global Away. Disarming brings it back to Home, unless somebody changed the mode by hand in the meantime. Only an Away the alarm set is ever lifted. |
-| **Warn when you leave with something open** | Armed, or the front door locked from outside, with a door or window open: a warning on the front page after five minutes, naming the rooms, and optionally an email. Locked from outside changes nothing else. |
+| **Away when the alarm is armed** | Armed away puts the house on global Away, with no return time. Disarming brings it back to Home, unless somebody changed the mode by hand in the meantime. An Away you had already chosen is left exactly as it was, and is not lifted on disarming. |
+| **The Yale Doorman and the heating** | Locked from outside can set Eco or Away, and locked from inside can set Eco, until it is unlocked — each off by default. Which way of locking counts as outside (code, ✱ button, thumb turn, auto-lock…) can be changed in Settings. The alarm outranks the lock. |
+| **Warn when you leave with something open** | Armed, or the front door locked from outside, with a door or window open: a warning on the front page after five minutes, naming the rooms, and optionally an email. Locked from inside can warn too, if you ask. |
+| **The alarm's own sensors** | With the sensors switched on as well, the alarm's door and window sensors, and the temperature its smoke detectors measure, can be added to rooms from a list — a woodshed door, say, or a hallway thermometer. They warn and drive heating rules like Zigbee sensors. On a door that also has a Zigbee sensor, the Verisure one is a backup, used only while the Zigbee sensor is offline. See [The alarm's own sensors](docs/ALARM.md#the-alarms-own-sensors). |
 | **Your Verisure account** | The password is never stored. It is used once, with the code Verisure sends, and then dropped. The sign-in Verisure hands back is kept in a private file, left out of backups and deleted when you sign out. Signing in needs HTTPS. See [docs/ALARM.md](docs/ALARM.md). Not yet run against a real Verisure account. |
 
 ### Heating control
@@ -699,11 +701,15 @@ silent sensors is not nineteen flat batteries. Reporting it per sensor would
 fill an inbox with the wrong diagnosis at the moment somebody most needs the
 right one.
 
-With the [alarm system](docs/ALARM.md) switched on, two more appear:
+With the [alarm system](docs/ALARM.md) switched on, two more appear. The
+alarm's own sensors, once added to rooms, raise the same *left open*, *too
+cold* and *near freezing* alerts as Zigbee ones; the Alerts page notes which
+alerts they can raise, and that *battery low* and *not heard from* are Zigbee
+only.
 
 | Event | What it means |
 | --- | --- |
-| **Something is open when the alarm goes on** | The alarm is armed, or the front door is locked from outside, and a door or window is open. Held for five minutes, like the one above, and replaces it while the alarm is the reason, so you get one email and not two. **Urgent** unless the alarm is only armed at home. |
+| **Something is open when the alarm goes on** | The alarm is armed, or the front door is locked (from outside, or from inside if you ask), and a door or window is open — Zigbee or the alarm's own. Held for five minutes, like the one above, and replaces it while the alarm is the reason, so you get one email and not two. **Urgent** unless the alarm is only armed at home or the door was locked from inside. |
 | **The alarm cannot be read** | Verisure has ended this system's sign-in, or has not answered for half an hour. The heating is left alone meanwhile; sign in again under Settings. |
 
 Alerts arrive as **HTML with the plain text kept underneath**, so a client that
@@ -2166,8 +2172,9 @@ data in memory and would overwrite what you just restored.
 **Your Verisure sign-in is not backed up**, on purpose: `data/verisure/` is
 left out, because a copy of it is a key to your alarm account. After a restore,
 sign in again under Settings → Alarm System. The alarm's settings
-(`alarm_settings.json`) and what it is holding (`alarm_state.json`) are backed
-up as usual.
+(`alarm_settings.json`), what it is holding (`alarm_state.json`) and which of
+its sensors are used in which rooms (`verisure_sensors.json`) are backed up as
+usual.
 
 The optional volumes, `backup/caddy-data` and `backup/zigbee2mqtt-data`, are
 restored into their Docker volumes with the service stopped. For Zigbee, follow
@@ -2574,7 +2581,7 @@ overrides the mounted files, which is exactly the bug this avoids.
   password file.
 - **The Verisure integration keeps no password.** It keeps the sign-in Verisure
   returns, in a folder only the application can read, and never in a backup.
-  It can only read the alarm: every request is checked against a list of three
+  It can only read the alarm: every request is checked against a short list of
   read-only queries before it leaves the Pi. The sign-in page refuses plain
   http. See [docs/ALARM.md](docs/ALARM.md#how-your-verisure-account-is-protected).
 

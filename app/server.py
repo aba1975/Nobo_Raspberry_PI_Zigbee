@@ -36,11 +36,12 @@ import notifications
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
+import sensor_verisure
 import alarm_automation
 import alarm_persistence
 import dataclasses
 from alarm_persistence import AlarmLedger, AlarmSettings
-from alarm_provider import AlarmReading, AlarmUnavailable, SimulatedAlarm
+from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, SimulatedAlarm
 from alarm_verisure import VerisureAlarm, VerisureError
 from climate_history import ClimateHistory
 from pressure_outlook import PressureHistory
@@ -437,6 +438,19 @@ sensor_evaluation_lock = asyncio.Lock()
 # Other rooms a contact also turns down, by sensor id. See
 # sensor_persistence.load_heating_links.
 sensor_heating_links: Dict[str, List[str]] = sensor_persistence.load_heating_links()
+# Alarm devices chosen as sensors, by sensor id. Listed only while the alarm
+# integration is on; see sensor_verisure.
+verisure_sensors: Dict[str, sensor_verisure.VerisureSensor] = sensor_verisure.load()
+# Which sensors the rules believe, worked out on each evaluation.
+sensor_precedence = sensor_verisure.Precedence(counted=[], standing_by={}, stood_in_for={})
+
+
+def _heating_links_of(sensor_id: str) -> List[str]:
+    """A backup heats what the sensor it backs up heats, and nothing else."""
+    chosen = verisure_sensors.get(sensor_id)
+    if chosen is not None and chosen.backup_for:
+        return sensor_heating_links.get(chosen.backup_for, [])
+    return sensor_heating_links.get(sensor_id, [])
 
 
 def _sensor_controls(snapshot: ContactSnapshot) -> List[str]:
@@ -445,9 +459,15 @@ def _sensor_controls(snapshot: ContactSnapshot) -> List[str]:
         return []
     own = str(snapshot.zone_id)
     return [
-        zone_id for zone_id in sensor_heating_links.get(snapshot.sensor_id, [])
+        zone_id for zone_id in _heating_links_of(snapshot.sensor_id)
         if zone_id != own
     ]
+
+
+def _save_verisure_sensors(sensors: Dict[str, sensor_verisure.VerisureSensor]) -> None:
+    global verisure_sensors
+    sensor_verisure.save(sensors)
+    verisure_sensors = dict(sensors)
 
 
 def _save_sensor_heating_links(links: Dict[str, List[str]]) -> None:
@@ -464,6 +484,13 @@ def _forget_zone_in_heating_links(zone_id: str) -> None:
         _save_sensor_heating_links({
             key: [item for item in zones if item != zone_id]
             for key, zones in sensor_heating_links.items()
+        })
+    # An alarm device in it becomes unassigned rather than moving into
+    # whichever room is given the id next.
+    if any(item.zone_id == zone_id for item in verisure_sensors.values()):
+        _save_verisure_sensors({
+            key: sensor_verisure.with_changes(item, zone_id=None) if item.zone_id == zone_id else item
+            for key, item in verisure_sensors.items()
         })
 
 # ---------------------------------------------------------------------------
@@ -1257,6 +1284,17 @@ class SensorUpdate(BaseModel):
     kind: Optional[SensorKind] = None
     zone_id: Optional[str] = None
     clear_zone: bool = False
+    # Alarm devices only: the Zigbee contact on the same door or window.
+    backup_for: Optional[str] = Field(default=None, max_length=128)
+    clear_backup: bool = False
+
+
+class VerisureSensorCreate(BaseModel):
+    device_id: str = Field(max_length=100)
+    name: str = Field(max_length=sensor_verisure.NAME_MAX)
+    zone_id: Optional[str] = None
+    kind: Optional[SensorKind] = None
+    backup_for: Optional[str] = Field(default=None, max_length=128)
 
 
 class SensorHeatingUpdate(BaseModel):
@@ -2104,6 +2142,31 @@ def _sensor_snapshot_dict(snapshot: ContactSnapshot) -> Dict[str, Any]:
         # Other rooms whose heating this contact also changes. Its warning
         # and its rule stay with its own room.
         "controls_zone_ids": _sensor_controls(snapshot),
+        **_sensor_source_fields(snapshot),
+    }
+
+
+def _sensor_source_fields(snapshot: ContactSnapshot) -> Dict[str, Any]:
+    """Where a sensor's readings come from, and whether the rules count it.
+
+    ``counts`` is false for a Verisure sensor standing by behind a Zigbee one,
+    and for a Zigbee sensor a Verisure backup is standing in for. Anything in
+    the interface that counts open windows has to leave those out, or one
+    door would be counted twice.
+    """
+    names = {item.sensor_id: item.name for item in sensor_snapshots}
+    standing_by = sensor_precedence.standing_by.get(snapshot.sensor_id)
+    stood_in_by = sensor_precedence.stood_in_for.get(snapshot.sensor_id)
+    chosen = verisure_sensors.get(snapshot.sensor_id)
+    backup_for = chosen.backup_for if chosen else None
+    return {
+        "source": snapshot.source or sensor_settings.provider,
+        "counts": standing_by is None and stood_in_by is None,
+        "standing_by": standing_by,
+        "backup_for": backup_for,
+        "backup_for_name": names.get(backup_for) if backup_for else None,
+        "stood_in_by": stood_in_by,
+        "stood_in_by_name": names.get(stood_in_by) if stood_in_by else None,
     }
 
 
@@ -2279,6 +2342,9 @@ async def stop_sensor_service() -> None:
         sensor_provider = None
     sensor_snapshots = []
     sensor_zone_aggregates = {}
+    globals()["sensor_precedence"] = sensor_verisure.Precedence(
+        counted=[], standing_by={}, stood_in_for={},
+    )
     if sensor_wakeup is not None:
         sensor_wakeup.set()
 
@@ -2295,9 +2361,12 @@ def _sensor_view_signature() -> tuple:
     return (
         tuple(
             (item.sensor_id, item.state.value, item.available, item.battery,
-             item.link_quality, item.temperature, item.humidity, item.pressure)
+             item.link_quality, item.temperature, item.humidity, item.pressure,
+             item.zone_id)
             for item in sensor_snapshots
         ),
+        tuple(sorted(sensor_precedence.standing_by.items())),
+        tuple(sorted(sensor_precedence.stood_in_for.items())),
         tuple(
             (
                 zone_id,
@@ -2366,7 +2435,10 @@ ALARM_LEAVING_WORDS = {
     "armed_away": ("Alarm on, and open: {rooms}", "The alarm is armed away"),
     "armed_home": ("Alarm on at home, and open: {rooms}", "The alarm is armed at home"),
     "locked_outside": ("Locked up, and open: {rooms}", "{lock} was locked from outside"),
+    "locked_inside": ("Locked in, and open: {rooms}", "{lock} was locked from inside"),
 }
+# Somebody is in the house for these, so the alert is not urgent.
+ALARM_LEAVING_AT_HOME = ("armed_home", "locked_inside")
 
 
 def _evaluate_alarm_left_open(
@@ -2403,6 +2475,8 @@ def _evaluate_alarm_left_open(
         offline = sorted(
             snapshot.name for snapshot in sensor_snapshots
             if snapshot.is_contact and not snapshot.available
+            and snapshot.sensor_id not in sensor_precedence.standing_by
+            and snapshot.sensor_id not in sensor_precedence.stood_in_for
         )
         also = (
             f"\n\n{len(offline)} door or window sensor(s) are offline and cannot be "
@@ -2419,7 +2493,7 @@ def _evaluate_alarm_left_open(
                 f"the same from here, so it is worth checking the app before anyone "
                 f"goes back."
             ),
-            severity="critical" if why.reason != "armed_home" else "warning",
+            severity="critical" if why.reason not in ALARM_LEAVING_AT_HOME else "warning",
             recovery_subject="Everything is shut again",
             recovery_body="Every contact sensor reports closed again.",
             recovery_event_type="alarm_left_open",
@@ -2569,7 +2643,9 @@ def _evaluate_sensor_alerts(
         )
 
     # --- the sensors' own health -------------------------------------------
-    sensors = list(sensor_snapshots)
+    # The sensor provider's own only. An alarm device reports no battery, and
+    # its silence is the alarm's: "the alarm cannot be read" covers it.
+    sensors = [item for item in sensor_snapshots if item.source != sensor_verisure.SOURCE]
     quiet: List[Any] = []
     for sensor in sensors:
         due = sensor.last_seen_at.timestamp() + SENSOR_QUIET_SECONDS
@@ -2855,16 +2931,48 @@ def _pressure_summary(zone_id: str, sensors: List[Dict[str, Any]], now: float) -
     }
 
 
+def _verisure_sensors_listed() -> bool:
+    return alarm_settings.enabled and alarm_settings.provider in alarm_persistence.PROVIDERS
+
+
+def _verisure_sensor_snapshots(primary: List[ContactSnapshot]) -> List[ContactSnapshot]:
+    """The alarm devices chosen as sensors, read from the alarm's last reading.
+
+    None at all while the alarm integration is off: the choices are kept, and
+    come back with it, but a sensor nothing can read is not shown as one.
+    """
+    if not _verisure_sensors_listed() or not verisure_sensors:
+        return []
+    reading = alarm_reading
+    now = time.time()
+    fresh = (
+        alarm_provider is not None
+        and reading is not None
+        and now - reading.read_at <= ALARM_STALE_SECONDS
+    )
+    return sensor_verisure.snapshots(
+        verisure_sensors.values(), reading, fresh=fresh,
+        zone_of={item.sensor_id: item.zone_id for item in primary}, now=now,
+    )
+
+
 async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
-    global sensor_snapshots, sensor_zone_aggregates
+    global sensor_snapshots, sensor_zone_aggregates, sensor_precedence
     if not sensor_settings.enabled or sensor_provider is None:
         sensor_snapshots = []
+        sensor_precedence = sensor_verisure.Precedence(counted=[], standing_by={}, stood_in_for={})
         sensor_zone_aggregates = {}
         globals()["sensor_alert_deadline"] = None
         return None
 
     async with sensor_evaluation_lock:
-        sensor_snapshots = list(await sensor_provider.list())
+        primary = list(await sensor_provider.list())
+        sensor_snapshots = primary + _verisure_sensor_snapshots(primary)
+        now = time.time()
+        sensor_precedence = sensor_verisure.apply_precedence(
+            sensor_snapshots, verisure_sensors,
+            now=now, climate_stale_seconds=CLIMATE_STALE_SECONDS,
+        )
         zones = _build_zones_data()
         if not zones:
             # The rooms come from the hub, so while it is disconnected — its
@@ -2881,11 +2989,12 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
             )
             for zone in zones
         }
+        counted = sensor_precedence.counted
         result = await sensor_automation.evaluate(
-            sensor_snapshots,
+            counted,
             policies,
             _sensor_heating_state(zones),
-            sensor_heating_links,
+            {item.sensor_id: _heating_links_of(item.sensor_id) for item in counted},
         )
         sensor_zone_aggregates = dict(result.zones)
 
@@ -3139,7 +3248,11 @@ def get_zones_data() -> List[Dict[str, Any]]:
                 target.setdefault(str(snapshot.zone_id), []).append(
                     _sensor_snapshot_dict(snapshot)
                 )
-                for linked_zone in _sensor_controls(snapshot):
+                counted = (
+                    snapshot.sensor_id not in sensor_precedence.standing_by
+                    and snapshot.sensor_id not in sensor_precedence.stood_in_for
+                )
+                for linked_zone in _sensor_controls(snapshot) if counted else ():
                     controlled_by.setdefault(linked_zone, []).append({
                         "sensor_id": snapshot.sensor_id,
                         "name": snapshot.name,
@@ -3925,11 +4038,192 @@ async def pair_sensor(request: Request, body: SensorCreate):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _require_verisure_sensors() -> None:
+    if not _verisure_sensors_listed():
+        raise HTTPException(
+            status_code=409,
+            detail="Turn the alarm integration on to use the alarm's own sensors.",
+        )
+
+
+def _verisure_backup_target(backup_for: str, sensor_id: Optional[str]) -> ContactSnapshot:
+    """The Zigbee contact a Verisure one may back up."""
+    target = next(
+        (item for item in sensor_snapshots
+         if item.sensor_id == backup_for and item.source != sensor_verisure.SOURCE),
+        None,
+    )
+    if target is None or not target.is_contact:
+        raise HTTPException(
+            status_code=400, detail="Choose a Zigbee door or window sensor to back up.",
+        )
+    taken = next(
+        (item for item in verisure_sensors.values()
+         if item.backup_for == backup_for and item.sensor_id != sensor_id),
+        None,
+    )
+    if taken is not None:
+        raise HTTPException(
+            status_code=409, detail=f"{target.name} already has a backup: {taken.name}.",
+        )
+    return target
+
+
+def _verisure_sensor_response(sensor_id: str) -> Dict[str, Any]:
+    snapshot = next((item for item in sensor_snapshots if item.sensor_id == sensor_id), None)
+    if snapshot is None:
+        chosen = verisure_sensors[sensor_id]
+        return {"sensor_id": sensor_id, "name": chosen.name, "kind": chosen.kind.value,
+                "zone_id": chosen.zone_id, "source": sensor_verisure.SOURCE}
+    return _sensor_snapshot_dict(snapshot)
+
+
+def _sensor_name(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    name = value.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the sensor a name")
+    return name[:sensor_verisure.NAME_MAX]
+
+
+@app.get("/api/sensors/verisure")
+async def list_verisure_devices(request: Request):
+    """What the alarm reported, for the "Add from Verisure" list."""
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    listed = _verisure_sensors_listed()
+    reading = alarm_reading if listed else None
+    reason = None
+    if not listed:
+        reason = "Turn the alarm integration on to use the alarm's own sensors."
+    elif reading is None:
+        reason = (
+            alarm_failure.args[0] if alarm_failure is not None
+            else "The alarm has not been read yet. Try again in a minute."
+        )
+    return {
+        "available": listed and reading is not None,
+        "reason": reason,
+        "provider": alarm_settings.provider,
+        "devices": sensor_verisure.catalogue(reading, verisure_sensors),
+        # Zigbee contacts a Verisure contact could back up.
+        "backup_candidates": sorted(
+            (
+                {"sensor_id": item.sensor_id, "name": item.name, "zone_id": item.zone_id,
+                 "backed_by": next((v.sensor_id for v in verisure_sensors.values()
+                                    if v.backup_for == item.sensor_id), None)}
+                for item in sensor_snapshots
+                if item.source != sensor_verisure.SOURCE and item.is_contact
+            ),
+            key=lambda item: item["name"].lower(),
+        ),
+    }
+
+
+@app.post("/api/sensors/verisure")
+async def add_verisure_sensor(request: Request, body: VerisureSensorCreate):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    _require_verisure_sensors()
+    reading = alarm_reading
+    device = reading.device(body.device_id) if reading is not None else None
+    if device is None:
+        raise HTTPException(
+            status_code=404, detail="The alarm did not report that device in its last reading.",
+        )
+    sensor_id = sensor_verisure.sensor_id_for(device.device_id)
+    if sensor_id in verisure_sensors:
+        raise HTTPException(status_code=409, detail="That device is already a sensor here.")
+    if len(verisure_sensors) >= sensor_verisure.MAX_SENSORS:
+        raise HTTPException(status_code=409, detail="No more alarm devices can be added.")
+    kind = body.kind or sensor_verisure.default_kind(device)
+    if not sensor_verisure.kind_allowed(device, kind):
+        raise HTTPException(
+            status_code=400,
+            detail="A climate device is a temperature sensor, and a contact is a door or window.",
+        )
+    zone_id = body.zone_id
+    backup_for = body.backup_for or None
+    if backup_for is not None:
+        if kind is SensorKind.CLIMATE:
+            raise HTTPException(status_code=400, detail="Only a door or window can be a backup.")
+        zone_id = _verisure_backup_target(backup_for, None).zone_id
+    _require_sensor_zone(zone_id)
+    chosen = sensor_verisure.VerisureSensor(
+        sensor_id=sensor_id, device_id=device.device_id,
+        name=_sensor_name(body.name) or device.name, kind=kind,
+        zone_id=str(zone_id) if zone_id is not None else None, backup_for=backup_for,
+    )
+    _save_verisure_sensors({**verisure_sensors, sensor_id: chosen})
+    add_log_entry("sent", f"Alarm device '{chosen.name}' added as a sensor", source="api")
+    await _finish_sensor_mutation()
+    return _verisure_sensor_response(sensor_id)
+
+
+async def _update_verisure_sensor(sensor_id: str, body: SensorUpdate) -> Dict[str, Any]:
+    chosen = verisure_sensors.get(sensor_id)
+    if chosen is None or not _verisure_sensors_listed():
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    changes: Dict[str, Any] = {}
+    if body.name is not None:
+        changes["name"] = _sensor_name(body.name)
+    if body.kind is not None and body.kind is not chosen.kind:
+        if body.kind.is_contact != chosen.kind.is_contact:
+            raise HTTPException(
+                status_code=400,
+                detail="A climate device is a temperature sensor, and a contact is a door or window.",
+            )
+        changes["kind"] = body.kind
+    backup_for = chosen.backup_for
+    if body.clear_backup:
+        backup_for = None
+    elif body.backup_for:
+        if chosen.kind is SensorKind.CLIMATE:
+            raise HTTPException(status_code=400, detail="Only a door or window can be a backup.")
+        backup_for = body.backup_for
+    if backup_for is not None:
+        if body.zone_id is not None or body.clear_zone:
+            raise HTTPException(
+                status_code=400,
+                detail="A backup stays in the room of the sensor it backs up.",
+            )
+        changes["zone_id"] = _verisure_backup_target(backup_for, sensor_id).zone_id
+    elif body.clear_zone:
+        changes["zone_id"] = None
+    elif body.zone_id is not None:
+        changes["zone_id"] = str(body.zone_id)
+    elif chosen.backup_for:
+        # No longer a backup: it stays in the room it was backing up in.
+        changes["zone_id"] = next(
+            (item.zone_id for item in sensor_snapshots if item.sensor_id == sensor_id),
+            chosen.zone_id,
+        )
+    changes["backup_for"] = backup_for
+    updated = sensor_verisure.with_changes(chosen, **changes)
+    _save_verisure_sensors({**verisure_sensors, sensor_id: updated})
+    # As for any sensor: out of every room it heats nothing, and moved into a
+    # room it used to heat from elsewhere, that room is simply its own. A
+    # backup heats what the sensor it backs up heats, so keeps no list.
+    links = sensor_heating_links.get(sensor_id, [])
+    kept = [] if updated.zone_id is None or updated.backup_for else [
+        z for z in links if z != str(updated.zone_id)
+    ]
+    if kept != links:
+        _save_sensor_heating_links({**sensor_heating_links, sensor_id: kept})
+    await _finish_sensor_mutation()
+    return _verisure_sensor_response(sensor_id)
+
+
 @app.put("/api/sensors/{sensor_id}")
 async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
     _require_sensor_zone(body.zone_id)
+    if sensor_verisure.is_verisure_sensor(sensor_id):
+        return await _update_verisure_sensor(sensor_id, body)
+    if body.backup_for or body.clear_backup:
+        raise HTTPException(status_code=400, detail="Only an alarm device can be a backup.")
     try:
         sensor = await sensor_provider.update(
             sensor_id,
@@ -3967,12 +4261,20 @@ async def update_sensor_heating(request: Request, sensor_id: str, body: SensorHe
     """
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
+    primary = list(await sensor_provider.list())
     sensor = next(
-        (item for item in await sensor_provider.list() if item.sensor_id == sensor_id),
+        (item for item in primary + _verisure_sensor_snapshots(primary)
+         if item.sensor_id == sensor_id),
         None,
     )
     if sensor is None:
         raise HTTPException(status_code=404, detail="Sensor not found")
+    backup = verisure_sensors.get(sensor_id)
+    if backup is not None and backup.backup_for:
+        raise HTTPException(
+            status_code=400,
+            detail="A backup changes the heating the sensor it backs up changes. Choose there.",
+        )
     if not sensor.is_contact:
         raise HTTPException(
             status_code=400, detail="Only a door or window sensor can change the heating."
@@ -4008,6 +4310,20 @@ async def update_sensor_heating(request: Request, sensor_id: str, body: SensorHe
 async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
+    if sensor_verisure.is_verisure_sensor(sensor_id):
+        # Only the choice is forgotten. The device stays in the alarm, and
+        # can be picked from the list again.
+        if sensor_id not in verisure_sensors:
+            raise HTTPException(status_code=404, detail="Sensor not found")
+        _save_verisure_sensors(
+            {key: value for key, value in verisure_sensors.items() if key != sensor_id}
+        )
+        if sensor_id in sensor_heating_links:
+            _save_sensor_heating_links(
+                {key: value for key, value in sensor_heating_links.items() if key != sensor_id}
+            )
+        await _finish_sensor_mutation()
+        return {"status": "success"}
     try:
         remover = sensor_provider.remove
         if force:
@@ -4018,6 +4334,17 @@ async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
             _save_sensor_heating_links(
                 {key: value for key, value in sensor_heating_links.items() if key != sensor_id}
             )
+        # A backup for a sensor that has gone backs up nothing; it stays in
+        # the room, counting on its own.
+        if any(item.backup_for == sensor_id for item in verisure_sensors.values()):
+            room = next(
+                (item.zone_id for item in sensor_snapshots if item.sensor_id == sensor_id), None,
+            )
+            _save_verisure_sensors({
+                key: sensor_verisure.with_changes(item, backup_for=None, zone_id=room)
+                if item.backup_for == sensor_id else item
+                for key, item in verisure_sensors.items()
+            })
         await _finish_sensor_mutation()
         return {"status": "success"}
     except SensorNotFound:
@@ -4035,10 +4362,39 @@ async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+async def _simulate_verisure_sensor(sensor_id: str, body: SensorSimulationUpdate) -> Dict[str, Any]:
+    """A demo alarm's device, set by hand. A real alarm's are readings."""
+    chosen = verisure_sensors.get(sensor_id)
+    if chosen is None or not _verisure_sensors_listed():
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    provider = alarm_provider
+    if not isinstance(provider, SimulatedAlarm):
+        _sensor_provider_unavailable(
+            "The alarm reports this sensor's state; it cannot be set by hand."
+        )
+    if body.state is not None and body.state not in ("open", "closed"):
+        raise HTTPException(status_code=400, detail="An alarm contact reads open or closed.")
+    try:
+        provider.set_device(
+            chosen.device_id,
+            open=None if body.state is None else body.state == "open",
+            temperature=body.temperature,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="The demo alarm has no such device.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await alarm_poll_once()
+    await _finish_sensor_mutation()
+    return _verisure_sensor_response(sensor_id)
+
+
 @app.post("/api/sensors/{sensor_id}/simulate")
 async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulationUpdate):
     _require_admin(_get_session_or_401(request))
     _require_sensor_enabled()
+    if sensor_verisure.is_verisure_sensor(sensor_id):
+        return await _simulate_verisure_sensor(sensor_id, body)
     if not _provider_can_simulate():
         # Deliberately the provider and not DEMO_MODE: the hub can be
         # simulated while the sensors are real, and a real sensor's battery
@@ -4512,6 +4868,7 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
             types[key] = {**spec, "unavailable": "Needs the alarm integration, which is off."}
             out.get("events", {})[key] = False
     if sensor_settings.enabled:
+        _note_verisure_sensor_alerts(types)
         return out
     reason = "Needs door, window or temperature sensors, which are off."
     for key in (
@@ -4530,6 +4887,55 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
         types[key] = {**spec, "unavailable": reason}
         out.get("events", {})[key] = False
     return out
+
+
+VERISURE_CONTACT_ALERTS = (
+    "contact_left_open", "contact_closed", "contact_open_long",
+    "contact_open_while_away", "alarm_left_open",
+)
+VERISURE_CLIMATE_ALERTS = (
+    "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
+    "room_near_freezing", "humidity_high",
+)
+ZIGBEE_ONLY_ALERTS = ("sensor_quiet", "sensor_battery_low", "sensor_all_quiet")
+
+
+def _note_verisure_sensor_alerts(types: Dict[str, Any]) -> None:
+    """Say which alerts Verisure sensors can raise, and which they cannot.
+
+    Only while the alarm is on, which is the only time Verisure sensors are
+    listed. A Verisure door reports open and closed like any other, and its
+    smoke detectors report temperature, so those alerts include them. It
+    reports no battery and no radio silence the application could see, so the
+    health alerts stay Zigbee-only — an unreachable Verisure account is
+    "Alarm connection lost" instead.
+    """
+    if not _verisure_sensors_listed():
+        return
+    contacts = sum(1 for s in verisure_sensors.values() if s.kind is not SensorKind.CLIMATE)
+    climates = sum(1 for s in verisure_sensors.values() if s.kind is SensorKind.CLIMATE)
+
+    def note(keys, text):
+        for key in keys:
+            spec = types.get(key)
+            if spec is not None:
+                types[key] = {**spec, "note": text}
+
+    def counted(n, what):
+        return f"{n} Verisure {what}{'' if n == 1 else 's'}"
+
+    note(VERISURE_CONTACT_ALERTS, (
+        f"Includes {counted(contacts, 'door or window sensor')}." if contacts
+        else "Verisure door and window sensors can raise this too, once added under Sensors."
+    ))
+    note(VERISURE_CLIMATE_ALERTS, (
+        f"Includes {counted(climates, 'temperature reading')}." if climates
+        else "Verisure temperature readings can raise this too, once added under Sensors."
+    ))
+    note(ZIGBEE_ONLY_ALERTS, (
+        "Zigbee sensors only. Verisure reports no battery or radio to watch; "
+        "\u201cAlarm connection lost\u201d covers its sensors."
+    ))
 
 
 @app.get("/api/notifications")
@@ -6541,14 +6947,14 @@ def _save_global_mode_source(value: str) -> None:
 
 
 def _alarm_hand_over_away() -> None:
-    """The alarm stops owning the Away it set; the house is left as it is.
+    """The alarm stops owning the Away or Eco it set; the house is left as it is.
 
-    Used when the integration is switched off or no longer wants Away. Lifting
-    the Away there and then would warm an empty house because somebody changed
-    a setting, so it becomes an ordinary manual Away instead.
+    Used when the integration is switched off or no longer wants that mode.
+    Lifting it there and then would warm an empty house because somebody
+    changed a setting, so it becomes an ordinary manual one instead.
     """
-    if alarm_ledger.owns_away:
-        _set_alarm_ledger(owns_away=False)
+    if alarm_ledger.owned_mode is not None:
+        _set_alarm_ledger(owned_mode=None)
     if global_mode_source == alarm_automation.SOURCE:
         _save_global_mode_source("manual")
 
@@ -6618,6 +7024,8 @@ async def _alarm_apply_heating() -> None:
         may_act=_alarm_may_act(),
     )
     if decision.action is not None:
+        # Always until cancelled, never with a return time: the house stays
+        # on Away for as long as the alarm is on, however long that is.
         await _apply_global_mode_internal(decision.action, source=alarm_automation.SOURCE)
         with connection_lock:
             still_connected = hub_connected
@@ -6625,19 +7033,28 @@ async def _alarm_apply_heating() -> None:
             # The hub went while the command was being sent. Nothing is
             # recorded, so the same decision is made on the next reading.
             return
-        if decision.action == "away":
+        if decision.action in ("away", "eco"):
             _save_global_mode_source(alarm_automation.SOURCE)
-            add_log_entry("received", "Alarm armed — GLOBAL Away", source="alarm")
         else:
             _save_global_mode_source("manual")
-            add_log_entry(
-                "received", "Alarm disarmed — Away lifted, rooms back on their schedules",
-                source="alarm",
-            )
+        add_log_entry("received", ALARM_HEATING_LOG.get(
+            (decision.reason, decision.action),
+            f"Alarm — GLOBAL {decision.action.capitalize()}",
+        ), source="alarm")
     _set_alarm_ledger(
         handled_event=decision.ledger.handled_event,
-        owns_away=decision.ledger.owns_away,
+        owned_mode=decision.ledger.owned_mode,
     )
+
+
+ALARM_HEATING_LOG = {
+    ("armed_away", "away"): "Alarm armed — GLOBAL Away",
+    ("armed_home", "away"): "Alarm armed at home — GLOBAL Away",
+    ("locked_outside", "away"): "Door locked from outside — GLOBAL Away",
+    ("locked_outside", "eco"): "Door locked from outside — GLOBAL Eco",
+    ("locked_inside", "eco"): "Door locked from inside — GLOBAL Eco",
+    ("released", "home"): "Alarm off or door unlocked — rooms back on their schedules",
+}
 
 
 def _alarm_connection_alert() -> None:
@@ -6671,10 +7088,10 @@ def _alarm_signature() -> tuple:
         alarm_provider is not None,
         alarm_failure.kind if alarm_failure else None,
         None if reading is None else (
-            reading.arm_state, reading.arm_changed_at, reading.locks,
+            reading.arm_state, reading.arm_changed_at, reading.locks, reading.devices,
         ),
         _alarm_leaving(),
-        alarm_ledger.owns_away,
+        alarm_ledger.owned_mode,
     )
 
 
@@ -6774,6 +7191,7 @@ def _alarm_public() -> Optional[Dict[str, Any]]:
                 "locked": lock.locked,
                 "method": lock.method,
                 "outside": alarm_automation.lock_is_outside(lock, alarm_settings),
+                "side": alarm_automation.lock_side(lock, alarm_settings),
                 "changed_at": lock.changed_at,
             }
             for lock in (reading.locks if reading else ())
@@ -6783,6 +7201,12 @@ def _alarm_public() -> Optional[Dict[str, Any]]:
             if why else None
         ),
         "owns_away": alarm_ledger.owns_away and global_mode_source == alarm_automation.SOURCE,
+        "owned_mode": (
+            alarm_ledger.owned_mode if global_mode_source == alarm_automation.SOURCE else None
+        ),
+        # Alarm devices the alarm reported, for the demo controls and for
+        # knowing whether "Add from Verisure" has anything to offer.
+        "device_count": len(reading.devices) if reading else 0,
         "read_at": (
             datetime.fromtimestamp(reading.read_at, timezone.utc).isoformat() if reading else None
         ),
@@ -6790,8 +7214,11 @@ def _alarm_public() -> Optional[Dict[str, Any]]:
 
 
 def _alarm_settings_response() -> Dict[str, Any]:
+    current = _alarm_current_settings()
     return {
-        **dataclasses.asdict(_alarm_current_settings()),
+        **dataclasses.asdict(current),
+        "lock_sides": dict(current.lock_sides),
+        "lock_methods": list(LOCK_METHODS),
         "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
         "sensors_enabled": sensor_settings.enabled,
         "verisure": verisure_account.public_state(),
@@ -6833,6 +7260,11 @@ class AlarmSettingsUpdate(BaseModel):
     warn_when_armed_away: Optional[bool] = None
     warn_when_armed_home: Optional[bool] = None
     warn_when_locked_outside: Optional[bool] = None
+    warn_when_locked_inside: Optional[bool] = None
+    heating_when_locked_outside: Optional[str] = None
+    heating_when_locked_inside: Optional[str] = None
+    lock_sides: Optional[Dict[str, str]] = None
+    # The switch that came before lock_sides, for auto-lock only.
     autolock_counts_as_leaving: Optional[bool] = None
 
 
@@ -6852,6 +7284,8 @@ class VerisureInstallation(BaseModel):
 class AlarmSimulation(BaseModel):
     arm_state: Optional[str] = None
     lock: Optional[str] = None
+    # Locked with a particular method, as the real lock would report it.
+    lock_method: Optional[str] = None
     lock_id: str = "front-door"
 
 
@@ -6867,6 +7301,21 @@ async def update_alarm_settings(request: Request, body: AlarmSettingsUpdate):
     _require_admin(_get_session_or_401(request))
     changes = body.model_dump(exclude_none=True)
     previous = _alarm_current_settings()
+    try:
+        for name in ("heating_when_locked_outside", "heating_when_locked_inside"):
+            if name in changes:
+                alarm_persistence.parse_choice(name, changes[name])
+        sides = dict(previous.lock_sides)
+        if "lock_sides" in changes:
+            sides.update(alarm_persistence.parse_lock_sides(
+                {**previous.lock_sides, **changes["lock_sides"]}
+            ))
+        legacy = changes.pop("autolock_counts_as_leaving", None)
+        if legacy is not None:
+            sides["auto"] = "outside" if legacy else "inside"
+        changes["lock_sides"] = sides
+    except alarm_persistence.InvalidAlarmData as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     provider = changes.get("provider", previous.provider)
     if provider not in alarm_persistence.PROVIDERS:
         raise HTTPException(status_code=400, detail="Unknown alarm provider")
@@ -6880,9 +7329,11 @@ async def update_alarm_settings(request: Request, body: AlarmSettingsUpdate):
         return _alarm_settings_response()
 
     restart = (updated.enabled, updated.provider) != (previous.enabled, previous.provider)
-    if restart or not alarm_automation.wants_away(
-        alarm_reading.arm_state if alarm_reading else None, updated
-    ):
+    still_wanted = (
+        alarm_reading is not None
+        and alarm_automation.heating_intent(alarm_reading, updated)[1] == alarm_ledger.owned_mode
+    )
+    if restart or not still_wanted:
         _alarm_hand_over_away()
     if restart:
         # A new source starts with nothing handled, so whatever it reports
@@ -6985,11 +7436,14 @@ async def simulate_alarm(request: Request, body: AlarmSimulation):
             provider.set_arm_state(body.arm_state)
         if body.lock is not None:
             provider.set_lock(body.lock_id, body.lock)
+        if body.lock_method is not None:
+            provider.set_lock_method(body.lock_id, body.lock_method)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except KeyError:
         raise HTTPException(status_code=404, detail="No such lock") from None
     await alarm_poll_once()
+    await evaluate_sensor_automation()
     return _alarm_public()
 
 

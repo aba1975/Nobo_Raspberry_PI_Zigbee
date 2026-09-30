@@ -106,7 +106,7 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
 - **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
-- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, and `alarm_*.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, which is left out on purpose
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json` and `verisure_sensors.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, which is left out on purpose
 
 ## Key Files
 
@@ -128,7 +128,15 @@ hub reached the hardware; everything else proves a message reached the hub.
   by `check_read_only` in `alarm_verisure.py`, and a test fails if that module
   names any of vsure's commands. The Verisure password is never stored; the
   session in `data/verisure/` is 0600, excluded from backups and deleted on
-  sign-out. Keep all of that true
+  sign-out. Keep all of that true. The alarm owns at most one global mode at
+  a time (`AlarmLedger.owned_mode`: Away when armed, or Eco/Away for the lock)
+  and releases only that; an Away already there when it armed is never taken
+  over
+- `app/sensor_verisure.py` — the alarm's door sensors and smoke-detector
+  temperatures as room sensors (`data/verisure_sensors.json`). Not a provider:
+  snapshots are built from the alarm reading and merged with Zigbee's, then
+  `apply_precedence` sets aside whichever should not count — **Zigbee first**.
+  Anything that counts sensors must use the `counts` flag, not the raw list
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

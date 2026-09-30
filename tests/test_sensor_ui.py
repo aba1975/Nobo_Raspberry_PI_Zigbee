@@ -318,7 +318,7 @@ def _render_zone_strip(zone):
     """
     wanted = [
         "function sensorKindLabel", "function sensorGroupNoun",
-        "function sensorCountLabel", "function compactSensorNames",
+        "function sensorCountLabel", "function countedSensors", "function compactSensorNames",
         "function offlineNote", "function sensorZoneHeadline",
         "function linkedHolds", "function sensorModeWord",
     ]
@@ -432,7 +432,7 @@ def _render_trip_alert(zones, status, away_period=None):
     """Run the real top-card alert in node and return its markup."""
     wanted = [
         "function sensorKindLabel", "function sensorGroupNoun",
-        "function sensorCountLabel", "function compactSensorNames",
+        "function sensorCountLabel", "function countedSensors", "function compactSensorNames",
         "function awayNow", "function alarmLeaving", "function leavingSentence",
         "function openWhileAway", "function tripAlertHtml",
     ]
@@ -1282,7 +1282,7 @@ def test_heating_it_controls_is_offered_for_contacts_only_and_saved_through_the_
     start = CABIN.index("function sensorMenuSheet")
     body = CABIN[start:CABIN.index("\n  }\n", start)]
     assert "'Heating it controls'" in body
-    assert "sensor.kind === 'climate' ? []" in body
+    assert "sensor.kind === 'climate' || backup ? []" in body
     assert "data-heating-sensor" in CABIN
 
 

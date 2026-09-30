@@ -52,7 +52,7 @@ def test_auto_lock_counts_only_when_asked():
     auto = lock(method="auto")
     assert automation.lock_is_outside(auto, SETTINGS) is False
     assert automation.lock_is_outside(
-        auto, replace(SETTINGS, autolock_counts_as_leaving=True)) is True
+        auto, replace(SETTINGS, lock_sides={**SETTINGS.lock_sides, "auto": "outside"})) is True
 
 
 @pytest.mark.parametrize("locked", [False, None])
@@ -161,7 +161,7 @@ def test_nothing_is_decided_without_the_hub(kwargs):
 
 
 def test_nothing_is_decided_without_a_reading():
-    ledger = AlarmLedger(owns_away=True, handled_event="x")
+    ledger = AlarmLedger(owned_mode="away", handled_event="x")
     assert decide(ledger, None, mode="away", source="alarm").ledger == ledger
     unknown = reading(arm=None)
     assert decide(ledger, unknown, mode="away", source="alarm").action is None
@@ -176,3 +176,142 @@ def test_a_demo_alarm_never_drives_a_real_hub():
 def test_away_turned_off_in_settings_means_no_heating_change():
     settings = replace(SETTINGS, away_when_armed_away=False)
     assert decide(AlarmLedger(), reading("armed_away"), settings=settings).action is None
+
+
+# -- the lock and the heating -------------------------------------------------
+
+
+OUTSIDE_ECO = replace(SETTINGS, heating_when_locked_outside="eco")
+OUTSIDE_AWAY = replace(SETTINGS, heating_when_locked_outside="away")
+INSIDE_ECO = replace(SETTINGS, heating_when_locked_inside="eco")
+
+
+def test_the_lock_changes_nothing_unless_asked():
+    assert decide(AlarmLedger(), reading(locks=[lock()])).action is None
+    assert decide(AlarmLedger(), reading(locks=[lock(method="thumb")])).action is None
+
+
+@pytest.mark.parametrize("settings, method, wanted", [
+    (OUTSIDE_ECO, "code", "eco"),
+    (OUTSIDE_AWAY, "code", "away"),
+    (INSIDE_ECO, "thumb", "eco"),
+    # The inside choice does nothing for a door locked from outside, and the
+    # other way round.
+    (INSIDE_ECO, "code", None),
+    (OUTSIDE_ECO, "thumb", None),
+])
+def test_locking_sets_what_was_chosen_for_that_side(settings, method, wanted):
+    decision = decide(AlarmLedger(), reading(locks=[lock(method=method)]), settings=settings)
+    assert decision.action == wanted
+    assert decision.ledger.owned_mode == wanted
+
+
+def test_which_side_a_method_counts_as_is_the_users_to_say():
+    """Verisure's name for the Doorman's * button is not documented, so it
+    is placed by the user rather than guessed here."""
+    star_inside = replace(OUTSIDE_ECO, lock_sides={**SETTINGS.lock_sides, "star": "inside"})
+    assert automation.lock_side(lock(method="star"), OUTSIDE_ECO) == "outside"
+    assert automation.lock_side(lock(method="star"), star_inside) == "inside"
+    assert decide(AlarmLedger(), reading(locks=[lock(method="star")]),
+                  settings=star_inside).action is None
+
+
+def test_unlocking_puts_back_only_what_the_lock_set():
+    locked = decide(AlarmLedger(), reading(locks=[lock()]), settings=OUTSIDE_ECO).ledger
+    open_door = reading(locks=[lock(locked=False)])
+    decision = decide(locked, open_door, mode="eco", source="alarm", settings=OUTSIDE_ECO)
+    assert decision.action == "home"
+    assert decision.reason == "released"
+    assert decision.ledger.owned_mode is None
+
+
+def test_unlocking_leaves_a_mode_somebody_chose_since():
+    locked = decide(AlarmLedger(), reading(locks=[lock()]), settings=OUTSIDE_ECO).ledger
+    decision = decide(locked, reading(locks=[lock(locked=False)]),
+                      mode="comfort", source="manual", settings=OUTSIDE_ECO)
+    assert decision.action is None
+
+
+def test_the_alarm_outranks_the_lock():
+    decision = decide(AlarmLedger(), reading("armed_away", locks=[lock()]), settings=OUTSIDE_ECO)
+    assert decision.action == "away"
+    assert decision.reason == "armed_away"
+
+
+def test_disarming_with_the_door_still_locked_goes_to_the_locks_choice():
+    armed = decide(AlarmLedger(), reading("armed_away", locks=[lock()]),
+                   settings=OUTSIDE_ECO).ledger
+    decision = decide(armed, reading("disarmed", at="2026-09-30T17:00:00Z", locks=[lock()]),
+                      mode="away", source="alarm", settings=OUTSIDE_ECO)
+    assert decision.action == "eco"
+    assert decision.ledger.owned_mode == "eco"
+
+
+def test_away_is_never_replaced_by_eco():
+    """Somebody's own Away is colder than anything the lock would choose."""
+    decision = decide(AlarmLedger(), reading(locks=[lock()]),
+                      mode="away", source="manual", settings=OUTSIDE_ECO)
+    assert decision.action is None
+    assert decision.ledger.owned_mode is None
+
+
+def test_an_away_chosen_before_arming_is_neither_taken_nor_lifted():
+    """Away pressed in the app before leaving, with or without a return date,
+    stays the person's: arming does not claim it and disarming does not end
+    it."""
+    for source in ("manual", "away_schedule"):
+        decision = decide(AlarmLedger(), reading("armed_away"), mode="away", source=source)
+        assert decision.action is None
+        assert decision.ledger.owned_mode is None
+        decision = decide(decision.ledger, reading("disarmed", at="2026-09-30T17:00:00Z"),
+                          mode="away", source=source)
+        assert decision.action is None
+
+
+def test_the_same_lock_event_is_not_acted_on_twice():
+    locked = decide(AlarmLedger(), reading(locks=[lock()]), settings=OUTSIDE_ECO).ledger
+    # Somebody pressed Comfort; the lock is read again, unchanged.
+    again = decide(locked, reading(locks=[lock()]), mode="comfort", source="manual",
+                   settings=OUTSIDE_ECO)
+    assert again.action is None
+
+
+def test_locked_from_inside_can_be_a_warning_too():
+    quiet = automation.leaving(reading(locks=[lock(method="thumb")]), SETTINGS)
+    assert quiet is None
+    asked = replace(SETTINGS, warn_when_locked_inside=True)
+    why = automation.leaving(reading(locks=[lock(method="thumb")]), asked)
+    assert why.reason == "locked_inside"
+
+
+# -- settings written by an earlier version -----------------------------------
+
+
+def test_the_old_auto_lock_switch_becomes_a_side():
+    from alarm_persistence import parse_settings
+
+    moved = parse_settings({"schema_version": 1, "enabled": True, "autolock_counts_as_leaving": True})
+    assert moved.lock_side("auto") == "outside"
+    kept = parse_settings({"schema_version": 1, "enabled": True, "autolock_counts_as_leaving": False})
+    assert kept.lock_side("auto") == "inside"
+    assert kept.lock_side("thumb") == "inside"
+    assert kept.lock_side("something_new") == "outside"
+
+
+def test_an_old_ledger_that_owned_away_still_does():
+    from alarm_persistence import _parse_ledger as parse_ledger
+
+    ledger = parse_ledger({"schema_version": 1, "owns_away": True, "handled_event": "armed_away@x"})
+    assert ledger.owned_mode == "away"
+    assert ledger.owns_away is True
+
+
+@pytest.mark.parametrize("field, value", [
+    ("heating_when_locked_inside", "away"),
+    ("heating_when_locked_outside", "comfort"),
+])
+def test_a_choice_the_lock_cannot_make_is_refused(field, value):
+    from alarm_persistence import InvalidAlarmData, parse_settings
+
+    with pytest.raises(InvalidAlarmData):
+        parse_settings({"schema_version": 1, "enabled": True, field: value})

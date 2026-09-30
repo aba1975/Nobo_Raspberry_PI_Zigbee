@@ -17,7 +17,12 @@ or vendor payloads. A provider supplies:
 - a callback whenever a snapshot changes.
 
 `sensor_provider.py` defines that contract. `sensor_simulated.py` and
-`sensor_zigbee2mqtt.py` implement it. The API, warning aggregation, WebSocket
+`sensor_zigbee2mqtt.py` implement it. A third source, the alarm's own door
+sensors and smoke-detector temperatures (`sensor_verisure.py`), is not a
+provider: it has no pairing and nothing to command, so it turns the alarm's
+latest reading into the same snapshots, tagged `source: "verisure"`, and they
+join the Zigbee ones before the rules see them — see
+[Other sources](#other-sources-the-alarms-own-sensors). The API, warning aggregation, WebSocket
 payloads, UI, persistence policy, and heating automation do not depend on either
 one's storage format.
 
@@ -877,6 +882,33 @@ has to model both kinds of override the hub keeps. The active global mode and
 the set of zones under their own override live in `data/server_state.json`, so
 a restart knows what the simulated hub is holding — exactly as a real hub
 remembers its overrides across a power cut.
+
+## Other sources: the alarm's own sensors
+
+With the [alarm integration](ALARM.md#the-alarms-own-sensors) on, the alarm's
+door and window sensors and smoke-detector temperatures can be chosen from a
+list and added to rooms. `sensor_verisure.py` keeps the choice
+(`data/verisure_sensors.json`: device id, name, kind, room, and optionally the
+Zigbee sensor it backs up) and builds snapshots from each alarm reading.
+
+**Zigbee takes precedence**, decided in `apply_precedence` before the rules run:
+
+- A Verisure contact chosen as a **backup** for a Zigbee sensor sits in that
+  sensor's room. It is *standing by* — shown, not counted — while the Zigbee
+  sensor is available with a known state, and *stands in* (counted, with the
+  Zigbee sensor set aside) while it is not. If neither can be believed, the
+  Zigbee one stays counted and reads offline, as it would with no backup.
+- A Verisure **temperature** stands by while its room has a Zigbee thermometer
+  with a reading younger than `CLIMATE_STALE_SECONDS`.
+- Everything set aside carries `counts: false` and a reason in the API, so
+  sensor counts, the left-open warning and the alarm warning each see a door
+  once.
+
+A Verisure sensor is **unavailable**, never closed, when the alarm's reading
+is older than `ALARM_STALE_SECONDS`, the last read failed, or the device is no
+longer listed. It has no battery or signal, so the Zigbee health alerts skip
+it. Deleting the Zigbee sensor a backup belongs to keeps the backup, as an
+ordinary sensor in that room. Nothing is ever written to the alarm.
 
 ## Monitoring-only rooms
 

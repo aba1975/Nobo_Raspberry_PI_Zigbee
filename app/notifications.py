@@ -207,10 +207,12 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
     "alarm_left_open": {
         "label": "Something is open when the alarm goes on",
         "default": False,
-        "help": "The alarm has been armed, or the front door locked from outside, and a door "
-                "or window sensor still reads open. Needs the alarm integration and door or "
-                "window sensors. Armed away and locked from outside are marked urgent and "
-                "ignore quiet hours; armed at home is not, because somebody is in. Gets the "
+        "help": "The alarm has been armed, or the front door locked, and a door or window "
+                "sensor still reads open. Which of those count is chosen under Settings, "
+                "Alarm. Needs the alarm integration and door or window sensors, Zigbee or "
+                "Verisure. Armed away and locked from outside are marked urgent and ignore "
+                "quiet hours; armed at home and locked from inside are not, because somebody "
+                "is in. Gets the "
                 "same five minutes' grace as the Away alert, and replaces it while raised, "
                 "so leaving does not send both.",
     },
@@ -219,7 +221,8 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
         "default": False,
         "help": "Verisure has ended this system's sign-in, or has not answered for half an "
                 "hour. Until it is fixed the alarm neither puts the heating on Away nor "
-                "warns about open windows; the heating is simply left as it is. A lapsed "
+                "warns about open windows, and any Verisure door, window or temperature "
+                "sensors read as offline; the heating is simply left as it is. A lapsed "
                 "sign-in needs somebody to sign in again under Settings; an outage usually "
                 "clears by itself.",
     },

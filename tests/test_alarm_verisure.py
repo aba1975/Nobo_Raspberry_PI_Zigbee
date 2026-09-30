@@ -113,6 +113,12 @@ class FakeSession:
     def smart_lock(self):
         return {"operationName": "SmartLock", "query": "query SmartLock { }"}
 
+    def door_window(self):
+        return {"operationName": "DoorWindow", "query": "query DoorWindow { }"}
+
+    def climate(self):
+        return {"operationName": "Climate", "query": "query Climate { }"}
+
     def request(self, *operations):
         for operation in operations:
             check_read_only(operation)
@@ -438,3 +444,74 @@ def test_no_command_is_named_anywhere_in_the_application():
         if source.name == "server.py":
             text = text.replace("provider.set_arm_state(", "")
         assert not forbidden.search(text), source.name
+
+
+# -- the alarm's own sensors ----------------------------------------------------
+
+
+DEVICES = [
+    {"data": {"installation": {"doorWindows": [
+        {"device": {"deviceLabel": "D001"}, "type": "DOOR_WINDOW", "area": "Woodshed",
+         "state": "OPEN", "wired": False, "reportTime": "2026-09-30T08:02:00.000Z"},
+        {"device": {"deviceLabel": "D002"}, "area": "Patio door", "state": "CLOSE"},
+        {"device": {"deviceLabel": "D003"}, "area": "Tech room", "state": "SOMETHING"},
+        {"device": {}, "area": "No label, so no way to tell it from the next"},
+    ]}}},
+    {"data": {"installation": {"climates": [
+        {"device": {"deviceLabel": "S001", "area": "Hallway", "gui": {"label": "SMOKE"}},
+         "humidityEnabled": False, "humidityValue": 55,
+         "temperatureValue": 21.5, "temperatureTimestamp": "2026-09-30T07:40:00.000Z"},
+        {"device": {"deviceLabel": "S002", "area": "Bathroom", "gui": {"label": "WATER"}},
+         "humidityEnabled": True, "humidityValue": 61.0, "temperatureValue": "hot"},
+    ]}}},
+]
+
+
+def test_door_window_and_climate_devices_are_read():
+    devices = {item.device_id: item for item in alarm_verisure.parse_devices(DEVICES)}
+    assert set(devices) == {"contact:D001", "contact:D002", "contact:D003",
+                            "climate:S001", "climate:S002"}
+    woodshed = devices["contact:D001"]
+    assert (woodshed.kind, woodshed.name, woodshed.open) == ("contact", "Woodshed", True)
+    assert woodshed.reported_at == "2026-09-30T08:02:00.000Z"
+    assert devices["contact:D002"].open is False
+    # A state this does not know is unknown, never closed.
+    assert devices["contact:D003"].open is None
+    hallway = devices["climate:S001"]
+    assert (hallway.temperature, hallway.model) == (21.5, "Smoke")
+    # Humidity only where the device says it measures it.
+    assert hallway.humidity is None
+    assert devices["climate:S002"].humidity == 61.0
+    # A reading that is not a number is no reading.
+    assert devices["climate:S002"].temperature is None
+
+
+def test_an_installation_without_sensors_has_none():
+    assert alarm_verisure.parse_devices(READING) == ()
+
+
+def test_a_reading_carries_the_devices(account):
+    FakeSession.answer = READING + DEVICES
+    _sign_in(account)
+    reading = run(account.read())
+    assert reading.device("contact:D001").open is True
+    assert reading.device("climate:S001").temperature == 21.5
+    (request,) = [c for c in FakeSession.instances[-1].calls if isinstance(c, tuple)
+                  and c[0] == "request"]
+    assert request[1] == ("ArmState", "SmartLock", "DoorWindow", "Climate")
+
+
+def test_the_sensor_queries_are_allowed_and_nothing_else_is_added():
+    assert alarm_verisure.ALLOWED_OPERATIONS >= {"DoorWindow", "Climate"}
+    for name in ("DoorWindow", "Climate"):
+        check_read_only({"operationName": name, "query": f"query {name} {{ }}"})
+
+
+def test_vsures_own_sensor_queries_pass_the_guard():
+    """Checked against vsure itself, so a renamed operation is caught here
+    rather than by a refused read on the Pi."""
+    session_class = alarm_verisure.read_only_session_class()
+    session = session_class("a@example.com", "", cookie_file_name="/nonexistent/x")
+    session._giid = "111"
+    for query in (session.door_window(), session.climate()):
+        check_read_only(query)

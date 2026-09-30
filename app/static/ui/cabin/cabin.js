@@ -342,6 +342,9 @@
     if (why && why.reason === 'locked_outside') {
       return `${why.lock_name || 'The door'} was locked from outside.`;
     }
+    if (why && why.reason === 'locked_inside') {
+      return `${why.lock_name || 'The door'} was locked from inside.`;
+    }
     return `${place} is on Away — nobody is expected to be here.`;
   }
 
@@ -350,8 +353,8 @@
     const rooms = state.zones
       .map(zone => ({
         zone,
-        open: (zone.sensors || []).filter(s => s.available && s.state === 'open'),
-        offline: (zone.sensors || []).filter(s => !s.available),
+        open: countedSensors(zone.sensors).filter(s => s.available && s.state === 'open'),
+        offline: countedSensors(zone.sensors).filter(s => !s.available),
       }))
       .filter(entry => entry.open.length || entry.offline.length);
     const open = rooms.flatMap(entry => entry.open);
@@ -1058,6 +1061,18 @@
     return `${sensors.length} ${sensorGroupNoun(sensors)}`;
   }
 
+  /* The sensors the rules are actually believing. A Verisure contact backing
+     up a Zigbee one is listed beside it but set aside while the Zigbee one
+     reports, and the other way round while it does not — counting both would
+     count one door twice. */
+  function countedSensors(sensors) {
+    return (sensors || []).filter(sensor => sensor.counts !== false);
+  }
+
+  function isVerisureSensor(sensor) {
+    return !!sensor && sensor.source === 'verisure';
+  }
+
   function sensorPolicyFor(zoneId) {
     const policy = state.sensorSettings && state.sensorSettings.zones
       ? state.sensorSettings.zones[String(zoneId)] : null;
@@ -1102,7 +1117,7 @@
   function sensorRuleLine(zone) {
     const summary = zone.sensor_summary || {};
     const action = summary.action_when_open || 'nothing';
-    const ownOpen = (zone.sensors || []).some(sensor => sensor.state !== 'closed');
+    const ownOpen = countedSensors(zone.sensors).some(sensor => sensor.state !== 'closed');
     const linked = linkedHolds(zone);
     if (summary.owned_action) {
       /* Held for a door in another room, with this room's own shut: say
@@ -1206,7 +1221,7 @@
 
   function sensorZoneHeadline(zone) {
     const summary = zone.sensor_summary;
-    const items = zone.sensors || [];
+    const items = countedSensors(zone.sensors);
     if (!summary) return '';
     const linked = linkedHolds(zone);
     // Anything wrong with this room's own sensors outranks a door elsewhere.
@@ -1361,6 +1376,24 @@
       >${Nobo.icon('signal')}<span>${word}</span></span>`;
   }
 
+  /* Why a sensor listed in the room is, or is not, being believed. Zigbee
+     comes first; a Verisure device fills in only where Zigbee cannot. */
+  function sensorPrecedenceNote(sensor) {
+    if (sensor.standing_by === 'zigbee_thermometer') {
+      return 'standing by: a Zigbee thermometer is reading this room';
+    }
+    if (sensor.standing_by === 'zigbee_reporting') {
+      return `backup for ${sensor.backup_for_name || 'a Zigbee sensor'}, standing by`;
+    }
+    if (sensor.stood_in_by) {
+      return `${sensor.stood_in_by_name || 'its Verisure backup'} is counting instead`;
+    }
+    if (isVerisureSensor(sensor) && sensor.backup_for) {
+      return `counting while ${sensor.backup_for_name || 'the Zigbee sensor'} is offline`;
+    }
+    return '';
+  }
+
   function sensorRow(sensor, admin) {
     const climate = sensor.kind === 'climate';
     const open = !climate && sensor.available && sensor.state === 'open';
@@ -1373,10 +1406,11 @@
       : climate ? (sensor.temperature == null ? 'unknown' : 'reading')
         : sensor.state;
     const low = sensor.battery != null && sensor.battery <= 20;
+    const verisure = isVerisureSensor(sensor);
     /* A battery sensor reports its level on its own schedule, and Aqara warns
        that can take up to a day. Rendering nothing for a level we have not
        been told reads as a broken sensor, so the gap is named instead. */
-    const battery = sensor.battery == null
+    const battery = verisure ? '' : sensor.battery == null
       ? `<span class="sensor-batt is-unknown"
            title="This sensor has not reported its battery level yet. It cannot be asked for it — battery devices send it on their own schedule, usually within an hour of pairing.">Battery not reported yet</span>`
       : `<span class="sensor-batt ${low ? 'is-low' : ''}"
@@ -1398,13 +1432,22 @@
     const kindText = (extras ? `${sensorKindLabel(sensor)} · ${extras}` : sensorKindLabel(sensor)) + also;
     const quiet = sensor.available
       && (climate ? climateReadingIsStale(sensor) : sensorIsStale(sensor));
-    const detail = !sensor.available
+    const base = !sensor.available
       ? `${sensorKindLabel(sensor)} · last heard from ${Nobo.fmtAgo(sensor.last_seen_at) || 'unknown'}`
       : quiet
         ? `${kindText} · nothing heard since ${Nobo.fmtAgo(sensor.last_seen_at)}`
         : kindText;
+    const standing = sensorPrecedenceNote(sensor);
+    const detail = standing ? `${base} · ${standing}` : base;
+    /* Verisure watches its own batteries and radio, and says nothing of
+       either to anybody else, so the row names the source instead. */
+    const health = verisure
+      ? `<span class="sensor-source" title="Read from the Verisure alarm about once a minute. Its battery and radio are the alarm's to watch.">Verisure</span>`
+      : `${battery}
+          ${sensorSignal(sensor)}`;
+    const backup = verisure && !!sensor.backup_for;
     return `
-      <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'}">
+      <li class="sensor-row ${open ? 'is-open' : ''} ${sensor.available ? '' : 'is-offline'} ${sensor.counts === false ? 'is-standing-by' : ''}">
         ${sensorIcon(sensor)}
         <span class="sensor-copy">
           <strong>${esc(sensor.name)}</strong>
@@ -1413,19 +1456,18 @@
         <span class="sensor-facts">
           <span class="sensor-state sensor-${esc(stateClass)}">${esc(label)}</span>
           <span class="sensor-health">
-          ${battery}
-          ${sensorSignal(sensor)}
+          ${health}
           </span>
         </span>
         ${admin ? `<span class="dev-actions sensor-actions">
           <button class="icon-btn act-rename" type="button" data-edit-sensor="${esc(sensor.sensor_id)}"
             title="Edit this sensor" aria-label="Edit ${esc(sensor.name)}">${Nobo.icon('rename')}</button>
-          <button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
-            title="Move to another room" aria-label="Move ${esc(sensor.name)}">${Nobo.icon('move')}</button>
-          ${climate ? '' : `<button class="icon-btn act-move" type="button" data-heating-sensor="${esc(sensor.sensor_id)}"
+          ${backup ? '' : `<button class="icon-btn act-move" type="button" data-move-sensor="${esc(sensor.sensor_id)}"
+            title="Move to another room" aria-label="Move ${esc(sensor.name)}">${Nobo.icon('move')}</button>`}
+          ${climate || backup ? '' : `<button class="icon-btn act-move" type="button" data-heating-sensor="${esc(sensor.sensor_id)}"
             title="Heating it controls" aria-label="Heating ${esc(sensor.name)} controls">${Nobo.icon('rooms')}</button>`}
-          <button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
-            title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>
+          ${verisure ? '' : `<button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
+            title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>`}
           <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
             title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
         </span>
@@ -1504,7 +1546,8 @@
     if (!detailed) return sensorZoneHeadline(zone);
 
     const items = zone.sensors || [];
-    const open = items.filter(sensor => sensor.available && sensor.state === 'open');
+    const counted = countedSensors(items);
+    const open = counted.filter(sensor => sensor.available && sensor.state === 'open');
     const admin = state.me && state.me.role === 'admin';
     const rule = sensorRuleLine(zone);
     // Says the same as the rule line when only a door elsewhere is open.
@@ -1527,7 +1570,7 @@
          </div>`
       : '';
 
-    const unreachable = items.filter(sensor => !sensor.available);
+    const unreachable = counted.filter(sensor => !sensor.available);
     const offline = unreachable.length
       ? `<div class="sensor-offline-note">
            <strong>${esc(offlineNote(unreachable))}</strong>
@@ -1541,7 +1584,7 @@
       <section class="card sensor-card">
         <div class="card-head">
           <h2>Doors and windows</h2>
-          <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+          <span class="sensor-count">${esc(sensorCountLabel(countedSensors(items)))}</span>
           ${admin ? `<button class="card-add phone-only" type="button"
             data-add-sensor="${esc(zone.zone_id)}">+ Add</button>` : ''}
         </div>
@@ -1838,7 +1881,7 @@
       <section class="card sensor-card climate-card">
         <div class="card-head">
           <h2>Temperature and humidity</h2>
-          <span class="sensor-count">${esc(sensorCountLabel(items))}</span>
+          <span class="sensor-count">${esc(sensorCountLabel(countedSensors(items)))}</span>
           ${admin ? `<button class="card-add phone-only" type="button"
             data-add-sensor="${esc(zone.zone_id)}">+ Add</button>` : ''}
         </div>
@@ -2338,10 +2381,191 @@
   }
 
   function pairSensorSheet(defaultZoneId = '', replacing = null) {
+    /* With the alarm on, its own doors and thermometers are a second place a
+       sensor can come from — asked first, because nothing is paired for
+       those. A replacement is always paired: an alarm device is not replaced
+       from here. */
+    if (!replacing && alarmSensorsOffered()) {
+      sensorSourceSheet(defaultZoneId);
+      return;
+    }
+    pairNewSensorSheet(defaultZoneId, replacing);
+  }
+
+  function pairNewSensorSheet(defaultZoneId = '', replacing = null) {
     const settings = state.sensorSettings || {};
     const hasWindow = !!(settings.pairing && settings.pairing.supported);
     if (!hasWindow) { simulatedSensorSheet(defaultZoneId, replacing); return; }
     zigbeePairSheet(defaultZoneId, replacing);
+  }
+
+  function alarmSensorsOffered() {
+    const alarm = (state.status || {}).alarm;
+    return !!(alarm && alarm.enabled);
+  }
+
+  function alarmIsSimulated() {
+    const alarm = (state.status || {}).alarm;
+    return !!(alarm && alarm.provider === 'simulated');
+  }
+
+  function sensorSourceSheet(defaultZoneId) {
+    const settings = state.sensorSettings || {};
+    const own = settings.simulated ? 'A simulated sensor' : 'A Zigbee sensor';
+    const ownHint = settings.simulated
+      ? 'Created at once, for trying things out.'
+      : 'Paired with the Zigbee coordinator on this Pi.';
+    const alarmWord = alarmIsSimulated() ? 'the demo alarm' : 'the Verisure alarm';
+    actionMenuSheet('Add a sensor', `
+      <p class="zd-sub">Where does it come from?</p>`, [
+      { icon: 'signal', cls: 'act-rename', label: own, hint: ownHint,
+        run: () => pairNewSensorSheet(defaultZoneId) },
+      { icon: 'door', cls: 'act-move', label: `From ${alarmWord}`,
+        hint: 'A door, window or smoke detector the alarm already has. Nothing to pair.',
+        run: () => verisureSensorSheet(defaultZoneId) },
+    ]);
+  }
+
+  function verisureDeviceLabel(device) {
+    const reading = device.kind === 'climate'
+      ? (device.temperature == null ? 'no reading' : `${Nobo.fmtTemp(device.temperature)}\u00B0`)
+      : device.open == null ? 'state unknown' : device.open ? 'open' : 'closed';
+    const model = device.model ? `${device.model}, ` : '';
+    const taken = device.sensor_id ? ' \u2014 already added' : '';
+    return `${device.name} (${model}${reading})${taken}`;
+  }
+
+  /* The alarm's doors, windows and thermometers, offered as sensors. It is a
+     choice from a list rather than a pairing, because the device already
+     belongs to the alarm; this only decides what the heating makes of it. */
+  async function verisureSensorSheet(defaultZoneId) {
+    const alarmWord = alarmIsSimulated() ? 'The demo alarm' : 'Verisure';
+    workingSheet('Add from the alarm', `Asking ${alarmWord.toLowerCase()} what it has\u2026`);
+    let found;
+    try {
+      found = await Nobo.api.verisureDevices();
+    } catch (e) {
+      closeSheet();
+      Nobo.toast(e.message, 'error');
+      return;
+    }
+    const devices = found.devices || [];
+    const free = devices.filter(device => !device.sensor_id);
+    if (!found.available || !free.length) {
+      openSheet('Add from the alarm', `
+        <p class="zd-sub">${esc(!found.available ? (found.reason || 'The alarm cannot be read right now.')
+          : devices.length ? 'Every device the alarm reports is already a sensor here.'
+          : 'The alarm reported no door, window or temperature devices.')}</p>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="cancel">Close</button>
+        </div>`, (root) => {
+        root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      });
+      return;
+    }
+    const group = (kind, label) => {
+      const list = devices.filter(device => device.kind === kind);
+      if (!list.length) return '';
+      return `<optgroup label="${esc(label)}">${list.map(device => `<option
+        value="${esc(device.device_id)}" ${device.sensor_id ? 'disabled' : ''}
+        >${esc(verisureDeviceLabel(device))}</option>`).join('')}</optgroup>`;
+    };
+    const candidates = (found.backup_candidates || []).filter(item => !item.backed_by);
+    openSheet('Add from the alarm', `
+      <p class="zd-sub">${esc(alarmWord)} reads these about once a minute. A Zigbee
+        sensor in the same place is believed first; this one fills in where there is none.</p>
+      <label class="field"><span>Alarm device</span>
+        <select id="vsDevice">
+          ${group('contact', 'Doors and windows')}
+          ${group('climate', 'Temperature (smoke detectors and sensors)')}
+        </select>
+      </label>
+      <div id="vsKindField"></div>
+      <label class="field"><span>Name</span>
+        <input id="vsName" type="text" maxlength="80" autocomplete="off">
+      </label>
+      <div id="vsUseField"></div>
+      <label class="field" id="vsZoneField"><span>Room</span>
+        <select id="vsZone">${sensorZoneOptions(defaultZoneId)}</select>
+      </label>
+      <label class="field" id="vsBackupField" hidden><span>Backup for</span>
+        <select id="vsBackup">${candidates.map(item => `<option value="${esc(item.sensor_id)}"
+          >${esc(item.name)}${item.zone_id ? ` (${esc(zoneName(item.zone_id) || '')})` : ''}</option>`).join('')}
+        </select>
+        <small>Set aside while the Zigbee sensor reports, and counted in its place while it is offline.</small>
+      </label>
+      <div id="vsClimateNote" class="note" hidden>A smoke detector sits at the
+        ceiling and usually reads a degree or two warm. Where the room also has a
+        Zigbee thermometer, that one is used instead.</div>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="add">Add sensor</button>
+      </div>`, (root) => {
+      const pick = root.querySelector('#vsDevice');
+      const name = root.querySelector('#vsName');
+      const kindField = root.querySelector('#vsKindField');
+      const useField = root.querySelector('#vsUseField');
+      const zoneField = root.querySelector('#vsZoneField');
+      const backupField = root.querySelector('#vsBackupField');
+      const climateNote = root.querySelector('#vsClimateNote');
+      let named = false;
+      name.oninput = () => { named = true; };
+      const device = () => devices.find(item => item.device_id === pick.value);
+      const useBackup = () => {
+        const chosen = root.querySelector('#vsUse');
+        return !!chosen && chosen.value === 'backup';
+      };
+      const showUse = () => {
+        zoneField.hidden = useBackup();
+        backupField.hidden = !useBackup();
+      };
+      const sync = () => {
+        const chosen = device();
+        if (!chosen) return;
+        if (!named) name.value = chosen.name;
+        const climate = chosen.kind === 'climate';
+        kindField.innerHTML = sensorKindField('vsKind',
+          { kind: climate ? 'climate' : chosen.default_kind }, false);
+        climateNote.hidden = !climate;
+        useField.innerHTML = climate || !candidates.length ? '' : `
+          <label class="field"><span>Use it as</span>
+            <select id="vsUse">
+              <option value="own" selected>A sensor of its own in a room</option>
+              <option value="backup">A backup for a Zigbee sensor on the same door or window</option>
+            </select>
+          </label>`;
+        const use = useField.querySelector('#vsUse');
+        if (use) use.onchange = showUse;
+        showUse();
+      };
+      const first = devices.find(item => !item.sensor_id);
+      if (first) pick.value = first.device_id;
+      pick.onchange = sync;
+      sync();
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="add"]').onclick = async (event) => {
+        const label = name.value.trim();
+        if (!label) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        const body = {
+          device_id: pick.value,
+          name: label,
+          kind: root.querySelector('#vsKind').value,
+        };
+        if (useBackup()) body.backup_for = root.querySelector('#vsBackup').value;
+        else body.zone_id = root.querySelector('#vsZone').value;
+        try {
+          await Nobo.api.addVerisureSensor(body);
+          closeSheet();
+          Nobo.toast(`${label} added`);
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
   }
 
   /* The simulator has no radio, so there is no window to wait at: the form is
@@ -2591,6 +2815,7 @@
   function editSensorSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
+    if (isVerisureSensor(sensor)) { editVerisureSensorSheet(sensor); return; }
     /* Whether these sensors can be *made* to say things, which is not the
        same question as whether the hub is simulated: real Zigbee sensors
        beside a demo hub is a supported arrangement, and offering to type
@@ -2685,6 +2910,90 @@
     });
   }
 
+  /* The Zigbee contacts an alarm contact could back up: any not already
+     backed by a different one. */
+  function backupCandidates(sensor) {
+    const all = state.zones.flatMap(zone => zone.sensors || []);
+    const taken = new Set(all
+      .filter(item => isVerisureSensor(item) && item.backup_for && item.sensor_id !== sensor.sensor_id)
+      .map(item => item.backup_for));
+    return all.filter(item => !isVerisureSensor(item) && !taken.has(item.sensor_id));
+  }
+
+  /* An alarm device: its name, door or window, and whether it backs up a
+     Zigbee sensor. Its state is the alarm's to report, so only the demo alarm
+     can be told what to say. */
+  function editVerisureSensorSheet(sensor) {
+    const climate = sensor.kind === 'climate';
+    const demo = alarmIsSimulated();
+    const candidates = climate ? [] : backupCandidates(sensor);
+    openSheet(`Edit ${sensor.name}`, `
+      <p class="zd-sub">Read from the ${demo ? 'demo alarm' : 'Verisure alarm'}.
+        Removing it here leaves it in the alarm.</p>
+      <label class="field"><span>Name</span>
+        <input id="editSensorName" type="text" maxlength="80" value="${esc(sensor.name)}">
+      </label>
+      ${sensorKindField('editSensorKind', sensor, false)}
+      ${candidates.length ? `
+        <label class="field"><span>Backup for</span>
+          <select id="editSensorBackup">
+            <option value="">Nothing \u2014 a sensor of its own</option>
+            ${candidates.map(item => `<option value="${esc(item.sensor_id)}"
+              ${sensor.backup_for === item.sensor_id ? 'selected' : ''}>${esc(item.name)}${
+              item.zone_id ? ` (${esc(zoneName(item.zone_id) || '')})` : ''}</option>`).join('')}
+          </select>
+          <small>A backup stays in its Zigbee sensor's room, and is counted only while that one is offline.</small>
+        </label>` : ''}
+      ${demo ? `
+        <h3>Simulated state</h3>
+        ${climate ? `
+        <label class="field"><span>Temperature (°C)</span>
+          <input id="editSensorTemp" type="number" min="-40" max="80" step="0.1"
+            inputmode="decimal" value="${sensor.temperature == null ? '' : esc(sensor.temperature)}">
+        </label>` : `
+        <label class="field"><span>Contact</span>
+          <select id="editSensorState">
+            ${['closed', 'open'].map(value => `<option value="${value}"
+              ${sensor.state === value ? 'selected' : ''}>${esc(sensorStateLabel(value))}</option>`).join('')}
+          </select>
+        </label>`}
+        <small class="field-hint">Whether it can be read follows the demo alarm's connection.</small>` : ''}
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const name = root.querySelector('#editSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        const body = { name, kind: root.querySelector('#editSensorKind').value };
+        const backup = root.querySelector('#editSensorBackup');
+        if (backup) {
+          if (backup.value) body.backup_for = backup.value;
+          else if (sensor.backup_for) body.clear_backup = true;
+        }
+        try {
+          await Nobo.api.updateSensor(sensor.sensor_id, body);
+          if (demo) {
+            const said = climate
+              ? (root.querySelector('#editSensorTemp').value === '' ? null
+                : { temperature: Number(root.querySelector('#editSensorTemp').value) })
+              : { state: root.querySelector('#editSensorState').value };
+            if (said) await Nobo.api.simulateSensor(sensor.sensor_id, said);
+          }
+          closeSheet();
+          Nobo.toast('Sensor updated');
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
   function moveSensorSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
@@ -2734,7 +3043,9 @@
     const paired = !!(state.sensorSettings && state.sensorSettings.pairing
       && state.sensorSettings.pairing.supported);
     confirmSheet('Remove this sensor?',
-      paired
+      isVerisureSensor(sensor)
+        ? `${sensor.name} stops being a sensor here. It stays in the alarm, and can be added again.`
+        : paired
         ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten. `
           + 'Battery sensors are asleep most of the time, so if it does not answer '
           + 'you will be asked whether to remove it anyway.'
@@ -2970,6 +3281,8 @@
   function sensorMenuSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
+    const verisure = isVerisureSensor(sensor);
+    const backup = verisure && !!sensor.backup_for;
     /* The row on a phone is name and state only; the rest is here. */
     const row = document.createElement('ul');
     row.innerHTML = sensorRow(sensor, false);
@@ -2985,17 +3298,18 @@
       </div>`, [
       { icon: 'rename', cls: 'act-rename', label: 'Edit',
         hint: sensor.kind === 'climate' ? 'Its name'
+          : verisure ? 'Its name, door or window, and what it backs up'
           : 'Its name, and whether it is a door or a window',
         run: () => editSensorSheet(sensorId) },
-      { icon: 'move', cls: 'act-move', label: 'Move to another room',
-        run: () => moveSensorSheet(sensorId) },
-      ...(sensor.kind === 'climate' ? [] : [{
+      ...(backup ? [] : [{ icon: 'move', cls: 'act-move', label: 'Move to another room',
+        run: () => moveSensorSheet(sensorId) }]),
+      ...(sensor.kind === 'climate' || backup ? [] : [{
         icon: 'rooms', cls: 'act-move', label: 'Heating it controls',
         hint: heatingControlsHint(sensor),
         run: () => sensorHeatingSheet(sensorId) }]),
-      { icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
+      ...(verisure ? [] : [{ icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
         hint: 'Pair a new one in its place',
-        run: () => pairSensorSheet('', configuredSensor(sensorId)) },
+        run: () => pairSensorSheet('', configuredSensor(sensorId)) }]),
       { icon: 'remove', cls: 'act-remove', label: 'Remove this sensor',
         run: () => removeSensor(sensorId) },
     ]);
@@ -5131,7 +5445,7 @@
   function sensorMeshNote() {
     if (state.sensorSettings && state.sensorSettings.simulated) return '';
     const routers = state.sensorRouters || [];
-    const sensors = state.sensorDevices || [];
+    const sensors = (state.sensorDevices || []).filter(sensor => !isVerisureSensor(sensor));
     if (!sensors.length && !routers.length) return '';
     if (!routers.length) {
       return `<div class="note">
@@ -5157,9 +5471,12 @@
   function renderSensorSettingsCard(isAdmin) {
     if (!isAdmin || !state.me || !state.sensorSettings) return '';
     const settings = state.sensorSettings;
-    const sensors = allConfiguredSensors();
+    const everything = allConfiguredSensors();
+    const sensors = everything.filter(sensor => !isVerisureSensor(sensor));
+    const fromAlarm = everything.length - sensors.length;
+    const alarmNote = fromAlarm ? ` · ${fromAlarm} from ${alarmIsSimulated() ? 'the demo alarm' : 'Verisure'}` : '';
     const knownZones = new Set(state.zones.map(zone => String(zone.zone_id)));
-    const unassigned = sensors.filter(sensor =>
+    const unassigned = everything.filter(sensor =>
       sensor.zone_id == null || !knownZones.has(String(sensor.zone_id))
     );
     /* Two questions, not one. Whether to use contact sensors at all is a
@@ -5195,7 +5512,7 @@
 
     return settingsSection('sensors', 'Door and Window Sensor Configuration',
       !settings.enabled ? '<b>Off</b>'
-        : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired`, `
+        : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired${alarmNote}`, `
         <p class="zd-sub">Optional door, window and room temperature monitoring.</p>
         ${onOff}
         ${sourceRow}
@@ -5205,8 +5522,10 @@
             <button class="btn btn-add" type="button" data-act="pair-sensor">Add sensor</button>
           </div>
           <div class="sensor-settings-summary">
-            <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired</strong>
-            <span>Open a room to see status and battery, edit or move sensors, and choose what that room should do when a window stays open or the temperature leaves its limits.</span>
+            <strong>${sensors.length} ${sensors.length === 1 ? 'sensor' : 'sensors'} paired${esc(alarmNote)}</strong>
+            <span>${fromAlarm || alarmSensorsOffered()
+              ? 'The alarm\u2019s own doors, windows and smoke detectors can be added too, with Add sensor. A Zigbee sensor in the same place is always believed first. '
+              : ''}Open a room to see status and battery, edit or move sensors, and choose what that room should do when a window stays open or the temperature leaves its limits.</span>
           </div>
           ${sensorMeshNote()}
           ${unassigned.length ? `
@@ -5264,6 +5583,28 @@
     if (!lock.locked) return 'unlocked';
     return lock.outside ? 'locked from outside' : 'locked from inside';
   }
+
+  /* How a Yale Doorman says it was locked, in the words on the lock. Which
+     of these Verisure reports for the * button is not documented anywhere,
+     which is why each one is the user's to place inside or outside. */
+  const LOCK_METHOD_LABELS = {
+    thumb: 'Thumb turn',
+    auto: 'Locked itself (auto-lock)',
+    code: 'Code on the keypad',
+    star: 'The \u2731 button',
+    remote: 'The Verisure app',
+    tag: 'Tag or card',
+    key: 'Key',
+  };
+
+  function lockMethodLabel(method) {
+    return LOCK_METHOD_LABELS[method] || method;
+  }
+
+  const ALARM_OWNED_WORDS = {
+    away: 'The heating is on Away because of the alarm or the lock.',
+    eco: 'The heating is on Eco because the door is locked.',
+  };
 
   /* The Verisure password is only ever sent over HTTPS, or from the Pi
      itself. The server refuses anything else; this says so before anyone
@@ -5330,7 +5671,8 @@
       <div class="sensor-settings-summary alarm-status">
         <strong>${esc(ARM_LABELS[alarm.arm_state] || alarm.arm_state || 'Unknown')}</strong>
         ${locks ? `<ul class="alarm-locks">${locks}</ul>` : ''}
-        ${alarm.owns_away ? '<span>The heating is on Away because the alarm is armed.</span>' : ''}
+        ${alarm.owned_mode && ALARM_OWNED_WORDS[alarm.owned_mode]
+          ? `<span>${esc(ALARM_OWNED_WORDS[alarm.owned_mode])}</span>` : ''}
       </div>`;
   }
 
@@ -5348,7 +5690,8 @@
     if (!alarm || alarm.provider !== 'simulated') return '';
     const lock = (alarm.locks || [])[0];
     const lockState = !lock ? 'unlocked' : !lock.locked ? 'unlocked'
-      : lock.method === 'thumb' ? 'inside' : 'outside';
+      : lock.side === 'inside' ? 'inside' : 'outside';
+    const methods = (state.alarmSettings && state.alarmSettings.lock_methods) || [];
     return `
       <div class="alarm-demo">
         <p class="zd-sub">Demo alarm — press these as if you were at the panel.</p>
@@ -5358,7 +5701,59 @@
         ${lock ? settingRow(lock.name, '', segControl('alarm-sim-lock',
           [['unlocked', 'Open'], ['inside', 'Inside'], ['outside', 'Outside']],
           lockState, { label: `Lock ${lock.name}` })) : ''}
+        ${lock && methods.length ? `
+          <label class="field"><span>Lock it with</span>
+            <select id="alarmSimMethod">
+              <option value="">Choose a way of locking\u2026</option>
+              ${methods.map(method => `<option value="${esc(method)}"
+                ${lock.locked && lock.method === method ? 'selected' : ''}>${esc(lockMethodLabel(method))}</option>`).join('')}
+            </select>
+            <small>Locks the demo door exactly as the real lock would report it, so the
+            inside and outside choices below can be tried.</small>
+          </label>` : ''}
       </div>`;
+  }
+
+  /* What the heating does when the door is locked, which the user chose
+     with the lock's two sides in mind: from outside is usually leaving,
+     from inside is usually bedtime. The alarm outranks the lock. */
+  function alarmLockHeatingRows(settings) {
+    return `
+      ${settingRow('Door locked from outside',
+        'The alarm outranks this: armed away is Away whatever the lock says. Unlocking puts the rooms back on their schedules.',
+        segControl('alarm-lock-outside', [['none', 'Nothing'], ['eco', 'Eco'], ['away', 'Away']],
+          settings.heating_when_locked_outside || 'none', { label: 'Heating when locked from outside' }))}
+      ${settingRow('Door locked from inside',
+        'Eco for the night, say. Away is never replaced by Eco.',
+        segControl('alarm-lock-inside', [['none', 'Nothing'], ['eco', 'Eco']],
+          settings.heating_when_locked_inside || 'none', { label: 'Heating when locked from inside' }))}`;
+  }
+
+  /* Which way of locking means which side of the door. The lock reports how
+     it was locked, never where the person was standing, so this is the
+     user's to say — and the one it last used is marked, so locking it with
+     the \u2731 button once and looking here answers the question. */
+  function alarmLockSidesBlock(settings, alarm) {
+    const sides = settings.lock_sides || {};
+    const seen = new Set((alarm && alarm.locks || [])
+      .filter(lock => lock.locked && lock.method).map(lock => lock.method));
+    const methods = [...new Set([
+      ...(settings.lock_methods || []), ...Object.keys(sides), ...seen,
+    ])];
+    if (!methods.length) return '';
+    return `
+      <details class="alarm-lock-sides">
+        <summary>Which way of locking counts as outside</summary>
+        <p class="zd-sub">The lock says how it was locked, not where you were
+          standing. Lock it once the way you do when leaving, and the method it
+          reported is marked here.</p>
+        ${methods.map(method => settingRow(
+          lockMethodLabel(method),
+          seen.has(method) ? 'How the door is locked right now.' : '',
+          segControl(`alarm-lock-side-${method}`, [['inside', 'Inside'], ['outside', 'Outside']],
+            sides[method] || 'outside', { label: `${lockMethodLabel(method)} counts as` }),
+        )).join('')}
+      </details>`;
   }
 
   function renderAlarmSettingsCard(isAdmin) {
@@ -5402,15 +5797,20 @@
           'Disarming brings the rooms back to their schedules — unless somebody changed the mode by hand in the meantime.', settings)}
         ${alarmOption('away_when_armed_home', 'Away when it is armed at home too',
           'Usually off: armed at home means somebody is in.', settings)}
+        ${alarmLockHeatingRows(settings)}
+        <small class="field-hint">If the house is already on Away when the alarm
+        goes on — chosen by hand, with or without a return date — it is left
+        exactly as it is, and disarming does not lift it. An Away set by the
+        alarm has no return date: it lasts until the alarm is turned off.</small>
         <h4 class="notify-head">Warnings</h4>
         ${alarmOption('warn_when_armed_away', 'Warn if something is open when it is armed away', '', settings)}
         ${alarmOption('warn_when_armed_home', 'Warn if something is open when it is armed at home', '', settings)}
         ${alarmOption('warn_when_locked_outside', 'Warn if something is open when the door is locked from outside',
-          'Locking with the thumb turn counts as being inside.', settings)}
-        ${alarmOption('autolock_counts_as_leaving', 'Count the lock locking itself as leaving',
-          'Off by default: an auto-lock happens whether or not anybody has gone.', settings,
-          !settings.warn_when_locked_outside)}
+          'Marked urgent: nobody is expected to be in.', settings)}
+        ${alarmOption('warn_when_locked_inside', 'Warn if something is open when the door is locked from inside',
+          'For the last one to bed. Not urgent, and it respects quiet hours.', settings)}
         ${noSensors}
+        ${alarmLockSidesBlock(settings, alarm)}
         <small class="field-hint">An email about it is under Alerts. The warning
         waits five minutes, the same as for Away, so shutting a window on the way
         out is not an alarm.</small>`;
@@ -5591,6 +5991,37 @@
         await reloadAlarmSettings();
       });
     });
+    const lockChoice = (seg, field) => {
+      root.querySelectorAll(`[data-seg="${seg}"]`).forEach(button => {
+        button.onclick = guarded(async () => {
+          if (button.getAttribute('aria-pressed') === 'true') return;
+          await saveAlarmSettings({ [field]: button.dataset.value });
+        });
+      });
+    };
+    lockChoice('alarm-lock-outside', 'heating_when_locked_outside');
+    lockChoice('alarm-lock-inside', 'heating_when_locked_inside');
+    root.querySelectorAll('[data-seg^="alarm-lock-side-"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const method = button.dataset.seg.slice('alarm-lock-side-'.length);
+        const details = button.closest('details');
+        await saveAlarmSettings({
+          lock_sides: { ...(settings.lock_sides || {}), [method]: button.dataset.value },
+        });
+        // Re-rendered closed otherwise, which reads as the choice not saving.
+        const again = document.querySelector('.alarm-lock-sides');
+        if (details && again) again.open = true;
+      });
+    });
+    const simMethod = root.querySelector('#alarmSimMethod');
+    if (simMethod) {
+      simMethod.onchange = guarded(async () => {
+        if (!simMethod.value) return;
+        await Nobo.api.simulateAlarm({ lock_method: simMethod.value });
+        await reloadAlarmSettings();
+      });
+    }
     root.querySelectorAll('[data-seg="alarm-sim-lock"]').forEach(button => {
       button.onclick = guarded(async () => {
         if (button.getAttribute('aria-pressed') === 'true') return;
@@ -6554,7 +6985,9 @@
               <small class="field-hint">${esc(types[key].help)}${
                 types[key].unavailable
                   ? ` <strong>${esc(types[key].unavailable)}</strong>`
-                  : ''}</small>
+                  : types[key].note
+                    ? ` <em class="notify-note">${esc(types[key].note)}</em>`
+                    : ''}</small>
             </span>
           </label>`).join('')}
       </div>

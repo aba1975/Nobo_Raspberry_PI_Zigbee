@@ -131,6 +131,10 @@ class ContactSnapshot:
     temperature: Optional[float] = None
     humidity: Optional[float] = None
     pressure: Optional[float] = None
+    #: Where the reading comes from when it is not the sensor provider: only
+    #: ``"verisure"`` today, for an alarm device used as a sensor. Empty for
+    #: the provider's own sensors.
+    source: str = ""
 
     @property
     def is_contact(self) -> bool:

@@ -5,9 +5,14 @@ app — and uses what they say:
 
 | The alarm says | What happens |
 | --- | --- |
-| **Armed away** | The house goes to global **Away**. Disarming brings it back to Home, unless somebody changed the mode in the meantime. |
+| **Armed away** | The house goes to global **Away**, with no return time. Disarming brings it back to Home, unless somebody changed the mode in the meantime. If you had already chosen Away yourself, it is left exactly as you set it. |
 | **Armed away or armed at home** | A warning if a door or window is open. |
-| **Front door locked from outside** | A warning if a door or window is open. Nothing happens to the heating. |
+| **Front door locked from outside** | A warning if a door or window is open. Optionally, Eco or Away until it is unlocked. |
+| **Front door locked from inside** | Optionally a warning, and optionally Eco until it is unlocked. Both off by default. |
+
+The alarm's own door and window sensors, and the temperature its smoke
+detectors measure, can also be added to rooms as sensors — see
+[The alarm's own sensors](#the-alarms-own-sensors).
 
 It is **off by default**, and while it is off nothing about an alarm appears
 anywhere. Turn it on under **Settings → Alarm System**. No extra hardware is
@@ -121,26 +126,52 @@ heating controller is a worse risk than signing in again now and then.
 ## What counts as "locked from outside"
 
 The Yale Doorman reports **how** it was locked, not where the person was.
-So the rules are:
+Each way of locking is read as inside or outside:
 
-| Locked with | Counts as |
+| Locked with | Counts as, unless you change it |
 | --- | --- |
 | The thumb turn | **Inside** — somebody locked themselves in |
-| A code, a tag, the app, or anything the lock reports that we do not recognise | **Outside** |
-| Automatic locking | **Inside**, unless you tick *Count the lock locking itself as leaving* |
+| Automatic locking | **Inside** — it happens whether or not anybody has gone |
+| A code, the ✱ button, a tag, a key, the app | **Outside** |
+| Anything the lock reports that we do not recognise | **Outside** |
 
-Auto-lock is left out by default because it happens whether or not anybody has
-gone. The Verisure app locks remotely, which counts as outside. That is
-deliberate: somebody locking up from the car has left.
+**You can change any of these** under Settings → Alarm System → *Which way of locking counts as
+outside*. The table there lists every method, plus any other name the lock has
+actually reported, and marks the one it used last. Verisure does not document
+which name the Doorman reports for the ✱ button on the outside, so lock the
+door that way once, see what Settings says was used, and set it to Outside if
+it is not already.
+
+An unknown method counts as outside because being wrong that way costs one
+warning; being wrong the other way is a window left open all week. The Verisure
+app locks remotely, which counts as outside. That is deliberate: somebody
+locking up from the car has left.
 
 ## Heating
 
-- Only **armed away** changes the heating, unless you also tick *Away when it is
-  armed at home too*. Armed at home usually means somebody is in.
+- **Armed away** puts the house on Away. Armed at home changes nothing, unless
+  you also tick *Away when it is armed at home too*. Armed at home usually
+  means somebody is in.
+- **The lock** can change the heating too, and each side is chosen separately:
+  - *Locked from outside*: Nothing (the default), Eco, or Away.
+  - *Locked from inside*: Nothing (the default) or Eco — say, Eco for the night
+    when the door is locked at bedtime. Away is not offered for inside: the
+    people who locked it are in the house.
+  - Unlocking lifts only the mode the lock set.
+- **The alarm outranks the lock.** While the alarm is holding Away, locking
+  the door does not turn it into Eco, and unlocking does not lift it.
+- **The alarm's Away has no return time.** It holds until the alarm is
+  disarmed; no away period with an end date is created. If Away was already on
+  when the alarm was armed — set by hand, or by a planned away period — the
+  alarm does not take it over: it keeps its end time, if it had one, and
+  disarming leaves it on.
+- A change to the lock's heating setting applies from the next time the door
+  is locked. It does not reach back to a door that was locked before the
+  change.
 - Away is the same global Away as the button on the front page. The [rooms that
   must not get cold](../README.md#rooms-that-must-not-get-cold) stay on Eco as
   usual.
-- **Disarming lifts only an Away the alarm set.** If the house was already on
+- **Disarming lifts only a mode the alarm set.** If the house was already on
   Away when the alarm was armed, it stays on Away. If somebody changed the mode
   while the alarm was armed, their change wins and disarming leaves it alone.
 - The decision is recorded in `data/alarm_state.json`, so a restart or a power
@@ -161,11 +192,67 @@ as an email (**Alerts → Something is open when the alarm goes on**).
 - It waits **five minutes**, the same as for Away, so shutting a window on the
   way out does not trigger it.
 - Armed away, or locked from outside, is **urgent**: quiet hours do not hold it.
-  Armed at home is a normal warning.
-- It needs the [door and window sensors](SENSORS.md). Without them the options
+  Armed at home, and locked from inside, are normal warnings.
+- *Locked from inside* only warns if you tick it. It is off by default,
+  because the door is locked from inside every evening.
+- It needs door and window sensors: [Zigbee sensors](SENSORS.md), the
+  [alarm's own](#the-alarms-own-sensors), or both. Without them the options
   are shown, and say so.
 - While the alarm is behind the warning, the ordinary *Something is open and
   the house is empty* alert is held back, so you get one message, not two.
+
+## The alarm's own sensors
+
+With the alarm and [the sensors](SENSORS.md) both switched on, **Add sensor**
+on a room asks where the sensor comes from: a new Zigbee sensor, or one the
+alarm already has. Choosing the alarm shows a list of what it reports:
+
+- **Door and window sensors.** They work like a Zigbee contact: open and closed
+  show in the room, feed the left-open warning, the alarm warning and a room's
+  heating rule. A room made just for an outbuilding — a woodshed, say —
+  becomes a [monitoring-only room](SENSORS.md#monitoring-only-rooms) that warns
+  when its door is left open.
+- **Temperatures.** Verisure smoke detectors (and some sirens) measure the
+  temperature, and a room can use it as its thermometer — the same
+  **Actual** reading, the same too-cold and near-freezing warnings.
+
+They are administered like Zigbee sensors — renamed, moved between rooms,
+given heating rules, removed. Removing one here only removes it from this
+application; nothing changes in the alarm.
+
+### Zigbee comes first
+
+A Verisure sensor can be added in one of two ways:
+
+- **As its own sensor**, in a room of its own choosing. Use this where there is
+  no Zigbee sensor, like the woodshed.
+- **As a backup** for a particular Zigbee sensor on the same door. It then sits
+  in that sensor's room and is **not counted** while the Zigbee sensor is
+  reporting. If the Zigbee sensor goes offline, or reports nothing it can be
+  believed about, the Verisure sensor **stands in** for it until it is back.
+  The door is always counted once.
+
+Temperatures follow the same rule without being asked: a Verisure temperature
+is set aside while the room has a Zigbee thermometer with a recent reading,
+and used when it has not.
+
+The room shows which sensor is being counted, and why the other is not.
+
+### What is different about them
+
+- **They are read, not heard.** The alarm is read once a minute, so an opened
+  door can take a minute to show here. A Zigbee sensor shows it in about a
+  second.
+- **No battery or signal.** Verisure does not report either for its sensors
+  through this route, and the alarm looks after its own batteries. So the
+  *battery low* and *not heard from* alerts are Zigbee sensors only; the Alerts
+  page says which alerts an alarm sensor can raise.
+- **Offline means the alarm cannot be read.** When the alarm's reading is more
+  than 15 minutes old, or it has stopped listing the device, the sensor is
+  offline — never closed.
+- **Smoke detectors read warm.** They hang on the ceiling, where the air is
+  warmest, and report perhaps once an hour. They are a fair second opinion; a
+  Zigbee thermometer at sitting height is better, which is why it comes first.
 
 ## Checking for updates
 
@@ -174,10 +261,23 @@ When something changes, the page updates by itself. There is no live feed:
 Verisure's API does not offer one to third parties. So Away can start up to a
 minute after the alarm is armed.
 
+## Read-only, enforced
+
+Every request to Verisure passes through `check_read_only` in
+`app/alarm_verisure.py` before it leaves the Pi. It checks the operation name
+against a short list and refuses anything that is not a query. The list is:
+installations, arm state, locks, door and window sensors, and
+climate readings. A test fails if the module so much as names one of the
+library's commands for arming, disarming or locking.
+
 ## The demo alarm
 
 In demo mode the source can be **Demo**: an invented alarm with a front-door
-lock, with buttons for arming and locking in Settings. It follows exactly the
+lock, four door sensors (front door, patio door, tech room and woodshed) and
+two smoke detectors, with buttons for arming and locking in Settings. The lock
+can be locked with any method the real one reports, to try the inside/outside
+table, and each of its sensors can be opened, closed or given a temperature
+from the sensor's own settings. It follows exactly the
 same rules, so the whole feature can be tried with no Verisure account. It is
 refused on an installation connected to a real hub, where it could put a real
 house on Away.
@@ -189,5 +289,6 @@ house on Away.
 | `app/alarm_provider.py` | The reading every source produces, and the demo alarm |
 | `app/alarm_verisure.py` | Verisure: sign-in, the read-only guard, the sign-in file |
 | `app/alarm_automation.py` | The rules: what counts as leaving, when to set and lift Away |
-| `app/alarm_persistence.py` | Settings, the Away ledger, the demo alarm's state, the sign-in file |
+| `app/alarm_persistence.py` | Settings, the ledger of the mode it holds, the demo alarm's state, the sign-in file |
+| `app/sensor_verisure.py` | The alarm's sensors as room sensors: which were chosen, their readings, and Zigbee first |
 | `app/server.py` | Polling, the heating, the warning, `/api/alarm/*` |
