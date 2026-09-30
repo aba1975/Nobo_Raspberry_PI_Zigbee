@@ -11,7 +11,9 @@ import json
 import os
 import re
 import stat
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import verisure
@@ -29,6 +31,9 @@ PASSWORD = "correct horse battery staple"
 
 INSTALLATIONS = {"data": {"account": {"installations": [
     {"giid": "111", "alias": "Mostugu", "address": {"street": "Somewhere 1"}},
+]}}}
+TWO_INSTALLATIONS = {"data": {"account": {"installations": [
+    {"giid": "111", "alias": "Mostugu"}, {"giid": "222", "alias": "Cabin"},
 ]}}}
 
 READING = [
@@ -53,6 +58,8 @@ class FakeSession:
     code_error = None
     read_error = None
     refresh_error = None
+    trusted_error = None
+    trusted_answer = "{}"
     answer = READING
 
     def __init__(self, username, password, cookie_file_name=None):
@@ -92,6 +99,18 @@ class FakeSession:
         self._trust_token = {"trustTokenValue": "trust-me"}
         self._pickle()
         return INSTALLATIONS
+
+    def _post(self, url, headers=None, auth=None, cookies=None):
+        """The trusted sign-in after the code: vsure's /auth/login with the
+        password and the trust cookie, as Home Assistant signs in."""
+        self.calls.append(("post", url, auth == (self._username, PASSWORD),
+                           sorted(dict(cookies.items()))))
+        if self.trusted_error:
+            raise self.trusted_error
+        return SimpleNamespace(
+            text=self.trusted_answer,
+            cookies={"vid": "trusted", "vs-access": "a", "vs-refresh": "trusted-refresh"},
+        )
 
     def get_installations(self):
         self.calls.append("get_installations")
@@ -182,16 +201,66 @@ def test_signing_in_with_a_code_stores_the_session_and_not_the_password(account)
     assert stored["email"] == "anders@example.com"
     assert stored["giid"] == "111", "one installation is chosen by itself"
     assert stored["trust_token"] == "trust-me"
-    assert stored["cookies"]["vs-refresh"] == "refresh"
+    assert stored["cookies"]["vs-refresh"] == "trusted-refresh"
+    assert stored["cookies"]["vs-trust"] == "t"
     assert "password" not in stored
     session = FakeSession.instances[0]
     assert session._password == "", "the password must not outlive the sign-in"
 
 
-def test_the_code_step_does_not_repeat_the_password(account):
+def test_after_the_code_it_signs_in_once_more_with_the_trust(account):
+    """The session the code step returns was refused at its first refresh on
+    the real account. Home Assistant keeps the one a trusted sign-in gives."""
     _sign_in(account)
     session = FakeSession.instances[0]
-    assert session.calls == ["login", "request_mfa", ("validate_mfa", "123456")]
+    assert session.calls == [
+        "login", "request_mfa", ("validate_mfa", "123456"),
+        ("post", "/auth/login", True, ["vs-trust"]),
+        "get_installations",
+    ]
+
+
+def test_if_the_trusted_sign_in_fails_the_codes_session_is_kept(account):
+    FakeSession.trusted_error = verisure.RateLimitError("slow down")
+    try:
+        _sign_in(account)
+    finally:
+        FakeSession.trusted_error = None
+    stored = json.loads(_stored_text())
+    assert stored["cookies"]["vs-refresh"] == "refresh"
+    assert FakeSession.instances[0]._password == ""
+
+
+def test_a_trust_that_is_not_accepted_keeps_the_codes_session(account):
+    FakeSession.trusted_answer = '{"stepUpToken": "again"}'
+    try:
+        _sign_in(account)
+    finally:
+        FakeSession.trusted_answer = "{}"
+    assert json.loads(_stored_text())["cookies"]["vs-refresh"] == "refresh"
+
+
+def test_signing_in_again_remembers_which_installation(account, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "INSTALLATIONS", TWO_INSTALLATIONS)
+    _sign_in(account)
+    assert json.loads(_stored_text())["giid"] is None, "two houses: the user chooses"
+    account.choose_installation("222")
+    # Verisure ends the sign-in; the file keeps the choice, without cookies.
+    stored = json.loads(_stored_text())
+    alarm_persistence.save_session({**stored, "cookies": {}, "trust_token": None})
+    FakeSession.instances.clear()
+    _sign_in(account)
+    assert json.loads(_stored_text())["giid"] == "222"
+
+
+def test_a_different_account_does_not_inherit_the_choice(account, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "INSTALLATIONS", TWO_INSTALLATIONS)
+    _sign_in(account)
+    account.choose_installation("222")
+    stored = json.loads(_stored_text())
+    alarm_persistence.save_session({**stored, "email": "someone@else.no", "cookies": {}})
+    _sign_in(account)
+    assert json.loads(_stored_text())["giid"] is None
 
 
 def test_an_account_without_a_code_signs_straight_in(account):

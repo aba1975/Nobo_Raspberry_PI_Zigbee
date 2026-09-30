@@ -352,8 +352,20 @@ class _FakeVerisureSession:
         pass
 
     def validate_mfa(self, code):
-        self._cookies = {"vid": "cookie-value-secret", "vs-refresh": "refresh-secret"}
+        self._cookies = {"vid": "cookie-value-secret", "vs-refresh": "refresh-secret",
+                         "vs-trust-x": "trust-cookie-secret"}
         self._trust_token = {"trustTokenValue": "trust-secret"}
+        return self.get_installations()
+
+    def _post(self, url, headers=None, auth=None, cookies=None):
+        from types import SimpleNamespace
+
+        assert url == "/auth/login" and auth == (self._username, SECRET_PASSWORD)
+        self.calls.append("trusted")
+        return SimpleNamespace(text="{}", cookies={
+            "vid": "trusted-secret", "vs-refresh": "trusted-refresh-secret"})
+
+    def get_installations(self):
         return {"data": {"account": {"installations": [{"giid": "999", "alias": "Hytta"}]}}}
 
     def set_giid(self, giid):
@@ -424,12 +436,14 @@ def test_sign_in_end_to_end_keeps_every_secret_to_itself(client, fake_verisure):
         client.get("/api/log").json(),
     ])
     for secret in (SECRET_PASSWORD, "cookie-value-secret", "refresh-secret",
-                   "trust-secret", "someone@example.no"):
+                   "trust-secret", "trust-cookie-secret", "trusted-secret",
+                   "trusted-refresh-secret", "someone@example.no"):
         assert secret not in everything, secret
     assert "s***@example.no" in everything
 
     stored = alarm_persistence.VERISURE_SESSION_FILE.read_text()
     assert SECRET_PASSWORD not in stored
+    assert "trusted-refresh-secret" in stored, "the trusted sign-in's session is kept"
     assert client.get("/api/status").json()["alarm"]["arm_state"] == "disarmed"
 
 

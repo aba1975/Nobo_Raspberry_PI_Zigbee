@@ -350,13 +350,66 @@ class VerisureAlarm:
             "email": session._username,
             "cookies": {},
             "trust_token": trust.get("trustTokenValue") if isinstance(trust, dict) else None,
-            "giid": installations[0]["giid"] if len(installations) == 1 else None,
+            "giid": self._giid_for(session._username, installations),
             "installations": installations,
             "refreshed_at": self._clock(),
         }
         # The password goes no further than this.
         session._password = ""
         return self._store(session, stored)
+
+    @staticmethod
+    def _giid_for(email: str, installations: List[dict]) -> Optional[str]:
+        """The installation to read after signing in. Signing in again is
+        usually because Verisure ended the last sign-in, and asking again
+        which house this is would leave the alarm unread until somebody
+        noticed. So the earlier choice stands, if it is still on the account."""
+        if len(installations) == 1:
+            return installations[0]["giid"]
+        previous = alarm_persistence.load_session()
+        if (
+            previous is not None and previous.get("giid")
+            and (previous.get("email") or "").lower() == (email or "").lower()
+            and any(item["giid"] == previous["giid"] for item in installations)
+        ):
+            return previous["giid"]
+        return None
+
+    def _login_trusted(self, session) -> Any:
+        """Sign in once more, with the password and the trust the code just
+        earned, and keep that session rather than the code's.
+
+        This is vsure's ``login_cookie``, from the cookies in memory instead
+        of its pickle. Home Assistant signs in this way after the code, and
+        refreshes that session every ten minutes; the session the code step
+        itself returns was refused at its first refresh on the real account.
+        The password is still only the one typed a moment ago, and is
+        dropped straight after, as before."""
+        import requests
+
+        errors = self._errors()
+        trusted = requests.sessions.RequestsCookieJar()
+        for name, value in (session._cookies or {}).items():
+            if "vs-trust" in name:
+                trusted.set(name, value)
+        if not len(trusted):
+            raise errors.LoginError("Verisure returned no trust cookie")
+        response = session._post(
+            url="/auth/login",
+            headers={"APPLICATION_ID": "PS_PYTHON"},
+            auth=(session._username, session._password),
+            cookies=trusted,
+        )
+        if "stepUpToken" in response.text:
+            raise errors.LoginError("Verisure asked for a code again")
+        # A fresh jar: the trust cookie and this sign-in's own cookies, with
+        # nothing of the code step's session left to be confused with them.
+        trusted.update(response.cookies)
+        session._cookies = trusted
+        installations = session.get_installations()
+        if not isinstance(installations, dict) or "errors" in installations:
+            raise errors.LoginError("Failed to log in")
+        return installations
 
     def _begin_sync(self, email: str, password: str) -> str:
         with self._lock:
@@ -392,6 +445,15 @@ class VerisureAlarm:
             try:
                 # Answers with the installations, as a plain login does.
                 response = session.validate_mfa(code)
+                try:
+                    response = self._login_trusted(session)
+                except errors.Error as exc:
+                    # The code's own session still reads the alarm; it may
+                    # just not outlive its first refresh.
+                    logger.warning(
+                        "Verisure trusted sign-in failed, keeping the code's session: %s",
+                        type(exc).__name__,
+                    )
                 self._finish(session, response)
                 self._pending = None
                 return "signed_in"

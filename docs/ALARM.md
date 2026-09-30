@@ -53,7 +53,10 @@ as an offline door sensor. "I cannot tell you" is never taken to mean
 
 **Your password is never stored.** When you sign in, the password is held in
 memory, for at most five minutes, until you enter the code Verisure sends you.
-Then it is dropped. It is never written to disk, never logged, and never sent
+Straight after the code is accepted it is sent to Verisure once more, with the
+trust the code has just earned. That is how Home Assistant signs in, and the
+session it gives is the one kept; the session the code step returns on its
+own was refused at its first renewal on a real account. Then it is dropped. It is never written to disk, never logged, and never sent
 back to the browser.
 
 What is kept is the **sign-in Verisure hands back** — the same thing your phone
@@ -107,7 +110,8 @@ fewer requests, polling backs off: 5, 15, 30 and then 60 minutes.
 2. **Settings → Alarm System → On**, and Source **Verisure** if you are asked.
 3. **Sign in to Verisure** — the email and password you use in the Verisure app.
 4. Verisure sends a code by text message or email. Type it in.
-5. If the account has more than one installation, choose which one.
+5. If the account has more than one installation, choose which one. Signing
+   in again later keeps that choice.
 
 Settings then shows the alarm's state and the lock, and the System status line
 has an **Alarm** row.
