@@ -6,6 +6,7 @@ reaches Verisure. No email is sent: the notifier's ``notify`` is replaced.
 """
 
 import asyncio
+import copy
 import json
 import time
 
@@ -39,9 +40,13 @@ def plain_http_client():
 
 @pytest.fixture(autouse=True)
 def demo_house_at_home(monkeypatch):
-    server.demo_global_mode = "normal"
+    # Through monkeypatch so the mode is put back afterwards: a test that
+    # leaves the demo house on Away breaks whichever file runs next.
+    monkeypatch.setattr(server, "demo_global_mode", "normal")
     monkeypatch.setattr(server, "global_mode_source", "manual")
+    zones = copy.deepcopy(server.DEMO_ZONES)
     yield
+    server.DEMO_ZONES[:] = zones
 
 
 def turn_on(client, **extra):
@@ -99,6 +104,24 @@ def test_the_demo_alarm_is_refused_on_a_real_hub(client, monkeypatch):
     response = client.put("/api/alarm/settings", json={"enabled": True, "provider": "simulated"})
     assert response.status_code == 400
     assert server.alarm_settings.enabled is False
+
+
+def test_on_a_real_hub_turning_it_on_is_one_press(client, monkeypatch):
+    """The stored default source is the demo alarm, which a real hub refuses.
+    Found on the production Pi: the On button sent only ``enabled`` and got
+    a 400, because nothing on that page can choose the only other source."""
+    monkeypatch.setattr(server, "DEMO_MODE", False)
+    settings = client.get("/api/alarm/settings").json()
+    assert settings["provider"] == "verisure"
+    assert settings["providers"] == ["verisure"]
+
+    response = client.put("/api/alarm/settings", json={"enabled": True})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["enabled"] is True and body["provider"] == "verisure"
+    assert body["status"]["connection"] == "not_configured"
+    assert server.alarm_settings.provider == "verisure"
+    assert client.get("/api/capabilities").json()["alarm"]["provider"] == "verisure"
 
 
 def test_an_unknown_provider_is_refused(client):

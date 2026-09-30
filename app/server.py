@@ -3608,7 +3608,7 @@ async def get_capabilities_endpoint():
         },
         "alarm": {
             "enabled": alarm_settings.enabled,
-            "provider": alarm_settings.provider if alarm_settings.enabled else None,
+            "provider": _alarm_current_settings().provider if alarm_settings.enabled else None,
             "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
         },
     }
@@ -6508,6 +6508,18 @@ alarm_poll_lock = asyncio.Lock()
 _alarm_view: Optional[tuple] = None
 
 
+def _alarm_current_settings() -> AlarmSettings:
+    """The settings as this installation can use them.
+
+    The stored default source is the demo alarm, which a real hub refuses. On
+    a real hub an unchosen source therefore reads as Verisure, the only one it
+    offers, so turning the integration on is one press rather than a refusal.
+    """
+    if not DEMO_MODE and alarm_settings.provider == "simulated":
+        return dataclasses.replace(alarm_settings, provider="verisure")
+    return alarm_settings
+
+
 def _alarm_may_act() -> bool:
     """A demo alarm may drive the demo hub, never a real one."""
     return DEMO_MODE or alarm_settings.provider != "simulated"
@@ -6779,7 +6791,7 @@ def _alarm_public() -> Optional[Dict[str, Any]]:
 
 def _alarm_settings_response() -> Dict[str, Any]:
     return {
-        **dataclasses.asdict(alarm_settings),
+        **dataclasses.asdict(_alarm_current_settings()),
         "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
         "sensors_enabled": sensor_settings.enabled,
         "verisure": verisure_account.public_state(),
@@ -6854,7 +6866,8 @@ async def update_alarm_settings(request: Request, body: AlarmSettingsUpdate):
     global alarm_settings
     _require_admin(_get_session_or_401(request))
     changes = body.model_dump(exclude_none=True)
-    provider = changes.get("provider", alarm_settings.provider)
+    previous = _alarm_current_settings()
+    provider = changes.get("provider", previous.provider)
     if provider not in alarm_persistence.PROVIDERS:
         raise HTTPException(status_code=400, detail="Unknown alarm provider")
     if provider == "simulated" and not DEMO_MODE:
@@ -6862,9 +6875,8 @@ async def update_alarm_settings(request: Request, body: AlarmSettingsUpdate):
             status_code=400,
             detail="The demo alarm is only available in demo mode",
         )
-    previous = alarm_settings
     updated = dataclasses.replace(previous, **changes)
-    if updated == previous:
+    if updated == alarm_settings:
         return _alarm_settings_response()
 
     restart = (updated.enabled, updated.provider) != (previous.enabled, previous.provider)
