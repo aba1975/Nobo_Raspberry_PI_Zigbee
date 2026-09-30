@@ -1329,6 +1329,13 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px solid var(--rule); border-radius: var(--radius-sm); background: var(--paper);
 }
 .sensor-settings-summary span { color: var(--ink-soft); font-size: .82rem; line-height: 1.4; }
+/* The alarm's own state, read from the alarm company: what is armed, which
+   lock is locked and from which side. */
+.alarm-locks { list-style: none; margin: .1rem 0 0; padding: 0; display: grid; gap: .15rem; }
+.alarm-locks li { font-size: .88rem; }
+.alarm-locks li span { color: var(--ink-soft); }
+.alarm-account { margin-top: .75rem; }
+.alarm-demo { margin-top: .75rem; }
 .sensor-unassigned-list { list-style: none; margin: .55rem 0 0; padding: 0; display: grid; gap: .35rem; }
 .sensor-unassigned-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .sensor-unassigned-list li > span:first-child { display: flex; align-items: center; gap: .45rem; min-width: 0; }

@@ -75,6 +75,11 @@ if [ ! -d "$TMPDIR/backup/data" ]; then
     fi
 fi
 
+# The Verisure session is left out on purpose. It is a live key to somebody's
+# alarm account, and a backup is exactly the kind of file that ends up copied
+# to a laptop or a cloud drive. Restoring without it costs one sign-in.
+rm -rf "$TMPDIR/backup/data/verisure"
+
 # Back up Caddy's certificate store, if HTTPS is in use.
 #
 # This matters more than it looks. With Caddy's own CA, the private root lives

@@ -36,6 +36,12 @@ import notifications
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
+import alarm_automation
+import alarm_persistence
+import dataclasses
+from alarm_persistence import AlarmLedger, AlarmSettings
+from alarm_provider import AlarmReading, AlarmUnavailable, SimulatedAlarm
+from alarm_verisure import VerisureAlarm, VerisureError
 from climate_history import ClimateHistory
 from pressure_outlook import PressureHistory
 from sensor_automation import (
@@ -921,7 +927,7 @@ _load_persisted_hub_config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
-    global main_event_loop, sensor_wakeup
+    global main_event_loop, sensor_wakeup, alarm_wakeup, alarm_poll_lock
     # Startup
     mode_label = "demo" if DEMO_MODE else "production"
     logger.info("Starting Nobø Web Control Server — mode=%s", mode_label)
@@ -955,7 +961,11 @@ async def lifespan(app: FastAPI):
         # Don't fail startup - allow server to run and show disconnected state
 
     await start_sensor_service()
-    
+    # Made here, on the loop that will wait on them, not at import.
+    alarm_wakeup = asyncio.Event()
+    alarm_poll_lock = asyncio.Lock()
+    await start_alarm_service()
+
     # Start background reconnection task (no-op in demo mode)
     reconnect_task = asyncio.create_task(reconnect_loop())
     # Start background away-schedule checker
@@ -965,6 +975,7 @@ async def lifespan(app: FastAPI):
     # a room that stopped reporting sends nothing to react to.
     watch_task = asyncio.create_task(notification_watch_loop())
     sensor_task = asyncio.create_task(sensor_automation_loop())
+    alarm_task = asyncio.create_task(alarm_loop())
 
     yield
     
@@ -973,6 +984,7 @@ async def lifespan(app: FastAPI):
     schedule_task.cancel()
     watch_task.cancel()
     sensor_task.cancel()
+    alarm_task.cancel()
     await stop_sensor_service()
     logger.info("Shutting down server...")
     # Close all websocket connections
@@ -2350,6 +2362,87 @@ SENSOR_BATTERY_LOW_PERCENT = 20
 SENSOR_AWAY_GRACE_SECONDS = 5 * 60
 
 
+ALARM_LEAVING_WORDS = {
+    "armed_away": ("Alarm on, and open: {rooms}", "The alarm is armed away"),
+    "armed_home": ("Alarm on at home, and open: {rooms}", "The alarm is armed at home"),
+    "locked_outside": ("Locked up, and open: {rooms}", "{lock} was locked from outside"),
+}
+
+
+def _evaluate_alarm_left_open(
+    result: SensorAutomationResult, zones_by_id: Dict[str, str],
+    now: float, deadlines: List[float],
+) -> bool:
+    """Something open while the alarm says the house is being left.
+
+    Returns whether this alert is raised *and* wanted, which is when it stands
+    in for the Away alert. An unknown alarm — Verisure not answering — changes
+    nothing: the warning neither rises nor clears on a guess.
+    """
+    known, why = _alarm_leaving()
+    key = "alarm-left-open"
+    if not known:
+        return alarm_ledger.left_open_raised and notifier._wants("alarm_left_open")
+
+    open_rooms: List[str] = []
+    for zone_id, aggregate in result.zones.items():
+        started = aggregate.open_started_at
+        if started is None:
+            continue
+        due = started + SENSOR_AWAY_GRACE_SECONDS
+        if now >= due:
+            open_rooms.append(zones_by_id.get(zone_id, f"Zone {zone_id}"))
+        elif why is not None:
+            deadlines.append(due)
+
+    raised = bool(why and open_rooms)
+    if raised:
+        rooms = ", ".join(sorted(open_rooms))
+        subject, headline = ALARM_LEAVING_WORDS[why.reason]
+        headline = headline.format(lock=why.lock_name or "The door")
+        offline = sorted(
+            snapshot.name for snapshot in sensor_snapshots
+            if snapshot.is_contact and not snapshot.available
+        )
+        also = (
+            f"\n\n{len(offline)} door or window sensor(s) are offline and cannot be "
+            f"checked: {', '.join(offline)}."
+            if offline else ""
+        )
+        notifier.set_condition(
+            "alarm_left_open", key, True,
+            subject=subject.format(rooms=rooms),
+            body=(
+                f"{headline} at {site_settings()['display_name']}, and these are "
+                f"still open: {rooms}.{also}\n\n"
+                f"A sensor knocked off its frame reads open for ever and looks exactly "
+                f"the same from here, so it is worth checking the app before anyone "
+                f"goes back."
+            ),
+            severity="critical" if why.reason != "armed_home" else "warning",
+            recovery_subject="Everything is shut again",
+            recovery_body="Every contact sensor reports closed again.",
+            recovery_event_type="alarm_left_open",
+            highlight=sorted(open_rooms),
+            facts=(
+                ("Open", rooms),
+                ("Alarm", headline),
+            ),
+        )
+    elif why is None:
+        # Disarmed, or unlocked: somebody is back, which is not news to them.
+        notifier.set_condition("alarm_left_open", key, False)
+    else:
+        notifier.set_condition(
+            "alarm_left_open", key, False,
+            recovery_subject="Everything is shut again",
+            recovery_body="Every contact sensor reports closed again.",
+            recovery_event_type="alarm_left_open",
+        )
+    _set_alarm_ledger(left_open_raised=raised)
+    return raised and notifier._wants("alarm_left_open")
+
+
 def _evaluate_sensor_alerts(
     result: SensorAutomationResult, zones_by_id: Dict[str, str]
 ) -> Optional[float]:
@@ -2365,6 +2458,11 @@ def _evaluate_sensor_alerts(
     """
     now = time.time()
     deadlines: List[float] = []
+
+    # The alarm's version of the same warning comes first, because while it is
+    # raised it stands in for the Away one below: leaving with the alarm on
+    # usually means the house is on Away too, and one event is one email.
+    alarm_covers = _evaluate_alarm_left_open(result, zones_by_id, now, deadlines)
 
     # --- open, with nobody coming back ------------------------------------
     #
@@ -2391,7 +2489,7 @@ def _evaluate_sensor_alerts(
         deadlines.extend(away_due)
 
     key = "contact-open-while-away"
-    if away and open_rooms:
+    if away and open_rooms and not alarm_covers:
         rooms = ", ".join(sorted(open_rooms))
         notifier.set_condition(
             "contact_open_while_away", key, True,
@@ -2420,7 +2518,7 @@ def _evaluate_sensor_alerts(
                 ))),
             ),
         )
-    elif not away:
+    elif not away or alarm_covers:
         # Coming home clears it without an email. "You are back" is not news to
         # somebody who has just walked in, and the recovery message exists for
         # the other ending: that somebody went and shut it.
@@ -3508,6 +3606,11 @@ async def get_capabilities_endpoint():
             "simulation_supported": True,
             "reason": None,
         },
+        "alarm": {
+            "enabled": alarm_settings.enabled,
+            "provider": alarm_settings.provider if alarm_settings.enabled else None,
+            "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
+        },
     }
 
 
@@ -4012,6 +4115,9 @@ async def get_status():
         # with one room kept on Eco by an away exception reads as "mixed" if
         # you only look at what each zone is running.
         "global_override_mode": _global_override_mode() if connected else None,
+        # Null unless the alarm integration is on, so a house without one
+        # carries nothing to explain.
+        "alarm": _alarm_public(),
     }
 
 
@@ -4397,14 +4503,21 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
     with the sensor source control a few topics above, which greys the Zigbee
     option out and says why rather than hiding it.
     """
+    types = out.get("event_types", {})
+    if not alarm_settings.enabled:
+        for key in ("alarm_left_open", "alarm_connection_lost"):
+            spec = types.get(key)
+            if spec is None:
+                continue
+            types[key] = {**spec, "unavailable": "Needs the alarm integration, which is off."}
+            out.get("events", {})[key] = False
     if sensor_settings.enabled:
         return out
     reason = "Needs door, window or temperature sensors, which are off."
-    types = out.get("event_types", {})
     for key in (
         "contact_left_open", "contact_closed", "contact_open_long",
         "sensor_quiet", "sensor_battery_low", "sensor_all_quiet",
-        "contact_open_while_away",
+        "contact_open_while_away", "alarm_left_open",
         "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
         "room_near_freezing", "humidity_high",
     ):
@@ -6215,7 +6328,8 @@ async def _apply_global_mode_internal(mode: str, source: str = "schedule") -> No
             demo_zone['mode'] = 'normal' if mode == 'home' else mode
         add_log_entry(
             "sent",
-            f"[DEMO] Schedule: create_override({mode.upper()}, CONSTANT, GLOBAL)",
+            f"[DEMO] {'Alarm' if source == 'alarm' else 'Schedule'}: "
+            f"create_override({mode.upper()}, CONSTANT, GLOBAL)",
             command=f"create_override {mode} CONSTANT GLOBAL",
             source=source,
         )
@@ -6358,6 +6472,513 @@ async def away_schedule_loop():
             pass
 
         last_active = currently_active
+
+
+# ===========================================================================
+# Alarm integration (optional). See docs/ALARM.md.
+#
+# Reads an alarm system — a demo one, or the user's Verisure account — and
+# does two things with it: armed away puts the house on global Away (and
+# disarming lifts that Away again, but only if the alarm still owns it), and
+# armed, or the front door locked from outside, makes an open door or window
+# worth a warning. It never sends anything to the alarm.
+# ===========================================================================
+
+# Verisure is polled like Home Assistant polls it: once a minute, backing off
+# hard when rate-limited so the account is never locked out.
+ALARM_POLL_SECONDS = 60
+ALARM_RATE_LIMIT_BACKOFF = (5 * 60, 15 * 60, 30 * 60, 60 * 60)
+ALARM_ERROR_BACKOFF = (60, 2 * 60, 5 * 60, 10 * 60)
+ALARM_SIGNED_OUT_POLL_SECONDS = 60 * 60
+# A reading older than this is not believed: the window warning neither rises
+# nor clears on it, and the heating is left alone.
+ALARM_STALE_SECONDS = 15 * 60
+ALARM_CONNECTION_ALERT_SECONDS = 30 * 60
+
+alarm_settings: AlarmSettings = alarm_persistence.load_settings()
+alarm_ledger: AlarmLedger = alarm_persistence.load_ledger()
+alarm_provider = None
+verisure_account = VerisureAlarm()
+alarm_reading: Optional[AlarmReading] = None
+alarm_failure: Optional[AlarmUnavailable] = None
+alarm_failures = 0
+alarm_last_good: Optional[float] = None
+alarm_wakeup: Optional[asyncio.Event] = None
+alarm_poll_lock = asyncio.Lock()
+_alarm_view: Optional[tuple] = None
+
+
+def _alarm_may_act() -> bool:
+    """A demo alarm may drive the demo hub, never a real one."""
+    return DEMO_MODE or alarm_settings.provider != "simulated"
+
+
+def _set_alarm_ledger(**changes: Any) -> None:
+    """Change only the named fields, so two writers cannot undo each other."""
+    global alarm_ledger
+    updated = dataclasses.replace(alarm_ledger, **changes)
+    if updated != alarm_ledger:
+        alarm_ledger = updated
+        alarm_persistence.save_ledger(updated)
+
+
+def _save_global_mode_source(value: str) -> None:
+    global global_mode_source
+    global_mode_source = value
+    config_persistence.save_server_state({"global_mode_source": value})
+
+
+def _alarm_hand_over_away() -> None:
+    """The alarm stops owning the Away it set; the house is left as it is.
+
+    Used when the integration is switched off or no longer wants Away. Lifting
+    the Away there and then would warm an empty house because somebody changed
+    a setting, so it becomes an ordinary manual Away instead.
+    """
+    if alarm_ledger.owns_away:
+        _set_alarm_ledger(owns_away=False)
+    if global_mode_source == alarm_automation.SOURCE:
+        _save_global_mode_source("manual")
+
+
+def _create_alarm_provider():
+    if alarm_settings.provider == "verisure":
+        return verisure_account
+    return SimulatedAlarm(alarm_persistence.load_simulated, alarm_persistence.save_simulated)
+
+
+async def start_alarm_service() -> None:
+    global alarm_provider, alarm_last_good, alarm_wakeup
+    if alarm_wakeup is None:
+        alarm_wakeup = asyncio.Event()
+    if not alarm_settings.enabled or alarm_provider is not None:
+        return
+    alarm_provider = _create_alarm_provider()
+    alarm_last_good = time.time()
+    notifier.restore_condition("alarm-left-open", alarm_ledger.left_open_raised)
+    notifier.restore_condition("alarm-connection", alarm_ledger.connection_raised)
+    alarm_wakeup.set()
+
+
+async def stop_alarm_service() -> None:
+    global alarm_provider, alarm_reading, alarm_failure, alarm_failures, _alarm_view
+    alarm_provider = None
+    alarm_reading = None
+    alarm_failure = None
+    alarm_failures = 0
+    _alarm_view = None
+    notifier.set_condition("alarm_left_open", "alarm-left-open", False)
+    notifier.set_condition("alarm_connection_lost", "alarm-connection", False)
+    _set_alarm_ledger(left_open_raised=False, connection_raised=False)
+    wake_sensor_automation()
+
+
+def _alarm_leaving() -> tuple:
+    """(known, Leaving or None). Unknown when the last reading is too old."""
+    if alarm_provider is None:
+        return True, None
+    reading = alarm_reading
+    if reading is None or time.time() - reading.read_at > ALARM_STALE_SECONDS:
+        return False, None
+    return True, alarm_automation.leaving(reading, alarm_settings)
+
+
+def _alarm_backoff(failure: AlarmUnavailable) -> float:
+    if failure.kind == "rate_limited":
+        table = ALARM_RATE_LIMIT_BACKOFF
+    elif failure.kind == "unreachable":
+        table = ALARM_ERROR_BACKOFF
+    else:
+        return ALARM_SIGNED_OUT_POLL_SECONDS
+    return float(table[min(alarm_failures, len(table)) - 1])
+
+
+async def _alarm_apply_heating() -> None:
+    with connection_lock:
+        connected = hub_connected
+    decision = alarm_automation.decide_heating(
+        alarm_ledger,
+        alarm_reading,
+        alarm_settings,
+        global_mode=_global_override_mode() if connected else None,
+        global_source=global_mode_source,
+        hub_connected=connected,
+        may_act=_alarm_may_act(),
+    )
+    if decision.action is not None:
+        await _apply_global_mode_internal(decision.action, source=alarm_automation.SOURCE)
+        with connection_lock:
+            still_connected = hub_connected
+        if not still_connected:
+            # The hub went while the command was being sent. Nothing is
+            # recorded, so the same decision is made on the next reading.
+            return
+        if decision.action == "away":
+            _save_global_mode_source(alarm_automation.SOURCE)
+            add_log_entry("received", "Alarm armed — GLOBAL Away", source="alarm")
+        else:
+            _save_global_mode_source("manual")
+            add_log_entry(
+                "received", "Alarm disarmed — Away lifted, rooms back on their schedules",
+                source="alarm",
+            )
+    _set_alarm_ledger(
+        handled_event=decision.ledger.handled_event,
+        owns_away=decision.ledger.owns_away,
+    )
+
+
+def _alarm_connection_alert() -> None:
+    failure = alarm_failure
+    since = alarm_last_good or time.time()
+    # Not set up yet is a step still to take, not a fault worth an email.
+    raised = failure is not None and failure.kind != "not_configured" and (
+        failure.kind == "signed_out"
+        or time.time() - since >= ALARM_CONNECTION_ALERT_SECONDS
+    )
+    notifier.set_condition(
+        "alarm_connection_lost", "alarm-connection", raised,
+        subject="The alarm cannot be read",
+        body=(
+            f"{site_settings()['display_name']} cannot read the Verisure alarm: "
+            f"{failure.args[0] if failure else ''}\n\n"
+            "Until this is fixed the alarm will not put the heating on Away and will "
+            "not warn about open doors and windows. The heating is left as it is."
+        ),
+        severity="warning",
+        recovery_subject="The alarm can be read again",
+        recovery_body="The Verisure alarm is being read again.",
+        recovery_event_type="alarm_connection_lost",
+    )
+    _set_alarm_ledger(connection_raised=raised)
+
+
+def _alarm_signature() -> tuple:
+    reading = alarm_reading
+    return (
+        alarm_provider is not None,
+        alarm_failure.kind if alarm_failure else None,
+        None if reading is None else (
+            reading.arm_state, reading.arm_changed_at, reading.locks,
+        ),
+        _alarm_leaving(),
+        alarm_ledger.owns_away,
+    )
+
+
+async def _alarm_announce() -> None:
+    """Tell the window warning and the browsers, but only about a change."""
+    global _alarm_view
+    view = _alarm_signature()
+    if view != _alarm_view:
+        _alarm_view = view
+        wake_sensor_automation()
+        await broadcast_zone_update()
+
+
+async def alarm_poll_once() -> float:
+    """Read the alarm once and act on it. Returns seconds until the next read."""
+    global alarm_reading, alarm_failure, alarm_failures, alarm_last_good
+    async with alarm_poll_lock:
+        provider = alarm_provider
+        if provider is None:
+            return float(ALARM_POLL_SECONDS)
+        try:
+            reading = await provider.read()
+        except AlarmUnavailable as failure:
+            if provider is not alarm_provider:
+                return float(ALARM_POLL_SECONDS)
+            alarm_failure = failure
+            alarm_failures += 1
+            delay = _alarm_backoff(failure)
+        else:
+            if provider is not alarm_provider:
+                # Settings changed while this was being read.
+                return float(ALARM_POLL_SECONDS)
+            alarm_reading = reading
+            alarm_failure = None
+            alarm_failures = 0
+            alarm_last_good = time.time()
+            await _alarm_apply_heating()
+            delay = float(ALARM_POLL_SECONDS)
+        _alarm_connection_alert()
+    await _alarm_announce()
+    return delay
+
+
+async def alarm_loop() -> None:
+    global alarm_wakeup
+    if alarm_wakeup is None:
+        alarm_wakeup = asyncio.Event()
+    while True:
+        try:
+            delay = await alarm_poll_once() if alarm_provider is not None else None
+            try:
+                await asyncio.wait_for(alarm_wakeup.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            alarm_wakeup.clear()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The same guard every background loop here has: one bad pass
+            # must not end the loop for good. Nothing from Verisure reaches
+            # this point — the provider turns its errors into our own.
+            logger.error("Alarm loop error: %s", exc)
+            await asyncio.sleep(ALARM_POLL_SECONDS)
+
+
+def wake_alarm() -> None:
+    if alarm_wakeup is not None:
+        alarm_wakeup.set()
+
+
+ARM_STATE_LABELS = {
+    "disarmed": "Disarmed",
+    "armed_home": "Armed at home",
+    "armed_away": "Armed away",
+}
+
+
+def _alarm_public() -> Optional[Dict[str, Any]]:
+    """What any signed-in user may see. Nothing about the account itself."""
+    if not alarm_settings.enabled:
+        return None
+    reading = alarm_reading
+    known, why = _alarm_leaving()
+    failure = alarm_failure
+    return {
+        "enabled": True,
+        "provider": alarm_settings.provider,
+        "connection": failure.kind if failure else ("ok" if reading else "starting"),
+        "message": failure.args[0] if failure else None,
+        "known": known,
+        "arm_state": reading.arm_state if reading else None,
+        "arm_changed_at": reading.arm_changed_at if reading else None,
+        "locks": [
+            {
+                "lock_id": lock.lock_id,
+                "name": lock.name,
+                "locked": lock.locked,
+                "method": lock.method,
+                "outside": alarm_automation.lock_is_outside(lock, alarm_settings),
+                "changed_at": lock.changed_at,
+            }
+            for lock in (reading.locks if reading else ())
+        ],
+        "leaving": (
+            {"reason": why.reason, "lock_name": why.lock_name, "since": why.since}
+            if why else None
+        ),
+        "owns_away": alarm_ledger.owns_away and global_mode_source == alarm_automation.SOURCE,
+        "read_at": (
+            datetime.fromtimestamp(reading.read_at, timezone.utc).isoformat() if reading else None
+        ),
+    }
+
+
+def _alarm_settings_response() -> Dict[str, Any]:
+    return {
+        **dataclasses.asdict(alarm_settings),
+        "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
+        "sensors_enabled": sensor_settings.enabled,
+        "verisure": verisure_account.public_state(),
+        "status": _alarm_public(),
+    }
+
+
+def _require_secure_transport(request: Request) -> None:
+    """The Verisure password is only accepted over HTTPS, or from the Pi itself.
+
+    uvicorn is started with ``--proxy-headers --forwarded-allow-ips=127.0.0.1``,
+    so the scheme is already Caddy's when Caddy is in front and a forged header
+    from anywhere else is ignored.
+    """
+    if request.url.scheme == "https":
+        return
+    host = request.client.host if request.client else ""
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        pass
+    raise HTTPException(
+        status_code=403,
+        detail="Signing in to Verisure needs HTTPS. Open this page with https:// and try again.",
+    )
+
+
+def _require_verisure_selected() -> None:
+    if not alarm_settings.enabled or alarm_settings.provider != "verisure":
+        raise HTTPException(status_code=409, detail="Choose Verisure as the alarm first")
+
+
+class AlarmSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    away_when_armed_away: Optional[bool] = None
+    away_when_armed_home: Optional[bool] = None
+    warn_when_armed_away: Optional[bool] = None
+    warn_when_armed_home: Optional[bool] = None
+    warn_when_locked_outside: Optional[bool] = None
+    autolock_counts_as_leaving: Optional[bool] = None
+
+
+class VerisureLogin(BaseModel):
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=256)
+
+
+class VerisureCode(BaseModel):
+    code: str = Field(max_length=16)
+
+
+class VerisureInstallation(BaseModel):
+    giid: str = Field(max_length=64)
+
+
+class AlarmSimulation(BaseModel):
+    arm_state: Optional[str] = None
+    lock: Optional[str] = None
+    lock_id: str = "front-door"
+
+
+@app.get("/api/alarm/settings")
+async def get_alarm_settings(request: Request):
+    _require_admin(_get_session_or_401(request))
+    return _alarm_settings_response()
+
+
+@app.put("/api/alarm/settings")
+async def update_alarm_settings(request: Request, body: AlarmSettingsUpdate):
+    global alarm_settings
+    _require_admin(_get_session_or_401(request))
+    changes = body.model_dump(exclude_none=True)
+    provider = changes.get("provider", alarm_settings.provider)
+    if provider not in alarm_persistence.PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown alarm provider")
+    if provider == "simulated" and not DEMO_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail="The demo alarm is only available in demo mode",
+        )
+    previous = alarm_settings
+    updated = dataclasses.replace(previous, **changes)
+    if updated == previous:
+        return _alarm_settings_response()
+
+    restart = (updated.enabled, updated.provider) != (previous.enabled, previous.provider)
+    if restart or not alarm_automation.wants_away(
+        alarm_reading.arm_state if alarm_reading else None, updated
+    ):
+        _alarm_hand_over_away()
+    if restart:
+        # A new source starts with nothing handled, so whatever it reports
+        # first is acted on; the old one's arm events mean nothing to it.
+        _set_alarm_ledger(handled_event=None)
+
+    alarm_persistence.save_settings(updated)
+    alarm_settings = updated
+    if restart:
+        await stop_alarm_service()
+        if previous.provider == "verisure" and (
+            not updated.enabled or updated.provider != "verisure"
+        ):
+            # Off means off: the session is revoked at Verisure and deleted
+            # here, not left lying in the data directory.
+            await verisure_account.sign_out()
+        await start_alarm_service()
+        if alarm_provider is not None:
+            await alarm_poll_once()
+    else:
+        await _alarm_announce()
+        wake_sensor_automation()
+    add_log_entry(
+        "sent",
+        "Alarm integration turned on" if updated.enabled and not previous.enabled
+        else "Alarm integration turned off" if previous.enabled and not updated.enabled
+        else "Alarm settings changed",
+        command="alarm settings",
+        source="api",
+    )
+    return _alarm_settings_response()
+
+
+def _verisure_http_error(exc: VerisureError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@app.post("/api/alarm/verisure/login")
+async def verisure_login(request: Request, body: VerisureLogin):
+    _require_admin(_get_session_or_401(request))
+    _require_secure_transport(request)
+    _require_verisure_selected()
+    try:
+        outcome = await verisure_account.begin_login(body.email, body.password)
+    except VerisureError as exc:
+        raise _verisure_http_error(exc) from None
+    if outcome == "signed_in":
+        add_log_entry("sent", "Signed in to Verisure", command="verisure sign-in", source="api")
+        wake_alarm()
+    return {"status": outcome, "verisure": verisure_account.public_state()}
+
+
+@app.post("/api/alarm/verisure/code")
+async def verisure_code(request: Request, body: VerisureCode):
+    _require_admin(_get_session_or_401(request))
+    _require_secure_transport(request)
+    _require_verisure_selected()
+    try:
+        outcome = await verisure_account.submit_code(body.code)
+    except VerisureError as exc:
+        raise _verisure_http_error(exc) from None
+    add_log_entry("sent", "Signed in to Verisure", command="verisure sign-in", source="api")
+    await alarm_poll_once()
+    return {"status": outcome, "verisure": verisure_account.public_state()}
+
+
+@app.post("/api/alarm/verisure/installation")
+async def verisure_installation(request: Request, body: VerisureInstallation):
+    _require_admin(_get_session_or_401(request))
+    _require_verisure_selected()
+    try:
+        verisure_account.choose_installation(body.giid)
+    except VerisureError as exc:
+        raise _verisure_http_error(exc) from None
+    _set_alarm_ledger(handled_event=None)
+    await alarm_poll_once()
+    return _alarm_settings_response()
+
+
+@app.post("/api/alarm/verisure/logout")
+async def verisure_logout(request: Request):
+    _require_admin(_get_session_or_401(request))
+    verisure_account.cancel_login()
+    await verisure_account.sign_out()
+    add_log_entry("sent", "Signed out of Verisure", command="verisure sign-out", source="api")
+    if alarm_provider is not None:
+        await alarm_poll_once()
+    return _alarm_settings_response()
+
+
+@app.post("/api/alarm/simulate")
+async def simulate_alarm(request: Request, body: AlarmSimulation):
+    """Arm, disarm or lock the demo alarm. Demo mode and the demo alarm only."""
+    _require_admin(_get_session_or_401(request))
+    provider = alarm_provider
+    if not isinstance(provider, SimulatedAlarm):
+        raise HTTPException(status_code=409, detail="The demo alarm is not in use")
+    try:
+        if body.arm_state is not None:
+            provider.set_arm_state(body.arm_state)
+        if body.lock is not None:
+            provider.set_lock(body.lock_id, body.lock)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such lock") from None
+    await alarm_poll_once()
+    return _alarm_public()
 
 
 @app.get("/api/week_profiles")

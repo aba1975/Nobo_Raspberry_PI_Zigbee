@@ -153,6 +153,11 @@ def test_only_honest_alerts_remain():
     - ``room_near_freezing`` / ``humidity_high`` — the same thermometer, read
       against a fixed frost line and a room's own humidity maximum. Humidity
       waits out a delay so a shower is not an alarm.
+    - ``alarm_left_open`` — the Away alert's evidence, with the alarm's word
+      for "nobody is here" instead of the global override. Read from the
+      alarm company's servers, and says so.
+    - ``alarm_connection_lost`` — the one fault the alarm integration can
+      report about itself: it has been signed out, or cannot be read.
     """
     assert set(notifications.EVENT_TYPES) == {
         "hub_offline", "hub_online", "changed_elsewhere", "away_period",
@@ -161,6 +166,7 @@ def test_only_honest_alerts_remain():
         "contact_open_while_away",
         "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
         "room_near_freezing", "humidity_high",
+        "alarm_left_open", "alarm_connection_lost",
     }
 
 
@@ -175,6 +181,10 @@ def test_only_the_alerts_that_cannot_wait_ignore_quiet_hours():
 
     A room near freezing is the third. A pipe freezes overnight, so an alert
     held until morning arrives after the damage it exists to prevent.
+
+    The alarm's left-open warning is the Away one by another route — armed
+    away or locked from outside means somebody has just left — so it is urgent
+    for the same reason. Armed at home is not: somebody is inside.
     """
     import re
 
@@ -186,7 +196,9 @@ def test_only_the_alerts_that_cannot_wait_ignore_quiet_hours():
         head = block[:block.index(")\n")] if ")\n" in block else block[:2000]
         if 'severity="critical"' in head:
             urgent.add(re.search(r'"([a-z_]+)"', head).group(1))
-    assert urgent == {"hub_offline", "contact_open_while_away", "room_near_freezing"}
+    assert urgent == {
+        "hub_offline", "contact_open_while_away", "room_near_freezing", "alarm_left_open",
+    }
 
 
 def test_every_alert_states_its_own_limit():

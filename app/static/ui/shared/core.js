@@ -123,6 +123,21 @@ const Nobo = (() => {
                                   method: 'POST', body: JSON.stringify({ seconds }) }),
     cancelSensorPairing: ()   => req('/api/sensors/pairing', { method: 'DELETE' }),
 
+    /* The alarm integration. Admin only. The Verisure password goes to the
+       server once, over HTTPS, and is never sent back or kept. */
+    alarmSettings:     ()     => req('/api/alarm/settings'),
+    setAlarmSettings:  (body) => req('/api/alarm/settings', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    verisureLogin:     (email, password) => req('/api/alarm/verisure/login', {
+                                  method: 'POST', body: JSON.stringify({ email, password }) }),
+    verisureCode:      (code) => req('/api/alarm/verisure/code', {
+                                  method: 'POST', body: JSON.stringify({ code }) }),
+    verisureInstallation: (giid) => req('/api/alarm/verisure/installation', {
+                                  method: 'POST', body: JSON.stringify({ giid }) }),
+    verisureLogout:    ()     => req('/api/alarm/verisure/logout', { method: 'POST' }),
+    simulateAlarm:     (body) => req('/api/alarm/simulate', {
+                                  method: 'POST', body: JSON.stringify(body) }),
+
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {
@@ -279,6 +294,9 @@ const Nobo = (() => {
              '<path d="M13.8 19.6a2.1 2.1 0 0 1-3.6 0"/>',
     person:  '<circle cx="12" cy="8.1" r="3.8"/><path d="M4.9 20.5a7.3 7.3 0 0 1 14.2 0"/>',
     pulse:   '<path d="M2.8 12.3h4.3l2.6-6.6 3.9 12.6 2.5-6h5.1"/>',
+    /* A shield, for the alarm: the thing that watches the house when nobody is in it. */
+    shield:  '<path d="M12 3.2 4.6 6v5.6c0 4.6 3.1 8 7.4 9.2 4.3-1.2 7.4-4.6 7.4-9.2V6z"/>' +
+             '<path d="m8.9 12.1 2.2 2.2 4-4.2"/>',
     info:    '<circle cx="12" cy="12" r="8.8"/><path d="M12 11.2v5.4"/>' +
              '<circle cx="12" cy="7.8" r=".95" fill="currentColor" stroke="none"/>',
   };

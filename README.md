@@ -91,6 +91,15 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Room thermometers** | Aqara temperature, humidity and pressure sensors pair the same way. A room with one shows its temperature where the heater reports none, and humidity and pressure in the room. The measured value is always labelled **Actual**, beside what the room is set to. Each room can have a maximum and a minimum: warn only, or warn and hold Eco or Away while too warm, or Eco or Comfort while too cold, until it is half a degree back inside. It also warns about air that stays damp (a humidity maximum, after a delay so a shower is not an alarm), and about any room below 5 °C, and shows the last 24 hours' lowest and highest. See [Room thermometers](docs/SENSORS.md#room-thermometers). Not yet tested with a real thermometer. |
 | **Rooms with no heater** | A room with no Nobø equipment can still be monitored. Warnings work; heating actions are simply unavailable. Such a room can be set to have no heating schedule at all, so it shows no week and no mode. New rooms are added under Settings → Rooms and Groups → **Add room**. |
 
+### Alarm system (optional)
+
+| Feature | What it does |
+| --- | --- |
+| **Verisure alarm and Yale Doorman** | Reads your Verisure alarm, and a Yale Doorman that shows up in the Verisure app. Off unless you turn it on under **Settings → Alarm System**. No extra hardware: the Pi reads Verisure's servers, as the Verisure app does. **It only ever reads** — nothing here can arm, disarm or unlock anything. |
+| **Away when the alarm is armed** | Armed away puts the house on global Away. Disarming brings it back to Home, unless somebody changed the mode by hand in the meantime. Only an Away the alarm set is ever lifted. |
+| **Warn when you leave with something open** | Armed, or the front door locked from outside, with a door or window open: a warning on the front page after five minutes, naming the rooms, and optionally an email. Locked from outside changes nothing else. |
+| **Your Verisure account** | The password is never stored. It is used once, with the code Verisure sends, and then dropped. The sign-in Verisure hands back is kept in a private file, left out of backups and deleted when you sign out. Signing in needs HTTPS. See [docs/ALARM.md](docs/ALARM.md). Not yet run against a real Verisure account. |
+
 ### Heating control
 
 | Feature | What it does |
@@ -689,6 +698,13 @@ A note on the last one, because the obvious implementation is wrong: nineteen
 silent sensors is not nineteen flat batteries. Reporting it per sensor would
 fill an inbox with the wrong diagnosis at the moment somebody most needs the
 right one.
+
+With the [alarm system](docs/ALARM.md) switched on, two more appear:
+
+| Event | What it means |
+| --- | --- |
+| **Something is open when the alarm goes on** | The alarm is armed, or the front door is locked from outside, and a door or window is open. Held for five minutes, like the one above, and replaces it while the alarm is the reason, so you get one email and not two. **Urgent** unless the alarm is only armed at home. |
+| **The alarm cannot be read** | Verisure has ended this system's sign-in, or has not answered for half an hour. The heating is left alone meanwhile; sign in again under Settings. |
 
 Alerts arrive as **HTML with the plain text kept underneath**, so a client that
 refuses HTML loses nothing and the plain version stays the one of record. The
@@ -2147,6 +2163,12 @@ sudo systemctl restart nobo-control
 The restart is not optional: the running application keeps its own copy of this
 data in memory and would overwrite what you just restored.
 
+**Your Verisure sign-in is not backed up**, on purpose: `data/verisure/` is
+left out, because a copy of it is a key to your alarm account. After a restore,
+sign in again under Settings → Alarm System. The alarm's settings
+(`alarm_settings.json`) and what it is holding (`alarm_state.json`) are backed
+up as usual.
+
 The optional volumes, `backup/caddy-data` and `backup/zigbee2mqtt-data`, are
 restored into their Docker volumes with the service stopped. For Zigbee, follow
 *Moving the dongle to another installation* in [docs/SENSORS.md](docs/SENSORS.md):
@@ -2550,6 +2572,11 @@ overrides the mounted files, which is exactly the bug this avoids.
   README use `123456789012`, which is not a real hub.
 - The data volume holds your user accounts. Treat a backup of it like a
   password file.
+- **The Verisure integration keeps no password.** It keeps the sign-in Verisure
+  returns, in a folder only the application can read, and never in a backup.
+  It can only read the alarm: every request is checked against a list of three
+  read-only queries before it leaves the Pi. The sign-in page refuses plain
+  http. See [docs/ALARM.md](docs/ALARM.md#how-your-verisure-account-is-protected).
 
 ## Reference documents
 

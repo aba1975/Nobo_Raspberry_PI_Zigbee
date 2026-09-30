@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import auth
 import config_persistence
 import sensor_persistence
+import alarm_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +149,16 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sensor_persistence, "SENSOR_HEATING_LINKS_FILE", tmp_path / "sensor_heating_links.json",
     )
+    # The alarm integration, including the Verisure session folder: a test
+    # must never find — or leave — a real sign-in.
+    monkeypatch.setattr(alarm_persistence, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(alarm_persistence, "ALARM_SETTINGS_FILE", tmp_path / "alarm_settings.json")
+    monkeypatch.setattr(alarm_persistence, "ALARM_STATE_FILE", tmp_path / "alarm_state.json")
+    monkeypatch.setattr(alarm_persistence, "SIMULATED_ALARM_FILE", tmp_path / "simulated_alarm.json")
+    monkeypatch.setattr(alarm_persistence, "VERISURE_DIR", tmp_path / "verisure")
+    monkeypatch.setattr(
+        alarm_persistence, "VERISURE_SESSION_FILE", tmp_path / "verisure" / "session.json",
+    )
     # A module-level history would carry one test's readings into the next.
     server_module = sys.modules.get("server")
     if server_module is not None and hasattr(server_module, "climate_history"):
@@ -156,6 +167,18 @@ def redirect_persistence(tmp_path, monkeypatch):
         monkeypatch.setattr(server_module, "climate_history", ClimateHistory(
             save=sensor_persistence.save_climate_history,
         ))
+    if server_module is not None and hasattr(server_module, "alarm_settings"):
+        # Off, as on a fresh install, whatever the developer's own data holds.
+        from alarm_persistence import AlarmLedger, AlarmSettings
+        from alarm_verisure import VerisureAlarm
+
+        for name, value in (
+            ("alarm_settings", AlarmSettings()), ("alarm_ledger", AlarmLedger()),
+            ("alarm_provider", None), ("verisure_account", VerisureAlarm()),
+            ("alarm_reading", None), ("alarm_failure", None), ("alarm_failures", 0),
+            ("alarm_last_good", None), ("_alarm_view", None),
+        ):
+            monkeypatch.setattr(server_module, name, value)
     if server_module is not None and hasattr(server_module, "sensor_heating_links"):
         monkeypatch.setattr(server_module, "sensor_heating_links", {})
     if server_module is not None and hasattr(server_module, "pressure_history"):

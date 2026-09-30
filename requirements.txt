@@ -8,3 +8,7 @@ python-multipart>=0.0.7
 # Only used when the contact-sensor provider is set to zigbee2mqtt; the import
 # is lazy, so a Nobø-only installation never loads it.
 aiomqtt>=2.0.0
+# Only used when the alarm integration is set to Verisure; imported lazily, so
+# nothing loads it unless somebody signs in. Pinned: the API it speaks is
+# unofficial, and a new release is worth reading before it is trusted.
+vsure==2.10.1

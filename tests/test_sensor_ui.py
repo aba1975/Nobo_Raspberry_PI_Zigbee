@@ -433,7 +433,8 @@ def _render_trip_alert(zones, status, away_period=None):
     wanted = [
         "function sensorKindLabel", "function sensorGroupNoun",
         "function sensorCountLabel", "function compactSensorNames",
-        "function awayNow", "function openWhileAway", "function tripAlertHtml",
+        "function awayNow", "function alarmLeaving", "function leavingSentence",
+        "function openWhileAway", "function tripAlertHtml",
     ]
     lifted = []
     for marker in wanted:

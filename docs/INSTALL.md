@@ -230,6 +230,22 @@ under the sensor's **Heating it controls**.
 
 ---
 
+## Optional: a Verisure alarm
+
+If you have a Verisure alarm (and a Yale Doorman in the Verisure app), the
+house can go to Away when the alarm is armed, and warn you when you lock up with
+a window open. Nothing to install and no extra hardware.
+
+1. Set up **HTTPS** first — see [a proper address](#optional-a-proper-address-instead-of-an-ip)
+   below. The Verisure password is refused over plain http.
+2. **Settings → Alarm System → On**, then **Sign in to Verisure**.
+3. Type the code Verisure sends you.
+
+Your password is not stored. Now and then Verisure ends the sign-in, and you
+sign in again. The full story is in [ALARM.md](ALARM.md).
+
+---
+
 ## Looking after it
 
 | I want to... | Type this |
@@ -245,6 +261,7 @@ settings, accounts, room groups, sensor names and rules, alerts and — importan
 re-pairing every sensor by hand, at every window. With a real hub, the rooms,
 heaters and schedules themselves are stored in the hub, so they are not in the
 backup and are not lost if the Pi is.
+The Verisure sign-in is deliberately left out: after restoring, sign in again.
 
 It starts itself after a power cut. Nothing to do.
 

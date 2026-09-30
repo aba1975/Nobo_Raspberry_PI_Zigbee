@@ -208,6 +208,7 @@
     if (site) state.site = site;
     if (!state.me) state.me = await Nobo.api.me().catch(() => null);
     if (state.me && state.me.role === 'admin') {
+      state.alarmSettings = await Nobo.api.alarmSettings().catch(() => state.alarmSettings);
       state.sensorSettings = await Nobo.api.sensorSettings().catch(() => state.sensorSettings);
       const network = state.sensorSettings && state.sensorSettings.enabled
         ? await Nobo.api.sensorNetwork().catch(() => null)
@@ -322,8 +323,30 @@
       || Boolean(trip.enabled && trip.currently_active);
   }
 
+  /* The alarm's version of "nobody is here": armed, or the front door locked
+     from outside. Null when there is no alarm, or nothing it says counts as
+     leaving — including when it cannot be read, which is not a reason to
+     warn. */
+  function alarmLeaving() {
+    const alarm = (state.status || {}).alarm;
+    return (alarm && alarm.known && alarm.leaving) || null;
+  }
+
+  /* Why the card thinks the house is being left, in one sentence. The alarm
+     is named first because it is the more specific of the two. */
+  function leavingSentence() {
+    const why = alarmLeaving();
+    const place = SITE_IN().charAt(0).toUpperCase() + SITE_IN().slice(1);
+    if (why && why.reason === 'armed_away') return 'The alarm is armed — nobody is expected to be here.';
+    if (why && why.reason === 'armed_home') return 'The alarm is armed at home.';
+    if (why && why.reason === 'locked_outside') {
+      return `${why.lock_name || 'The door'} was locked from outside.`;
+    }
+    return `${place} is on Away — nobody is expected to be here.`;
+  }
+
   function openWhileAway() {
-    if (!awayNow()) return null;
+    if (!awayNow() && !alarmLeaving()) return null;
     const rooms = state.zones
       .map(zone => ({
         zone,
@@ -372,8 +395,7 @@
       <span class="trip-alert-icon" aria-hidden="true">${Nobo.icon('alert')}</span>
       <div class="trip-alert-body">
         <strong>${esc(headline)}</strong>
-        <p>${esc(SITE_IN().charAt(0).toUpperCase() + SITE_IN().slice(1))} is on
-          Away — nobody is expected to be here.</p>
+        <p>${esc(leavingSentence())}</p>
         ${where ? `<ul class="trip-alert-rooms">${where}</ul>` : ''}
         ${unchecked}
       </div>`;
@@ -528,7 +550,18 @@
         <button class="btn btn-danger" data-act="delete-trip" type="button">Delete away period</button>`;
 
     } else {
-      if (mode === 'away') {
+      if (mode === 'away' && state.status && state.status.alarm && state.status.alarm.owns_away) {
+        /* The alarm put it there and will take it back off when it is
+           disarmed. Pressing a mode by hand takes it over from the alarm. */
+        card.classList.add('is-away');
+        stateEl.textContent = 'Away while the alarm is armed';
+        detail.textContent  = `The alarm put ${SITE_IN()} on Away when it was armed. Disarming it brings every room back to its schedule.`;
+        actions.innerHTML = `
+          <button class="btn btn-primary" data-act="arrive" type="button">I'm back now</button>
+          <button class="btn" data-act="plan" type="button">Set a return date</button>`;
+        wireTripActions(actions);
+        return;
+      } else if (mode === 'away') {
         /* Away with no window: the same state the "Away" mode button produces.
            It never ends by itself, so the way out has to be on this card. */
         card.classList.add('is-away');
@@ -3356,6 +3389,7 @@
     const hub = state.hub || {};
     const info = state.hubInfo || {};
     const sensorLine = sensorSystemLine(state.zones);
+    const alarmLine = alarmSystemLine(st.alarm);
     const rows = [
       ['Rooms', String(s.zoneCount)],
       ['Average temperature', s.averageTemp == null ? 'No sensors' : Nobo.fmtTemp(s.averageTemp) + '\u00B0'],
@@ -3366,6 +3400,7 @@
          separate failure. The row is absent, not empty, when the feature is
          off, so a Nobø-only installation gains nothing to explain. */
       ...(sensorLine ? [['Sensors', sensorLine]] : []),
+      ...(alarmLine ? [['Alarm', alarmLine]] : []),
       ['Hub', hub.demo_mode ? 'Demo mode' : (hub.serial_display || 'Unknown')],
       ['Time zone', st.timezone || 'Unknown'],
     ];
@@ -4405,14 +4440,15 @@
    *
    * One server buffer holds three kinds of entry, told apart by `source`:
    * a change made through the app ('api'), the away scheduler acting on its
-   * own ('schedule'), and the hub connection itself ('hub'). Anything with
+   * own ('schedule'), the alarm integration putting the house on Away or
+   * back ('alarm'), and the hub connection itself ('hub'). Anything with
    * direction 'error' is a problem whatever its source. The filters are built
    * on those fields rather than on the wording of the message.
    * ---------------------------------------------------------------- */
 
   const LOG_FILTERS = {
     all:      { label: 'Everything', match: () => true },
-    changes:  { label: 'Changes',    match: e => e.source === 'api' || e.source === 'schedule' },
+    changes:  { label: 'Changes',    match: e => ['api', 'schedule', 'alarm'].includes(e.source) },
     hub:      { label: 'Hub',        match: e => e.source === 'hub' },
     problems: { label: 'Problems',   match: e => e.direction === 'error' },
   };
@@ -4499,11 +4535,12 @@
     const dir = isError ? 'Problem'
       : e.direction === 'received' ? 'From hub'
       : e.source === 'schedule' ? 'Schedule'
+      : e.source === 'alarm' ? 'Alarm'
       : e.source === 'hub' ? 'Hub'
       : 'Change';
     const badgeClass = isError ? 'badge-mode-comfort'
       : e.source === 'hub' || e.direction === 'received' ? 'badge-mode-away'
-      : e.source === 'schedule' ? 'badge-mode-normal'
+      : e.source === 'schedule' || e.source === 'alarm' ? 'badge-mode-normal'
       : 'badge-ok';
 
     return `
@@ -5191,6 +5228,378 @@
       `, { icon: 'contact' });
   }
 
+  /* ------------------------------------------------------------------
+   * The alarm integration
+   *
+   * Optional, and off by default. It reads an alarm — Verisure, or an
+   * invented one in demo mode — and never writes to it: nothing on this page
+   * can arm, disarm or unlock anything. Armed away puts the house on Away;
+   * armed, or the front door locked from outside, makes an open door or
+   * window worth a warning. See docs/ALARM.md.
+   * ---------------------------------------------------------------- */
+
+  const ARM_LABELS = {
+    disarmed: 'Disarmed',
+    armed_home: 'Armed at home',
+    armed_away: 'Armed away',
+  };
+
+  const ALARM_PROVIDER_LABELS = { simulated: 'Demo', verisure: 'Verisure' };
+
+  /* What the alarm is doing, for the System status grid. Null when the
+     integration is off, so a house without one has nothing to explain. */
+  function alarmSystemLine(alarm) {
+    if (!alarm) return null;
+    const source = ALARM_PROVIDER_LABELS[alarm.provider] || alarm.provider;
+    if (alarm.connection === 'signed_out') return `${source} · signed out`;
+    if (alarm.connection === 'not_configured') return `${source} · not set up`;
+    if (alarm.connection === 'rate_limited') return `${source} · asked to wait`;
+    if (alarm.connection === 'unreachable') return `${source} · not answering`;
+    if (!alarm.arm_state) return `${source} · reading…`;
+    const locks = (alarm.locks || []).map(lock => `${lock.name} ${alarmLockWords(lock)}`);
+    return [source, ARM_LABELS[alarm.arm_state] || alarm.arm_state, ...locks].join(' · ');
+  }
+
+  function alarmLockWords(lock) {
+    if (!lock.locked) return 'unlocked';
+    return lock.outside ? 'locked from outside' : 'locked from inside';
+  }
+
+  /* The Verisure password is only ever sent over HTTPS, or from the Pi
+     itself. The server refuses anything else; this says so before anyone
+     types it. */
+  function alarmTransportSecure() {
+    const host = window.location.hostname;
+    return window.location.protocol === 'https:'
+      || host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  }
+
+  function alarmAccountBlock(settings) {
+    const account = settings.verisure || {};
+    const secure = alarmTransportSecure();
+    const httpsNote = secure ? '' : `
+      <div class="note note-warn"><strong>Signing in needs HTTPS</strong>
+        <span>This page was opened over plain http, so a password typed here
+        could be read on the way. Open it with https:// to sign in.</span></div>`;
+    if (account.signed_in) {
+      const choices = account.installations || [];
+      const picker = choices.length > 1 ? `
+        <label class="field"><span>Installation</span>
+          <select id="alarmInstallation">
+            ${choices.map(item => `<option value="${esc(item.giid)}"
+              ${item.alias === account.installation ? 'selected' : ''}>${esc(item.alias)}</option>`).join('')}
+          </select>
+        </label>` : '';
+      return `
+        <div class="alarm-account">
+          <div class="user-row">
+            <div><strong>Signed in to Verisure</strong>
+              <small class="field-hint">${esc(account.email || '')}${
+                account.installation ? ` · ${esc(account.installation)}` : ''}</small></div>
+            <button class="btn" type="button" data-act="alarm-signout">Sign out</button>
+          </div>
+          ${picker}
+        </div>`;
+    }
+    const lapsed = account.email ? `
+      <div class="note note-warn"><strong>Verisure ended the sign-in</strong>
+        <span>Sign in again to carry on. Until then the alarm is not read, and the
+        heating is left exactly as it is.</span></div>` : '';
+    return `
+      ${lapsed}
+      ${httpsNote}
+      <div class="sheet-actions">
+        <button class="btn btn-primary" type="button" data-act="alarm-signin"
+          ${secure ? '' : 'disabled'}>Sign in to Verisure</button>
+      </div>
+      <small class="field-hint">Your password is used once, to sign in, and is not
+      stored. Verisure then sends a code by text message or email. What is kept is
+      the sign-in Verisure hands back, in a file only this system can read.</small>`;
+  }
+
+  function alarmStatusBlock(alarm) {
+    if (!alarm) return '';
+    if (alarm.connection !== 'ok') {
+      const text = alarm.connection === 'starting' ? 'Reading the alarm…'
+        : alarm.message || 'The alarm cannot be read.';
+      return `<div class="note${alarm.connection === 'starting' ? '' : ' note-warn'}">${esc(text)}</div>`;
+    }
+    const locks = (alarm.locks || []).map(lock =>
+      `<li><strong>${esc(lock.name)}</strong> <span>${esc(alarmLockWords(lock))}</span></li>`).join('');
+    return `
+      <div class="sensor-settings-summary alarm-status">
+        <strong>${esc(ARM_LABELS[alarm.arm_state] || alarm.arm_state || 'Unknown')}</strong>
+        ${locks ? `<ul class="alarm-locks">${locks}</ul>` : ''}
+        ${alarm.owns_away ? '<span>The heating is on Away because the alarm is armed.</span>' : ''}
+      </div>`;
+  }
+
+  function alarmOption(key, label, hint, settings, disabled = false) {
+    return `
+      <label class="exc-row notify-row${disabled ? ' is-blocked' : ''}">
+        <input type="checkbox" data-alarm-opt="${esc(key)}"
+          ${settings[key] ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+        <span class="exc-name"><span>${esc(label)}</span>${hint ? `<small class="field-hint">${esc(hint)}</small>` : ''}</span>
+      </label>`;
+  }
+
+  /* The demo alarm's own controls: invented, so its state is yours to set. */
+  function alarmDemoControls(alarm) {
+    if (!alarm || alarm.provider !== 'simulated') return '';
+    const lock = (alarm.locks || [])[0];
+    const lockState = !lock ? 'unlocked' : !lock.locked ? 'unlocked'
+      : lock.method === 'thumb' ? 'inside' : 'outside';
+    return `
+      <div class="alarm-demo">
+        <p class="zd-sub">Demo alarm — press these as if you were at the panel.</p>
+        ${settingRow('Alarm', '', segControl('alarm-sim-arm',
+          [['disarmed', 'Off'], ['armed_home', 'Home'], ['armed_away', 'Away']],
+          alarm.arm_state || 'disarmed', { label: 'Arm the demo alarm' }))}
+        ${lock ? settingRow(lock.name, '', segControl('alarm-sim-lock',
+          [['unlocked', 'Open'], ['inside', 'Inside'], ['outside', 'Outside']],
+          lockState, { label: `Lock ${lock.name}` })) : ''}
+      </div>`;
+  }
+
+  function renderAlarmSettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.alarmSettings) return '';
+    const settings = state.alarmSettings;
+    const alarm = settings.status;
+    const providers = settings.providers || ['verisure'];
+    const provider = ALARM_PROVIDER_LABELS[settings.provider] || settings.provider;
+    const signedOut = settings.enabled && settings.provider === 'verisure'
+      && !(settings.verisure || {}).signed_in;
+
+    const summary = !settings.enabled ? '<b>Off</b>'
+      : signedOut ? `<b>${esc(provider)}</b> · not signed in`
+      : `<b>${esc(provider)}</b>${alarm && alarm.arm_state
+          ? ' · ' + esc(ARM_LABELS[alarm.arm_state] || alarm.arm_state) : ''}`;
+
+    const onOff = settingRow('Use an alarm system',
+      'Away when it is armed, and a warning if something is left open.',
+      segControl('alarm-enabled', [['off', 'Off'], ['on', 'On']],
+        settings.enabled ? 'on' : 'off', { label: 'Use an alarm system' }));
+    const sourceRow = !settings.enabled || providers.length < 2 ? '' : settingRow(
+      'Source', settings.provider === 'simulated'
+        ? 'An invented alarm you can arm and lock yourself.'
+        : 'Your Verisure alarm and Yale Doorman, read from Verisure.',
+      segControl('alarm-source', providers.map(p => [p, ALARM_PROVIDER_LABELS[p] || p]),
+        settings.provider, { label: 'Which alarm' }));
+
+    const noSensors = settings.sensors_enabled ? '' : `
+      <div class="note">The warnings need door and window sensors, which are off.
+      Turn them on above and these start working.</div>`;
+
+    const body = !settings.enabled
+      ? '<div class="note">Nothing about an alarm is shown elsewhere while this is off.</div>'
+      : `
+        ${sourceRow}
+        ${settings.provider === 'verisure' ? alarmAccountBlock(settings) : ''}
+        ${signedOut ? '' : alarmStatusBlock(alarm)}
+        ${alarmDemoControls(alarm)}
+        <h4 class="notify-head">Heating</h4>
+        ${alarmOption('away_when_armed_away', 'Away when the alarm is armed away',
+          'Disarming brings the rooms back to their schedules — unless somebody changed the mode by hand in the meantime.', settings)}
+        ${alarmOption('away_when_armed_home', 'Away when it is armed at home too',
+          'Usually off: armed at home means somebody is in.', settings)}
+        <h4 class="notify-head">Warnings</h4>
+        ${alarmOption('warn_when_armed_away', 'Warn if something is open when it is armed away', '', settings)}
+        ${alarmOption('warn_when_armed_home', 'Warn if something is open when it is armed at home', '', settings)}
+        ${alarmOption('warn_when_locked_outside', 'Warn if something is open when the door is locked from outside',
+          'Locking with the thumb turn counts as being inside.', settings)}
+        ${alarmOption('autolock_counts_as_leaving', 'Count the lock locking itself as leaving',
+          'Off by default: an auto-lock happens whether or not anybody has gone.', settings,
+          !settings.warn_when_locked_outside)}
+        ${noSensors}
+        <small class="field-hint">An email about it is under Alerts. The warning
+        waits five minutes, the same as for Away, so shutting a window on the way
+        out is not an alarm.</small>`;
+
+    return settingsSection('alarm', 'Alarm System', summary, `
+      <p class="zd-sub">Optional. Reads your alarm and uses what it says. It only
+      ever reads: nothing here can arm, disarm or unlock anything.</p>
+      ${onOff}
+      ${body}
+    `, { icon: 'shield', alert: signedOut && !!(settings.verisure || {}).email });
+  }
+
+  async function saveAlarmSettings(changes) {
+    state.alarmSettings = await Nobo.api.setAlarmSettings(changes);
+    await refresh(true);
+    renderSettings();
+  }
+
+  async function reloadAlarmSettings() {
+    state.alarmSettings = await Nobo.api.alarmSettings();
+    await refresh(true);
+    renderSettings();
+  }
+
+  /* Two steps in one sheet: the password, then the code Verisure sends. The
+     password leaves the page once and is gone when the sheet closes. */
+  function verisureSignInSheet() {
+    const codeStep = () => {
+      sheetBody.innerHTML = `
+        <p class="zd-sub">Verisure has sent a code by text message or email. It
+        expires after a few minutes.</p>
+        <label class="field"><span>Code</span>
+          <input id="vsCode" type="text" inputmode="numeric" autocomplete="one-time-code"
+            maxlength="8" pattern="[0-9]*">
+        </label>
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="cancel">Cancel</button>
+          <button class="btn btn-primary" type="button" data-act="code">Sign in</button>
+        </div>`;
+      sheetBody.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      const input = sheetBody.querySelector('#vsCode');
+      input.focus();
+      sheetBody.querySelector('[data-act="code"]').onclick = async (event) => {
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          await Nobo.api.verisureCode(input.value.trim());
+          closeSheet();
+          Nobo.toast('Signed in to Verisure');
+          await reloadAlarmSettings();
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    };
+
+    openSheet('Sign in to Verisure', `
+      <p class="zd-sub">The account you use in the Verisure app. The password is
+      sent once, to sign in, and is not stored anywhere.</p>
+      <label class="field"><span>Email</span>
+        <input id="vsEmail" type="email" autocomplete="username" maxlength="254">
+      </label>
+      <label class="field"><span>Password</span>
+        <input id="vsPassword" type="password" autocomplete="current-password" maxlength="256">
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="login">Continue</button>
+      </div>`, root => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="login"]').onclick = async (event) => {
+        const pressed = event.currentTarget;
+        const email = root.querySelector('#vsEmail').value.trim();
+        const passwordInput = root.querySelector('#vsPassword');
+        if (!email || !passwordInput.value) {
+          Nobo.toast('Fill in both', 'error');
+          return;
+        }
+        pressed.disabled = true;
+        try {
+          const result = await Nobo.api.verisureLogin(email, passwordInput.value);
+          passwordInput.value = '';
+          if (result.status === 'code_sent') {
+            codeStep();
+            return;
+          }
+          closeSheet();
+          Nobo.toast('Signed in to Verisure');
+          await reloadAlarmSettings();
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  function wireAlarmSettings(root) {
+    const settings = state.alarmSettings;
+    if (!settings) return;
+    const guarded = (fn) => async (...args) => {
+      try { await fn(...args); } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+
+    root.querySelectorAll('[data-seg="alarm-enabled"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const on = button.dataset.value === 'on';
+        if (on) {
+          const provider = settings.providers.includes(settings.provider)
+            ? settings.provider : settings.providers[0];
+          await saveAlarmSettings({ enabled: true, provider });
+          Nobo.toast('Alarm integration on');
+          return;
+        }
+        const signedIn = settings.provider === 'verisure' && settings.verisure
+          && settings.verisure.email;
+        const off = async () => {
+          try {
+            await saveAlarmSettings({ enabled: false });
+            Nobo.toast('Alarm integration off');
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+        };
+        if (signedIn) {
+          confirmSheet('Turn the alarm off?',
+            'This system is signed out of Verisure and forgets the sign-in. Turning it on again needs your password and a new code. If the alarm has put the heating on Away, it stays on Away.',
+            'Turn off', off, true);
+        } else {
+          await off();
+        }
+      });
+    });
+
+    root.querySelectorAll('[data-seg="alarm-source"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        await saveAlarmSettings({ provider: button.dataset.value });
+      });
+    });
+
+    root.querySelectorAll('[data-alarm-opt]').forEach(input => {
+      input.onchange = guarded(async () => {
+        await saveAlarmSettings({ [input.dataset.alarmOpt]: input.checked });
+      });
+    });
+
+    const signIn = root.querySelector('[data-act="alarm-signin"]');
+    if (signIn) signIn.onclick = verisureSignInSheet;
+
+    const signOut = root.querySelector('[data-act="alarm-signout"]');
+    if (signOut) {
+      signOut.onclick = () => confirmSheet('Sign out of Verisure?',
+        'The sign-in is ended at Verisure and deleted here. The alarm is not read until somebody signs in again, and the heating is left as it is.',
+        'Sign out', async () => {
+          try {
+            state.alarmSettings = await Nobo.api.verisureLogout();
+            Nobo.toast('Signed out of Verisure');
+            await refresh(true);
+            renderSettings();
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+        }, true);
+    }
+
+    const installation = root.querySelector('#alarmInstallation');
+    if (installation) {
+      installation.onchange = guarded(async () => {
+        state.alarmSettings = await Nobo.api.verisureInstallation(installation.value);
+        await refresh(true);
+        renderSettings();
+      });
+    }
+
+    root.querySelectorAll('[data-seg="alarm-sim-arm"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        await Nobo.api.simulateAlarm({ arm_state: button.dataset.value });
+        await reloadAlarmSettings();
+      });
+    });
+    root.querySelectorAll('[data-seg="alarm-sim-lock"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        await Nobo.api.simulateAlarm({ lock: button.dataset.value });
+        await reloadAlarmSettings();
+      });
+    });
+  }
+
   async function saveSensorSettings(enabled = state.sensorSettings.enabled, provider = null) {
     // Turning the feature on or off must not quietly rewrite anyone's rules,
     // so every zone goes back exactly as it came.
@@ -5829,6 +6238,8 @@
 
       ${renderSensorSettingsCard(isAdmin)}
 
+      ${renderAlarmSettingsCard(isAdmin)}
+
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
         <div class="section-head">
@@ -5950,6 +6361,7 @@
     if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
     loadNotifications(isAdmin);
     wireSensorSettings(root);
+    wireAlarmSettings(root);
     wireZoneGroups(root);
   }
 
@@ -6507,6 +6919,16 @@
         if (!sheetEl.hidden) return;     // or while a sheet is open
         state.zones = zones;
         renderCurrent();
+        /* Only zones travel over the socket. The alarm's state lives in the
+           status, and an alarm change is announced as a zone update, so it
+           is re-read here rather than waiting for the next poll. */
+        if (state.status && state.status.alarm) {
+          Nobo.api.status().then(status => {
+            if (!status || held() || !sheetEl.hidden) return;
+            state.status = status;
+            renderCurrent();
+          }).catch(() => {});
+        }
       },
       () => renderLink(),
     );
