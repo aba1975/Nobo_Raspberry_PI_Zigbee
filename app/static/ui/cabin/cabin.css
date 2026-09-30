@@ -1352,7 +1352,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .field[hidden] { display: none; }
 .field > span { display: block; font-size: .8rem; font-weight: 620; margin-bottom: .32rem; }
 .field input[type="text"], .field input[type="date"], .field input[type="time"],
-.field input[type="password"], .field select,
+.field input[type="password"], .field input[type="email"], .field input[type="number"],
+.field select,
 .week-row input[type="time"], .week-row select, .week-tools select {
   width: 100%; font: inherit; padding: .68rem .8rem; min-height: 44px;
   border: 1px solid var(--rule); border-radius: 11px;

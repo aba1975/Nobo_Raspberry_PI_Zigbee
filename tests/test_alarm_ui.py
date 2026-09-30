@@ -79,6 +79,17 @@ def test_the_password_field_is_a_password_field():
     assert "localStorage" not in sheet and "state.password" not in sheet
 
 
+def test_every_field_in_a_sheet_is_styled_alike():
+    """The Verisure email field was the odd one out: the shared field rule
+    listed text and password but not email, so it drew as a bare browser box."""
+    css = (ROOT / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
+    rule = css[css.index('.field input[type="text"]'):]
+    rule = rule[:rule.index("{")]
+    for kind in set(__import__("re").findall(r'<input[^>]*type="(\w+)"', CABIN)) - {
+            "checkbox", "radio", "hidden", "range"}:
+        assert f'.field input[type="{kind}"]' in rule, kind
+
+
 def test_sign_in_is_disabled_off_https():
     block = CABIN[CABIN.index("function alarmAccountBlock("):]
     block = block[:block.index("\n  }\n")]
