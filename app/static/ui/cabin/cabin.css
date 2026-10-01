@@ -1094,6 +1094,13 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .zd-set { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .zd-big { font-size: clamp(3rem, 15vw, 4.2rem); font-weight: 660; letter-spacing: -.04em; line-height: .95; font-variant-numeric: tabular-nums; }
+/* Words where the number would be ("No reading", "Not set"). The headline's
+   tight spacing is sized for big digits and ran these letters together, and
+   its tall line left a gap above them; a block of their own avoids both. */
+.zd-big .set-none {
+  display: block; padding-top: .3rem; font-size: clamp(1.5rem, 6vw, 1.9rem);
+  font-weight: 620; letter-spacing: -.01em; line-height: 1.15; color: var(--ink-soft);
+}
 .zd-sub { margin: .35rem 0 0; color: var(--ink-soft); font-size: .95rem; }
 /* Beside the set point, never under it: what the room measures. */
 .zd-actual {

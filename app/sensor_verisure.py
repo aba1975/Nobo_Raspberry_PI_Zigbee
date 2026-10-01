@@ -307,6 +307,7 @@ def catalogue(
             "device_id": device.device_id,
             "kind": device.kind,
             "name": device.name,
+            "label": device.device_id.partition(":")[2],
             "model": device.model,
             "open": device.open,
             "temperature": device.temperature,

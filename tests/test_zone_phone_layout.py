@@ -187,3 +187,31 @@ def test_a_heater_row_renders_a_brief_line_and_a_labelled_menu_button():
     assert 'data-device-menu="160004028115"' in html
     assert 'aria-label="Manage Living Room Heater"' in html
     assert "R80 RDC 700 &middot; dial on heater" in html
+
+
+# -- words where the headline number would be --------------------------------
+
+
+def test_no_reading_is_not_squeezed_by_the_headline_spacing():
+    """The headline's -0.04em is sized for 4rem digits; inherited by a short
+    phrase it ran "No reading" together into "Noreading"."""
+    assert '<span class="set-none">No reading</span>' in CABIN
+    rule = _rule(CSS, ".zd-big .set-none")
+    assert "letter-spacing: -.01em" in rule
+    assert "display: block" in rule, "out of the headline's tall line box"
+
+
+@needs_node
+def test_an_alarm_door_shows_its_name_and_its_label():
+    script = (
+        "const esc = s => s; const Nobo = { fmtTemp: v => String(v) };\n"
+        + _function("verisureDeviceLabel")
+        + "\nconsole.log(JSON.stringify(["
+        "verisureDeviceLabel({kind: 'contact', name: 'Mostugu Bod Ute', label: '3SPC JGFP',"
+        " model: 'Door/window', open: false}),"
+        "verisureDeviceLabel({kind: 'contact', name: '2JFC J7P2', label: '2JFC J7P2', open: true}),"
+        "]));"
+    )
+    named, unnamed = _node(script)
+    assert named == "Mostugu Bod Ute (3SPC JGFP, Door/window, closed)"
+    assert unnamed == "2JFC J7P2 (open)", "a label is not repeated as its own name"

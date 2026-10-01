@@ -32,6 +32,7 @@ How the account is protected (docs/ALARM.md has the full account):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
 import threading
@@ -56,6 +57,12 @@ ALLOWED_OPERATIONS = frozenset({
 # as Home Assistant does.
 COOKIE_REFRESH_SECONDS = 10 * 60
 PENDING_LOGIN_SECONDS = 5 * 60
+# What each door and window is called. The name the Verisure app shows
+# ("Bod ute") is on the device, which vsure's door query does not ask for, so
+# it is read on its own: hourly, and sooner when a contact appears that has
+# no name yet, but never more than once in ten minutes.
+NAMES_REFRESH_SECONDS = 60 * 60
+NAMES_RETRY_SECONDS = 10 * 60
 # Our own limit on sign-in attempts, well inside anything Verisure would call
 # abuse: a locked Verisure account is a much worse outcome than a wait here.
 LOGIN_ATTEMPTS = 5
@@ -167,6 +174,56 @@ def parse_reading(response: Any, now: float) -> AlarmReading:
     )
 
 
+def contact_names_query(giid: str) -> Dict[str, Any]:
+    """vsure's door query, plus the name each device has in the Verisure app.
+
+    Kept apart from the reading: if Verisure ever refuses it, the doors keep
+    their labels and nothing else changes.
+    """
+    return {
+        "operationName": "DoorWindow",
+        "variables": {"giid": giid},
+        "query": (
+            "query DoorWindow($giid: String!) {\n"
+            "  installation(giid: $giid) {\n"
+            "    doorWindows {\n"
+            "      device {\n        deviceLabel\n        area\n        __typename\n      }\n"
+            "      area\n      __typename\n"
+            "    }\n    __typename\n  }\n}\n"
+        ),
+    }
+
+
+def parse_contact_names(response: Any) -> Dict[str, str]:
+    """label -> name, for the doors and windows that have a name."""
+    names: Dict[str, str] = {}
+    doors = _unpack(response, "installation", "doorWindows")
+    if not isinstance(doors, list):
+        raise ValueError("no doors and windows in the answer")
+    for item in doors:
+        if not isinstance(item, dict):
+            continue
+        device = item.get("device") if isinstance(item.get("device"), dict) else {}
+        label = _label(device.get("deviceLabel"))
+        name = _label(item.get("area")) or _label(device.get("area"))
+        if label and name:
+            names[label] = name
+    return names
+
+
+def with_contact_names(reading: AlarmReading, names: Dict[str, str]) -> AlarmReading:
+    """Name the contacts the reading could only label."""
+    if not names:
+        return reading
+    devices = []
+    for device in reading.devices:
+        label = device.device_id.partition(":")[2]
+        if device.kind == "contact" and device.name == label and names.get(label):
+            device = dataclasses.replace(device, name=names[label])
+        devices.append(device)
+    return dataclasses.replace(reading, devices=tuple(devices))
+
+
 def _number(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -246,6 +303,10 @@ class VerisureAlarm:
         self._lock = threading.Lock()
         self._pending: Optional[Tuple[Any, float]] = None
         self._attempts: Deque[float] = deque()
+        # The doors' names: (giid, label -> name, labels the last answer
+        # covered, when read, when last tried). Memory only.
+        self._names: Tuple[Optional[str], Dict[str, str], frozenset, float, float] = (
+            None, {}, frozenset(), 0.0, float("-inf"))
 
     # -- plumbing -----------------------------------------------------------
 
@@ -541,14 +602,15 @@ class VerisureAlarm:
                         stored = self._store(session, {**stored, "refreshed_at": self._clock()})
                     response = session.request(*self._queries(session))
                     try:
-                        return parse_reading(response, self._clock())
+                        reading = parse_reading(response, self._clock())
                     except ValueError:
                         # Most likely the access cookie lapsed early. One
                         # refresh, then it is a real failure.
                         session.update_cookie()
                         stored = self._store(session, {**stored, "refreshed_at": self._clock()})
                         response = session.request(*self._queries(session))
-                        return parse_reading(response, self._clock())
+                        reading = parse_reading(response, self._clock())
+                    return with_contact_names(reading, self._contact_names(session, stored["giid"], reading))
                 except (errors.AuthenticationError, errors.CookieReadError) as exc:
                     logger.warning("Verisure session ended: %s", type(exc).__name__)
                     alarm_persistence.save_session({**stored, "cookies": {}, "trust_token": None})
@@ -568,6 +630,31 @@ class VerisureAlarm:
                     ) from None
             finally:
                 self._clean_scratch()
+
+    def _contact_names(self, session: Any, giid: str, reading: AlarmReading) -> Dict[str, str]:
+        """The doors' names, read again when due. Never fails the reading."""
+        known_giid, names, seen, read_at, tried_at = self._names
+        if known_giid != giid:
+            names, seen, read_at, tried_at = {}, frozenset(), 0.0, float("-inf")
+        labels = {
+            device.device_id.partition(":")[2]
+            for device in reading.devices if device.kind == "contact"
+        }
+        now = self._clock()
+        due = bool(labels) and now - tried_at >= NAMES_RETRY_SECONDS and (
+            now - read_at >= NAMES_REFRESH_SECONDS or not labels <= seen
+        )
+        if due:
+            tried_at = now
+            errors = self._errors()
+            try:
+                answer = session.request(contact_names_query(giid))
+                names, seen, read_at = parse_contact_names(answer), frozenset(labels), now
+            except (errors.Error, ValueError) as exc:
+                # The doors keep their labels; the next try is ten minutes away.
+                logger.warning("Verisure door names could not be read: %s", type(exc).__name__)
+        self._names = (giid, names, seen, read_at, tried_at)
+        return names
 
     async def read(self) -> AlarmReading:
         return await asyncio.to_thread(self._read_sync)

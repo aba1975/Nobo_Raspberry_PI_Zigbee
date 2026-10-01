@@ -220,6 +220,18 @@ alarm already has. Choosing the alarm shows a list of what it reports:
   temperature, and a room can use it as its thermometer — the same
   **Actual** reading, the same too-cold and near-freezing warnings.
 
+Each is listed under the name it has in the Verisure app ("Bod ute"), followed
+by the label printed on the device ("3SPC JGFP"). A door with no name in the
+app is listed by its label alone.
+
+vsure's door query does not ask for the name. It is read by a separate
+read-only query, at most once an hour, or sooner when a new door appears.
+If Verisure refuses that query, the doors keep their labels and nothing else
+changes. Checked against vsure's own queries. **Not yet confirmed on a real
+installation:** on 1 October 2026 the doors' names were blank in vsure's
+query, and they are expected on the device instead, as they are for
+thermometers and locks.
+
 They are administered like Zigbee sensors — renamed, moved between rooms,
 given heating rules, removed. Removing one here only removes it from this
 application; nothing changes in the alarm.
@@ -261,6 +273,10 @@ The room shows which sensor is being counted, and why the other is not.
 ## Checking for updates
 
 Settings reads the alarm once a minute, and slows down when there are errors.
+While signed out it checks once an hour. A sign-in goes straight back to once
+a minute: the read is also what renews the session. Before 1 October 2026 a
+sign-in still waited out the rest of the hour, and the new session expired
+in the meantime.
 When something changes, the page updates by itself. There is no live feed:
 Verisure's API does not offer one to third parties. So Away can start up to a
 minute after the alarm is armed.

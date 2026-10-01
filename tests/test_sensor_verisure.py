@@ -102,6 +102,9 @@ def test_the_list_is_what_the_alarm_reported(client):
     smoke = next(item for item in body["devices"] if item["device_id"] == HALLWAY_SMOKE)
     assert smoke["kind"] == "climate" and smoke["temperature"] == 19.5
     assert all(item["sensor_id"] is None for item in body["devices"])
+    # The label printed on the device, beside the name, to check one by.
+    woodshed = next(item for item in body["devices"] if item["device_id"] == WOODSHED)
+    assert woodshed["label"] == "DEMO 0004"
 
 
 # -- a monitoring-only outbuilding -----------------------------------------

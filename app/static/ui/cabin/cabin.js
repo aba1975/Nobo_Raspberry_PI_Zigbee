@@ -2431,8 +2431,10 @@
       ? (device.temperature == null ? 'no reading' : `${Nobo.fmtTemp(device.temperature)}\u00B0`)
       : device.open == null ? 'state unknown' : device.open ? 'open' : 'closed';
     const model = device.model ? `${device.model}, ` : '';
+    // The label is printed on the device, so it is how a name is checked.
+    const label = device.label && device.label !== device.name ? `${device.label}, ` : '';
     const taken = device.sensor_id ? ' \u2014 already added' : '';
-    return `${device.name} (${model}${reading})${taken}`;
+    return `${device.name} (${label}${model}${reading})${taken}`;
   }
 
   /* The alarm's doors, windows and thermometers, offered as sensors. It is a

@@ -61,6 +61,8 @@ class FakeSession:
     trusted_error = None
     trusted_answer = "{}"
     answer = READING
+    names_answer = None
+    names_error = None
 
     def __init__(self, username, password, cookie_file_name=None):
         self._username = username
@@ -141,6 +143,12 @@ class FakeSession:
     def request(self, *operations):
         for operation in operations:
             check_read_only(operation)
+        if len(operations) == 1 and "area" in operations[0]["query"]:
+            # The door names, asked for on their own.
+            self.calls.append(("names", operations[0]["variables"]["giid"]))
+            if self.names_error:
+                raise self.names_error
+            return self.names_answer if self.names_answer is not None else self.answer
         self.calls.append(("request", tuple(op["operationName"] for op in operations)))
         if self.read_error:
             raise self.read_error
@@ -159,6 +167,8 @@ def fresh_fake():
     FakeSession.read_error = None
     FakeSession.refresh_error = None
     FakeSession.answer = READING
+    FakeSession.names_answer = None
+    FakeSession.names_error = None
     yield
 
 
@@ -568,6 +578,98 @@ def test_a_reading_carries_the_devices(account):
     (request,) = [c for c in FakeSession.instances[-1].calls if isinstance(c, tuple)
                   and c[0] == "request"]
     assert request[1] == ("ArmState", "SmartLock", "DoorWindow", "Climate")
+
+
+# The answer production gave on 1 Oct 2026: vsure's door query has an empty
+# area, and the name the Verisure app shows is only on the device.
+UNNAMED_DOORS = [{"data": {"installation": {"doorWindows": [
+    {"device": {"deviceLabel": "3SPC JGFP"}, "type": None, "area": "", "state": "CLOSE"},
+    {"device": {"deviceLabel": "2JFC J7P2"}, "area": "", "state": "OPEN"},
+]}}}]
+DOOR_NAMES = {"data": {"installation": {"doorWindows": [
+    {"device": {"deviceLabel": "3SPC JGFP", "area": "Mostugu Bod Ute"}, "area": ""},
+    {"device": {"deviceLabel": "2JFC J7P2", "area": ""}, "area": ""},
+]}}}
+
+
+def _calls(kind):
+    return [c for session in FakeSession.instances for c in session.calls
+            if isinstance(c, tuple) and c[0] == kind]
+
+
+def test_a_door_is_called_what_the_verisure_app_calls_it(account):
+    FakeSession.answer = READING + UNNAMED_DOORS
+    FakeSession.names_answer = DOOR_NAMES
+    _sign_in(account)
+    reading = run(account.read())
+    assert reading.device("contact:3SPC JGFP").name == "Mostugu Bod Ute"
+    # No name anywhere: the label, which is still something to go on.
+    assert reading.device("contact:2JFC J7P2").name == "2JFC J7P2"
+    assert reading.device("contact:2JFC J7P2").open is True
+    assert _calls("names") == [("names", "111")]
+
+
+def test_the_names_query_is_read_only_and_passes_the_real_guard(monkeypatch):
+    sent = []
+    monkeypatch.setattr(verisure.Session, "request", lambda self, *ops: sent.extend(ops))
+    query = alarm_verisure.contact_names_query("111")
+    assert "mutation" not in query["query"]
+    alarm_verisure.read_only_session_class()(
+        "a@example.com", "", cookie_file_name="/nonexistent/x").request(query)
+    assert sent == [query]
+
+
+def test_names_are_read_hourly_not_every_minute(account, clock):
+    FakeSession.answer = READING + UNNAMED_DOORS
+    FakeSession.names_answer = DOOR_NAMES
+    _sign_in(account)
+    run(account.read())
+    for _ in range(5):
+        clock.now += 60
+        assert run(account.read()).device("contact:3SPC JGFP").name == "Mostugu Bod Ute"
+    assert len(_calls("names")) == 1
+    clock.now += alarm_verisure.NAMES_REFRESH_SECONDS
+    run(account.read())
+    assert len(_calls("names")) == 2
+
+
+def test_a_new_door_is_named_without_waiting_the_hour(account, clock):
+    FakeSession.answer = READING + UNNAMED_DOORS
+    FakeSession.names_answer = DOOR_NAMES
+    _sign_in(account)
+    run(account.read())
+    FakeSession.answer = READING + [{"data": {"installation": {"doorWindows": [
+        *UNNAMED_DOORS[0]["data"]["installation"]["doorWindows"],
+        {"device": {"deviceLabel": "NEW1"}, "area": "", "state": "CLOSE"},
+    ]}}}]
+    clock.now += 60
+    run(account.read())
+    assert len(_calls("names")) == 1, "never more than once in ten minutes"
+    clock.now += alarm_verisure.NAMES_RETRY_SECONDS
+    run(account.read())
+    assert len(_calls("names")) == 2
+
+
+def test_a_refused_names_query_leaves_the_labels_and_the_reading(account, clock):
+    FakeSession.answer = READING + UNNAMED_DOORS
+    FakeSession.names_error = verisure.ResponseError(400, "no such field")
+    _sign_in(account)
+    reading = run(account.read())
+    assert reading.arm_state == "armed_away"
+    assert reading.device("contact:3SPC JGFP").name == "3SPC JGFP"
+    clock.now += 60
+    run(account.read())
+    assert len(_calls("names")) == 1, "not retried every minute"
+    FakeSession.names_error = None
+    FakeSession.names_answer = DOOR_NAMES
+    clock.now += alarm_verisure.NAMES_RETRY_SECONDS
+    assert run(account.read()).device("contact:3SPC JGFP").name == "Mostugu Bod Ute"
+
+
+def test_no_doors_no_names_query(account):
+    _sign_in(account)
+    run(account.read())
+    assert _calls("names") == []
 
 
 def test_the_sensor_queries_are_allowed_and_nothing_else_is_added():
