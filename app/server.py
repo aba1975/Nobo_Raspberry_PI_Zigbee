@@ -6910,6 +6910,10 @@ alarm_failure: Optional[AlarmUnavailable] = None
 alarm_failures = 0
 alarm_last_good: Optional[float] = None
 alarm_wakeup: Optional[asyncio.Event] = None
+# When the next read is due, on the monotonic clock; None means now. Every
+# read sets it, whoever made the read, so a sign-in answered by an endpoint
+# moves the loop off the hour it waits while signed out.
+alarm_next_read: Optional[float] = None
 alarm_poll_lock = asyncio.Lock()
 _alarm_view: Optional[tuple] = None
 
@@ -6975,7 +6979,7 @@ async def start_alarm_service() -> None:
     alarm_last_good = time.time()
     notifier.restore_condition("alarm-left-open", alarm_ledger.left_open_raised)
     notifier.restore_condition("alarm-connection", alarm_ledger.connection_raised)
-    alarm_wakeup.set()
+    wake_alarm()
 
 
 async def stop_alarm_service() -> None:
@@ -7131,8 +7135,17 @@ async def alarm_poll_once() -> float:
             await _alarm_apply_heating()
             delay = float(ALARM_POLL_SECONDS)
         _alarm_connection_alert()
+        _alarm_schedule(delay)
     await _alarm_announce()
     return delay
+
+
+def _alarm_schedule(delay: float) -> None:
+    """Set when the next read is due and let the loop re-time its wait."""
+    global alarm_next_read
+    alarm_next_read = time.monotonic() + delay
+    if alarm_wakeup is not None:
+        alarm_wakeup.set()
 
 
 async def alarm_loop() -> None:
@@ -7141,12 +7154,19 @@ async def alarm_loop() -> None:
         alarm_wakeup = asyncio.Event()
     while True:
         try:
-            delay = await alarm_poll_once() if alarm_provider is not None else None
+            if alarm_provider is not None and (
+                alarm_next_read is None or time.monotonic() >= alarm_next_read
+            ):
+                await alarm_poll_once()
+            alarm_wakeup.clear()
+            due = alarm_next_read
+            delay = None
+            if alarm_provider is not None:
+                delay = 0.0 if due is None else max(0.0, due - time.monotonic())
             try:
                 await asyncio.wait_for(alarm_wakeup.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
-            alarm_wakeup.clear()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -7158,6 +7178,9 @@ async def alarm_loop() -> None:
 
 
 def wake_alarm() -> None:
+    """Read the alarm now rather than when the last read said."""
+    global alarm_next_read
+    alarm_next_read = None
     if alarm_wakeup is not None:
         alarm_wakeup.set()
 

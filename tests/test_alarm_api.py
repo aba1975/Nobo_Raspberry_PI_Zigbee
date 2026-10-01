@@ -478,6 +478,52 @@ def test_never_signed_in_is_not_an_alarm_fault(client, fake_verisure, monkeypatc
     assert "alarm_connection_lost" not in raised
 
 
+def test_a_read_made_elsewhere_re_times_the_loop(monkeypatch):
+    """Signed out, the loop waits an hour. A sign-in reads the alarm from the
+    endpoint, and the loop must then go back to every minute rather than
+    sleep out the hour: until 1 Oct 2026 it did, so the session was never
+    renewed and the reading went stale an hour at a time."""
+    from alarm_provider import AlarmUnavailable
+
+    reads = []
+
+    class Provider:
+        async def read(self):
+            reads.append(time.monotonic())
+            if len(reads) == 1:
+                raise AlarmUnavailable("signed_out", "Sign in again.")
+            return AlarmReading(arm_state="disarmed", arm_changed_at=None,
+                                locks=(), read_at=time.time())
+
+    provider = Provider()
+    monkeypatch.setattr(server, "alarm_provider", provider)
+    monkeypatch.setattr(server, "alarm_reading", None)
+    monkeypatch.setattr(server, "alarm_failure", None)
+    monkeypatch.setattr(server, "alarm_failures", 0)
+    monkeypatch.setattr(server, "alarm_next_read", None)
+    monkeypatch.setattr(server, "alarm_wakeup", None)
+    monkeypatch.setattr(server, "ALARM_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(server, "ALARM_SIGNED_OUT_POLL_SECONDS", 3600)
+
+    async def scenario():
+        server.alarm_wakeup = asyncio.Event()
+        loop = asyncio.create_task(server.alarm_loop())
+        try:
+            await asyncio.sleep(0.1)
+            assert len(reads) == 1, "signed out: the loop waits the hour"
+            assert server.alarm_next_read - time.monotonic() > 3000
+            await server.alarm_poll_once()  # what a sign-in endpoint does
+            await asyncio.sleep(0.4)
+        finally:
+            loop.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await loop
+
+    asyncio.run(scenario())
+    assert len(reads) >= 4, "back to reading every minute"
+    assert server.alarm_reading is not None
+
+
 # -- the warning -----------------------------------------------------------
 
 
