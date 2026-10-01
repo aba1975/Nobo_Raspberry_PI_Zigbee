@@ -167,6 +167,7 @@ def test_only_honest_alerts_remain():
         "temperature_too_high", "temperature_too_low", "temperature_back_in_range",
         "room_near_freezing", "humidity_high",
         "alarm_left_open", "alarm_connection_lost",
+        "outdoor_cold", "weather_battery_low", "weather_connection_lost",
     }
 
 

@@ -20,6 +20,9 @@ import config_persistence
 import sensor_persistence
 import alarm_persistence
 import sensor_verisure
+import sensor_weather
+import weather_netatmo
+import weather_persistence
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +167,22 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sensor_verisure, "VERISURE_SENSORS_FILE", tmp_path / "verisure_sensors.json",
     )
+    # The weather station, including the Netatmo account folder.
+    monkeypatch.setattr(weather_persistence, "DATA_DIR", tmp_path)
+    for name, filename in (
+        ("WEATHER_SETTINGS_FILE", "weather_settings.json"),
+        ("WEATHER_STATE_FILE", "weather_state.json"),
+        ("SIMULATED_WEATHER_FILE", "simulated_weather.json"),
+        ("PRESSURE_HISTORY_FILE", "weather_pressure_history.json"),
+        ("OUTDOOR_HISTORY_FILE", "weather_outdoor_history.json"),
+    ):
+        monkeypatch.setattr(weather_persistence, name, tmp_path / filename)
+    monkeypatch.setattr(weather_persistence, "NETATMO_DIR", tmp_path / "netatmo")
+    monkeypatch.setattr(
+        weather_persistence, "NETATMO_ACCOUNT_FILE", tmp_path / "netatmo" / "account.json",
+    )
+    monkeypatch.setattr(sensor_weather, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sensor_weather, "WEATHER_SENSORS_FILE", tmp_path / "weather_sensors.json")
     # A module-level history would carry one test's readings into the next.
     server_module = sys.modules.get("server")
     if server_module is not None and hasattr(server_module, "climate_history"):
@@ -182,6 +201,23 @@ def redirect_persistence(tmp_path, monkeypatch):
             ("alarm_provider", None), ("verisure_account", VerisureAlarm()),
             ("alarm_reading", None), ("alarm_failure", None), ("alarm_failures", 0),
             ("alarm_last_good", None), ("_alarm_view", None),
+        ):
+            monkeypatch.setattr(server_module, name, value)
+    if server_module is not None and hasattr(server_module, "weather_settings"):
+        from climate_history import ClimateHistory
+        from pressure_outlook import PressureHistory
+        from weather_netatmo import NetatmoAccount
+        from weather_persistence import WeatherLedger, WeatherSettings
+
+        for name, value in (
+            ("weather_settings", WeatherSettings()), ("weather_ledger", WeatherLedger()),
+            ("weather_provider", None), ("netatmo_account", NetatmoAccount()),
+            ("weather_reading", None), ("weather_failure", None), ("weather_failures", 0),
+            ("weather_last_good", None), ("_weather_view", None), ("weather_sensors", {}),
+            ("weather_next_read", None), ("netatmo_pending", {}),
+            ("station_pressure_history", PressureHistory(
+                save=weather_persistence.save_pressure_history)),
+            ("outdoor_history", ClimateHistory(save=weather_persistence.save_outdoor_history)),
         ):
             monkeypatch.setattr(server_module, name, value)
     if server_module is not None and hasattr(server_module, "sensor_heating_links"):
@@ -205,3 +241,12 @@ def redirect_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "USERS_FILE", tmp_path / "users.json")
     auth.init_user_store()
     yield
+
+
+@pytest.fixture(autouse=True)
+def netatmo_never_reached(monkeypatch):
+    """No test may talk to Netatmo. Tests hand the account a fake transport."""
+    def refuse(url, form, headers):
+        raise AssertionError(f"A test tried to reach Netatmo: {url}")
+
+    monkeypatch.setattr(weather_netatmo, "http_post", refuse)

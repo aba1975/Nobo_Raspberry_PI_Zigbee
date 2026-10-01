@@ -102,6 +102,17 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **The alarm's own sensors** | With the sensors switched on as well, the alarm's door and window sensors, and the temperature its smoke detectors measure, can be added to rooms from a list — a woodshed door, say, or a hallway thermometer. They warn and drive heating rules like Zigbee sensors. On a door that also has a Zigbee sensor, the Verisure one is a backup, used only while the Zigbee sensor is offline. See [The alarm's own sensors](docs/ALARM.md#the-alarms-own-sensors). |
 | **Your Verisure account** | The password is never stored. It is used once, with the code Verisure sends, and then dropped. The sign-in Verisure hands back is kept in a private file, left out of backups and deleted when you sign out. Signing in needs HTTPS. See [docs/ALARM.md](docs/ALARM.md). Not yet run against a real Verisure account. |
 
+### Weather station (optional)
+
+| Feature | What it does |
+| --- | --- |
+| **Netatmo weather station** | Reads your Netatmo weather station through Netatmo's official API. Off unless you turn it on under **Settings → Weather Station**. No extra hardware. **It only ever reads**, and the heating does not depend on it. See [docs/WEATHER.md](docs/WEATHER.md). Not yet run against a real Netatmo account. |
+| **Outside on the front page** | The temperature outside in the corner of the top card, with the weather outlook under it. Tap it for humidity, today's range, the last 24 hours and every module. |
+| **The outlook from the station** | With a station, the outlook is read from its own barometer instead of from room sensors. |
+| **Indoor modules as room thermometers** | The base station and indoor modules can be added to rooms from a list, and then work like a Zigbee thermometer: actual temperature, humidity, limits, near freezing, 24 hours of history. A Zigbee thermometer in the same room is believed first, then the module, then a Verisure smoke detector. |
+| **Warnings** | Very cold outside (limit set in Settings), a module's battery low, and a station that cannot be read — each an optional email under Alerts. |
+| **Your Netatmo account** | No Netatmo password ever reaches the Pi: you sign in on Netatmo's own page. The access asked for can only read the weather station. The app's secret and the tokens are kept in a private file, left out of backups and deleted when the station is turned off. Setting it up needs HTTPS. |
+
 ### Heating control
 
 | Feature | What it does |
@@ -711,6 +722,14 @@ only.
 | --- | --- |
 | **Something is open when the alarm goes on** | The alarm is armed, or the front door is locked (from outside, or from inside if you ask), and a door or window is open — Zigbee or the alarm's own. Held for five minutes, like the one above, and replaces it while the alarm is the reason, so you get one email and not two. **Urgent** unless the alarm is only armed at home or the door was locked from inside. |
 | **The alarm cannot be read** | Verisure has ended this system's sign-in, or has not answered for half an hour. The heating is left alone meanwhile; sign in again under Settings. |
+
+With the [weather station](docs/WEATHER.md) switched on, three more:
+
+| Event | What it means |
+| --- | --- |
+| **Very cold outside** | The outdoor module is below the limit set under Settings → Weather Station (−15 °C by default). Cleared a degree above it. |
+| **Weather station battery low** | A module reports 20 % or less. Cleared above 30 %. |
+| **The weather station cannot be read** | Netatmo has ended the connection, or the station has not been read for an hour. Nothing about the heating depends on it. |
 
 Alerts arrive as **HTML with the plain text kept underneath**, so a client that
 refuses HTML loses nothing and the plain version stays the one of record. The
@@ -2176,6 +2195,12 @@ sign in again under Settings → Alarm System. The alarm's settings
 its sensors are used in which rooms (`verisure_sensors.json`) are backed up as
 usual.
 
+**The Netatmo connection is not backed up either**: `data/netatmo/` holds the
+app's secret and the tokens, and is left out for the same reason. After a
+restore, press **Connect to Netatmo** under Settings → Weather Station (and
+enter the app's client ID and secret again if you had turned it off). The
+weather settings and which modules are used in which rooms are kept.
+
 The optional volumes, `backup/caddy-data` and `backup/zigbee2mqtt-data`, are
 restored into their Docker volumes with the service stopped. For Zigbee, follow
 *Moving the dongle to another installation* in [docs/SENSORS.md](docs/SENSORS.md):
@@ -2584,6 +2609,11 @@ overrides the mounted files, which is exactly the bug this avoids.
   It can only read the alarm: every request is checked against a short list of
   read-only queries before it leaves the Pi. The sign-in page refuses plain
   http. See [docs/ALARM.md](docs/ALARM.md#how-your-verisure-account-is-protected).
+- **The Netatmo integration never sees a Netatmo password.** You sign in on
+  Netatmo's page and the Pi receives a token that can only read the weather
+  station. The token and the app's secret are in a folder only the application
+  can read, never in a backup, and only two Netatmo endpoints may be called.
+  See [docs/WEATHER.md](docs/WEATHER.md#how-your-netatmo-account-is-protected).
 
 ## Reference documents
 

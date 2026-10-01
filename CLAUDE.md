@@ -106,7 +106,7 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
 - **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
-- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json` and `verisure_sensors.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, which is left out on purpose
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json` and `simulated_weather.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, and `data/netatmo/`, the weather station's tokens, both left out on purpose
 
 ## Key Files
 
@@ -137,6 +137,17 @@ hub reached the hardware; everything else proves a message reached the hub.
   snapshots are built from the alarm reading and merged with Zigbee's, then
   `apply_precedence` sets aside whichever should not count — **Zigbee first**.
   Anything that counts sensors must use the `counts` flag, not the raw list
+- `app/weather_*.py` and `app/sensor_weather.py` — the optional weather
+  station (Netatmo, or a simulated one in demo mode). `docs/WEATHER.md` is the
+  design. Display and warnings only: **nothing in it may change the heating**.
+  The outdoor temperature and the outlook go on the top card; with a station
+  the outlook is read from its barometer (`_house_outlook`). Indoor modules are
+  room thermometers ranked **Zigbee, then Netatmo, then Verisure**. Netatmo is
+  OAuth with `read_station` only; `check_allowed` in `weather_netatmo.py`
+  permits exactly `oauth2/token` and `api/getstationsdata`. The app secret and
+  tokens are in `data/netatmo/` (0600 in 0700), excluded from backups and
+  deleted when the integration is turned off. `tests/conftest.py` makes every
+  test unable to reach Netatmo
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

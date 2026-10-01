@@ -80,6 +80,10 @@ fi
 # to a laptop or a cloud drive. Restoring without it costs one sign-in.
 rm -rf "$TMPDIR/backup/data/verisure"
 
+# The Netatmo app's secret and tokens, for the same reason. Restoring without
+# them costs one "Connect to Netatmo".
+rm -rf "$TMPDIR/backup/data/netatmo"
+
 # Back up Caddy's certificate store, if HTTPS is in use.
 #
 # This matters more than it looks. With Caddy's own CA, the private root lives

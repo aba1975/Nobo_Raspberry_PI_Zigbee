@@ -269,6 +269,31 @@ EVENT_TYPES: Dict[str, Dict[str, Any]] = {
                 "reading simply stops arriving, because that is not news that the room "
                 "is fine.",
     },
+    "outdoor_cold": {
+        "label": "It gets very cold outside",
+        "default": False,
+        "help": "The weather station's outdoor module reads below the temperature chosen "
+                "under Settings, Weather station. Information only — the heating is not "
+                "changed — but it is the night the heaters work hardest and a cold room "
+                "is most likely. Clears a degree above the limit, so it is not sent "
+                "again every time the reading wobbles across it.",
+    },
+    "weather_battery_low": {
+        "label": "A weather station battery is low",
+        "default": False,
+        "help": "An outdoor or indoor weather station module reports 20% or less. The "
+                "modules run for weeks after that, so it is a reminder to buy batteries, "
+                "not an emergency. Read from Netatmo with the station.",
+    },
+    "weather_connection_lost": {
+        "label": "The weather station cannot be read",
+        "default": False,
+        "help": "Netatmo has ended this system's access, or has not answered for an hour. "
+                "Until it is fixed the outside temperature is not shown and any weather "
+                "station modules used as room thermometers read as offline. Nothing about "
+                "the heating depends on it. Ended access needs somebody to connect again "
+                "under Settings; an outage usually clears by itself.",
+    },
 }
 
 SEVERITIES = {"info", "warning", "critical"}

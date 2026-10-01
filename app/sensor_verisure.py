@@ -20,7 +20,7 @@ than papered over:
   a Zigbee one on the same door: while the Zigbee sensor is reporting it is
   the one believed, and the Verisure contact only stands in while the Zigbee
   one is offline. A Verisure thermometer stands down in any room that has a
-  fresh Zigbee thermometer. See ``apply_precedence``.
+  fresh Zigbee thermometer or weather station module. See ``apply_precedence``.
 
 The choices — which device, its name, room, door or window, and what it backs
 up — are kept in ``data/verisure_sensors.json``. The readings are never
@@ -53,6 +53,9 @@ NAME_MAX = 80
 # Why a sensor is not being counted, for the interface.
 STANDING_BY_ZIGBEE = "zigbee_reporting"
 STANDING_BY_THERMOMETER = "zigbee_thermometer"
+STANDING_BY_WEATHER = "weather_station"
+# The weather station's modules rank between Zigbee and Verisure.
+WEATHER_SOURCE = "netatmo"
 
 
 class InvalidVerisureSensor(ValueError):
@@ -262,19 +265,25 @@ def apply_precedence(
     standing_by: Dict[str, str] = {}
     stood_in_for: Dict[str, str] = {}
 
-    fresh_thermometer_zones = {
-        str(item.zone_id) for item in primary.values()
-        if item.is_climate and item.zone_id is not None and item.available
-        and item.temperature is not None
-        and now - item.last_seen_at.timestamp() <= climate_stale_seconds
-    }
+    # Which source is reading each room, Zigbee first: a room with a fresh
+    # Zigbee thermometer and a fresh weather station module says Zigbee.
+    fresh_thermometer_zones: Dict[str, str] = {}
+    for item in primary.values():
+        if not (item.is_climate and item.zone_id is not None and item.available
+                and item.temperature is not None
+                and now - item.last_seen_at.timestamp() <= climate_stale_seconds):
+            continue
+        reason = (STANDING_BY_WEATHER if item.source == WEATHER_SOURCE
+                  else STANDING_BY_THERMOMETER)
+        if fresh_thermometer_zones.get(str(item.zone_id)) != STANDING_BY_THERMOMETER:
+            fresh_thermometer_zones[str(item.zone_id)] = reason
     for item in snapshots:
         if item.source != SOURCE:
             continue
         chosen = sensors.get(item.sensor_id)
         if item.is_climate:
             if item.zone_id is not None and str(item.zone_id) in fresh_thermometer_zones:
-                standing_by[item.sensor_id] = STANDING_BY_THERMOMETER
+                standing_by[item.sensor_id] = fresh_thermometer_zones[str(item.zone_id)]
             continue
         backed = primary.get(chosen.backup_for) if chosen and chosen.backup_for else None
         if backed is None or not backed.is_contact:

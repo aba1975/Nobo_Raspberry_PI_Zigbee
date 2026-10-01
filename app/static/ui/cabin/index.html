@@ -52,7 +52,12 @@
 
     <!-- The one thing a cabin owner does most: leave, and come back. -->
     <section class="trip" id="trip" aria-labelledby="tripHeading">
-      <h1 class="trip-eyebrow" id="tripHeading">Cabin</h1>
+      <div class="trip-head">
+        <h1 class="trip-eyebrow" id="tripHeading">Cabin</h1>
+        <!-- The temperature outside and the weather outlook, from the weather
+             station. Only while that integration is on; opens the details. -->
+        <button class="trip-weather" id="tripWeather" type="button" hidden></button>
+      </div>
 
       <!-- Shown only when the house is away with something still open. It is
            first in the card because that is the one thing worth turning the
@@ -75,7 +80,8 @@
     </section>
 
     <!-- The weather outlook from the room barometers. Shown only while the
-         weather is changing; opens the room it was read in. -->
+         weather is changing; opens the room it was read in. With a weather
+         station the outlook is in the card above instead. -->
     <button class="weather-chip" id="weatherChip" type="button" hidden></button>
 
     <!-- Direct mode control, secondary to the trip but still one tap away. -->

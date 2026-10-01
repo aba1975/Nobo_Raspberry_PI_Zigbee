@@ -297,7 +297,8 @@ def test_every_barometer_room_shows_the_same_house_outlook(client, monkeypatch):
     assert simulate(client, bath["sensor_id"], pressure=1004).status_code == 200
     assert simulate(client, hall["sensor_id"], pressure=1006).status_code == 200
     rooms = {item["zone_id"]: item for item in client.get("/api/zones").json()["zones"]}
-    expected = {"tendency": "storm", "change_3h": -7.5, "rooms": 2, "ready_at": None}
+    expected = {"tendency": "storm", "change_3h": -7.5, "rooms": 2, "ready_at": None,
+                "source": "rooms"}
     assert rooms["1"]["climate"]["pressure_outlook"] == expected
     assert rooms["2"]["climate"]["pressure_outlook"] == expected
     assert rooms["3"]["climate"]["pressure_outlook"] is None

@@ -8,6 +8,7 @@ import re
 import asyncio
 import html
 import ipaddress
+import secrets
 import json
 import logging
 import math
@@ -37,6 +38,8 @@ import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
 import sensor_verisure
+import sensor_weather
+import weather_persistence
 import alarm_automation
 import alarm_persistence
 import dataclasses
@@ -45,6 +48,12 @@ from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, Simulat
 from alarm_verisure import VerisureAlarm, VerisureError
 from climate_history import ClimateHistory
 from pressure_outlook import PressureHistory
+from weather_netatmo import NetatmoAccount, NetatmoError
+from weather_persistence import WeatherLedger, WeatherSettings
+from weather_provider import (
+    BATTERY_LOW_PERCENT as WEATHER_BATTERY_LOW_PERCENT,
+    SimulatedWeather, WeatherReading, WeatherUnavailable, iso as weather_iso,
+)
 from sensor_automation import (
     AutomationResult as SensorAutomationResult,
     CLIMATE_HYSTERESIS,
@@ -441,6 +450,9 @@ sensor_heating_links: Dict[str, List[str]] = sensor_persistence.load_heating_lin
 # Alarm devices chosen as sensors, by sensor id. Listed only while the alarm
 # integration is on; see sensor_verisure.
 verisure_sensors: Dict[str, sensor_verisure.VerisureSensor] = sensor_verisure.load()
+# Weather station modules chosen as room thermometers, by sensor id. Listed
+# only while the weather integration is on; see sensor_weather.
+weather_sensors: Dict[str, sensor_weather.WeatherSensor] = sensor_weather.load()
 # Which sensors the rules believe, worked out on each evaluation.
 sensor_precedence = sensor_verisure.Precedence(counted=[], standing_by={}, stood_in_for={})
 
@@ -470,6 +482,12 @@ def _save_verisure_sensors(sensors: Dict[str, sensor_verisure.VerisureSensor]) -
     verisure_sensors = dict(sensors)
 
 
+def _save_weather_sensors(sensors: Dict[str, sensor_weather.WeatherSensor]) -> None:
+    global weather_sensors
+    sensor_weather.save(sensors)
+    weather_sensors = dict(sensors)
+
+
 def _save_sensor_heating_links(links: Dict[str, List[str]]) -> None:
     global sensor_heating_links
     cleaned = {key: list(value) for key, value in links.items() if value}
@@ -491,6 +509,11 @@ def _forget_zone_in_heating_links(zone_id: str) -> None:
         _save_verisure_sensors({
             key: sensor_verisure.with_changes(item, zone_id=None) if item.zone_id == zone_id else item
             for key, item in verisure_sensors.items()
+        })
+    if any(item.zone_id == zone_id for item in weather_sensors.values()):
+        _save_weather_sensors({
+            key: sensor_weather.with_changes(item, zone_id=None) if item.zone_id == zone_id else item
+            for key, item in weather_sensors.items()
         })
 
 # ---------------------------------------------------------------------------
@@ -955,6 +978,7 @@ _load_persisted_hub_config()
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     global main_event_loop, sensor_wakeup, alarm_wakeup, alarm_poll_lock
+    global weather_wakeup, weather_poll_lock
     # Startup
     mode_label = "demo" if DEMO_MODE else "production"
     logger.info("Starting Nobø Web Control Server — mode=%s", mode_label)
@@ -992,6 +1016,9 @@ async def lifespan(app: FastAPI):
     alarm_wakeup = asyncio.Event()
     alarm_poll_lock = asyncio.Lock()
     await start_alarm_service()
+    weather_wakeup = asyncio.Event()
+    weather_poll_lock = asyncio.Lock()
+    await start_weather_service()
 
     # Start background reconnection task (no-op in demo mode)
     reconnect_task = asyncio.create_task(reconnect_loop())
@@ -1003,6 +1030,7 @@ async def lifespan(app: FastAPI):
     watch_task = asyncio.create_task(notification_watch_loop())
     sensor_task = asyncio.create_task(sensor_automation_loop())
     alarm_task = asyncio.create_task(alarm_loop())
+    weather_task = asyncio.create_task(weather_loop())
 
     yield
     
@@ -1012,6 +1040,7 @@ async def lifespan(app: FastAPI):
     watch_task.cancel()
     sensor_task.cancel()
     alarm_task.cancel()
+    weather_task.cancel()
     await stop_sensor_service()
     logger.info("Shutting down server...")
     # Close all websocket connections
@@ -1295,6 +1324,12 @@ class VerisureSensorCreate(BaseModel):
     zone_id: Optional[str] = None
     kind: Optional[SensorKind] = None
     backup_for: Optional[str] = Field(default=None, max_length=128)
+
+
+class WeatherSensorCreate(BaseModel):
+    module_id: str = Field(max_length=64)
+    name: str = Field(max_length=sensor_weather.NAME_MAX)
+    zone_id: Optional[str] = None
 
 
 class SensorHeatingUpdate(BaseModel):
@@ -2644,8 +2679,12 @@ def _evaluate_sensor_alerts(
 
     # --- the sensors' own health -------------------------------------------
     # The sensor provider's own only. An alarm device reports no battery, and
-    # its silence is the alarm's: "the alarm cannot be read" covers it.
-    sensors = [item for item in sensor_snapshots if item.source != sensor_verisure.SOURCE]
+    # its silence is the alarm's: "the alarm cannot be read" covers it. A
+    # weather station module's battery and silence are the station's alerts.
+    sensors = [
+        item for item in sensor_snapshots
+        if item.source not in (sensor_verisure.SOURCE, sensor_weather.SOURCE)
+    ]
     quiet: List[Any] = []
     for sensor in sensors:
         due = sensor.last_seen_at.timestamp() + SENSOR_QUIET_SECONDS
@@ -2926,9 +2965,78 @@ def _pressure_summary(zone_id: str, sensors: List[Dict[str, Any]], now: float) -
         return {"measures_pressure": False, "pressure_outlook": None, "pressure_24h": None}
     return {
         "measures_pressure": True,
-        "pressure_outlook": pressure_history.outlook(now, CLIMATE_STALE_SECONDS),
+        "pressure_outlook": _house_outlook(now),
         "pressure_24h": pressure_history.hourly(zone_id, now),
     }
+
+
+def _house_outlook(now: float) -> Optional[Dict[str, Any]]:
+    """The house's weather outlook, from the weather station if it has one.
+
+    The station's barometer is one instrument in one place, corrected to sea
+    level, and it is preferred over the room barometers as soon as it has
+    three hours behind it. Until then the rooms' outlook stands, so turning
+    the station on does not blank an outlook that was already known.
+    """
+    station = None
+    if weather_settings.enabled and weather_provider is not None:
+        station = station_pressure_history.outlook(now, WEATHER_PRESSURE_FRESH_SECONDS)
+        if station is not None and station["tendency"] is not None:
+            return {**station, "source": "station"}
+    rooms = pressure_history.outlook(now, CLIMATE_STALE_SECONDS)
+    if rooms is not None and (rooms["tendency"] is not None or station is None):
+        return {**rooms, "source": "rooms"}
+    if station is not None:
+        return {**station, "source": "station"}
+    return None
+
+
+def _weather_sensors_listed() -> bool:
+    return weather_settings.enabled
+
+
+def _weather_sensor_snapshots() -> List[ContactSnapshot]:
+    """The station's modules chosen as room thermometers, from its last reading.
+
+    None while the weather integration is off: the choices are kept, and come
+    back with it.
+    """
+    if not _weather_sensors_listed() or not weather_sensors:
+        return []
+    reading = weather_reading
+    now = time.time()
+    fresh = (
+        weather_provider is not None
+        and reading is not None
+        and now - reading.read_at <= WEATHER_STALE_SECONDS
+    )
+    return sensor_weather.snapshots(
+        weather_sensors.values(), reading, fresh=fresh,
+        stale_seconds=WEATHER_STALE_SECONDS, now=now,
+    )
+
+
+def _apply_sensor_precedence(snapshots: List[ContactSnapshot], now: float):
+    """Zigbee first, then the weather station, then Verisure.
+
+    Verisure's rule already ranks itself below both. The weather station's
+    modules stand by in a room with a fresh Zigbee thermometer, and are added
+    to the same record so the interface explains them the same way.
+    """
+    verisure = sensor_verisure.apply_precedence(
+        snapshots, verisure_sensors, now=now, climate_stale_seconds=CLIMATE_STALE_SECONDS,
+    )
+    weather = sensor_weather.standing_by(
+        snapshots, now=now, climate_stale_seconds=CLIMATE_STALE_SECONDS,
+    )
+    if not weather:
+        return verisure
+    standing_by = {**verisure.standing_by, **weather}
+    return sensor_verisure.Precedence(
+        counted=[item for item in verisure.counted if item.sensor_id not in weather],
+        standing_by=standing_by,
+        stood_in_for=verisure.stood_in_for,
+    )
 
 
 def _verisure_sensors_listed() -> bool:
@@ -2967,12 +3075,11 @@ async def evaluate_sensor_automation() -> Optional[SensorAutomationResult]:
 
     async with sensor_evaluation_lock:
         primary = list(await sensor_provider.list())
-        sensor_snapshots = primary + _verisure_sensor_snapshots(primary)
-        now = time.time()
-        sensor_precedence = sensor_verisure.apply_precedence(
-            sensor_snapshots, verisure_sensors,
-            now=now, climate_stale_seconds=CLIMATE_STALE_SECONDS,
+        sensor_snapshots = (
+            primary + _weather_sensor_snapshots() + _verisure_sensor_snapshots(primary)
         )
+        now = time.time()
+        sensor_precedence = _apply_sensor_precedence(sensor_snapshots, now)
         zones = _build_zones_data()
         if not zones:
             # The rooms come from the hub, so while it is disconnected — its
@@ -3724,6 +3831,11 @@ async def get_capabilities_endpoint():
             "provider": _alarm_current_settings().provider if alarm_settings.enabled else None,
             "providers": ["simulated", "verisure"] if DEMO_MODE else ["verisure"],
         },
+        "weather": {
+            "enabled": weather_settings.enabled,
+            "provider": _weather_current_settings().provider if weather_settings.enabled else None,
+            "providers": _weather_providers(),
+        },
     }
 
 
@@ -4161,6 +4273,126 @@ async def add_verisure_sensor(request: Request, body: VerisureSensorCreate):
     return _verisure_sensor_response(sensor_id)
 
 
+def _require_weather_sensors() -> None:
+    if not _weather_sensors_listed():
+        raise HTTPException(
+            status_code=409,
+            detail="Turn the weather station on to use its modules as room thermometers.",
+        )
+
+
+def _weather_sensor_response(sensor_id: str) -> Dict[str, Any]:
+    snapshot = next((item for item in sensor_snapshots if item.sensor_id == sensor_id), None)
+    if snapshot is None:
+        chosen = weather_sensors[sensor_id]
+        return {"sensor_id": sensor_id, "name": chosen.name, "kind": SensorKind.CLIMATE.value,
+                "zone_id": chosen.zone_id, "source": sensor_weather.SOURCE}
+    return _sensor_snapshot_dict(snapshot)
+
+
+@app.get("/api/sensors/weather")
+async def list_weather_modules(request: Request):
+    """The station's indoor modules, for the "Add from the weather station" list."""
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    listed = _weather_sensors_listed()
+    reading = weather_reading if listed else None
+    reason = None
+    if not listed:
+        reason = "Turn the weather station on to use its modules as room thermometers."
+    elif reading is None:
+        reason = (
+            weather_failure.args[0] if weather_failure is not None
+            else "The weather station has not been read yet. Try again in a minute."
+        )
+    return {
+        "available": listed and reading is not None,
+        "reason": reason,
+        "provider": weather_settings.provider,
+        "modules": sensor_weather.catalogue(reading, weather_sensors),
+    }
+
+
+@app.post("/api/sensors/weather")
+async def add_weather_sensor(request: Request, body: WeatherSensorCreate):
+    _require_admin(_get_session_or_401(request))
+    _require_sensor_enabled()
+    _require_weather_sensors()
+    reading = weather_reading
+    module = reading.module(body.module_id) if reading is not None else None
+    if module is None or module.kind not in ("base", "indoor"):
+        raise HTTPException(
+            status_code=404,
+            detail="The weather station did not report that indoor module in its last reading.",
+        )
+    sensor_id = sensor_weather.sensor_id_for(module.module_id)
+    if sensor_id in weather_sensors:
+        raise HTTPException(status_code=409, detail="That module is already a sensor here.")
+    if len(weather_sensors) >= sensor_weather.MAX_SENSORS:
+        raise HTTPException(status_code=409, detail="No more weather station modules can be added.")
+    _require_sensor_zone(body.zone_id)
+    chosen = sensor_weather.WeatherSensor(
+        sensor_id=sensor_id, module_id=module.module_id,
+        name=_sensor_name(body.name) or module.name,
+        zone_id=str(body.zone_id) if body.zone_id is not None else None,
+    )
+    _save_weather_sensors({**weather_sensors, sensor_id: chosen})
+    add_log_entry("sent", f"Weather station module '{chosen.name}' added as a sensor", source="api")
+    await _finish_sensor_mutation()
+    return _weather_sensor_response(sensor_id)
+
+
+async def _update_weather_sensor(sensor_id: str, body: SensorUpdate) -> Dict[str, Any]:
+    chosen = weather_sensors.get(sensor_id)
+    if chosen is None or not _weather_sensors_listed():
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    if body.kind is not None and body.kind is not SensorKind.CLIMATE:
+        raise HTTPException(
+            status_code=400, detail="A weather station module is a temperature sensor.",
+        )
+    if body.backup_for or body.clear_backup:
+        raise HTTPException(status_code=400, detail="Only an alarm device can be a backup.")
+    changes: Dict[str, Any] = {}
+    if body.name is not None:
+        changes["name"] = _sensor_name(body.name)
+    if body.clear_zone:
+        changes["zone_id"] = None
+    elif body.zone_id is not None:
+        changes["zone_id"] = str(body.zone_id)
+    _save_weather_sensors({**weather_sensors, sensor_id: sensor_weather.with_changes(chosen, **changes)})
+    await _finish_sensor_mutation()
+    return _weather_sensor_response(sensor_id)
+
+
+async def _simulate_weather_sensor(sensor_id: str, body: SensorSimulationUpdate) -> Dict[str, Any]:
+    """A demo station's module, set by hand. A real station's are readings."""
+    chosen = weather_sensors.get(sensor_id)
+    if chosen is None or not _weather_sensors_listed():
+        raise HTTPException(status_code=404, detail="Sensor not found")
+    provider = weather_provider
+    if not isinstance(provider, SimulatedWeather):
+        _sensor_provider_unavailable(
+            "The weather station reports this module's readings; they cannot be set by hand."
+        )
+    if body.state is not None or body.pressure is not None or body.link_quality is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="A weather station module reads temperature and humidity, and can go offline.",
+        )
+    try:
+        provider.set_module(
+            chosen.module_id, temperature=body.temperature, humidity=body.humidity,
+            battery=body.battery, reachable=body.available,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="The demo station has no such module.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await weather_poll_once()
+    await _finish_sensor_mutation()
+    return _weather_sensor_response(sensor_id)
+
+
 async def _update_verisure_sensor(sensor_id: str, body: SensorUpdate) -> Dict[str, Any]:
     chosen = verisure_sensors.get(sensor_id)
     if chosen is None or not _verisure_sensors_listed():
@@ -4222,6 +4454,8 @@ async def update_sensor(request: Request, sensor_id: str, body: SensorUpdate):
     _require_sensor_zone(body.zone_id)
     if sensor_verisure.is_verisure_sensor(sensor_id):
         return await _update_verisure_sensor(sensor_id, body)
+    if sensor_weather.is_weather_sensor(sensor_id):
+        return await _update_weather_sensor(sensor_id, body)
     if body.backup_for or body.clear_backup:
         raise HTTPException(status_code=400, detail="Only an alarm device can be a backup.")
     try:
@@ -4263,8 +4497,9 @@ async def update_sensor_heating(request: Request, sensor_id: str, body: SensorHe
     _require_sensor_enabled()
     primary = list(await sensor_provider.list())
     sensor = next(
-        (item for item in primary + _verisure_sensor_snapshots(primary)
-         if item.sensor_id == sensor_id),
+        (item for item in (
+            primary + _weather_sensor_snapshots() + _verisure_sensor_snapshots(primary)
+        ) if item.sensor_id == sensor_id),
         None,
     )
     if sensor is None:
@@ -4322,6 +4557,15 @@ async def remove_sensor(request: Request, sensor_id: str, force: bool = False):
             _save_sensor_heating_links(
                 {key: value for key, value in sensor_heating_links.items() if key != sensor_id}
             )
+        await _finish_sensor_mutation()
+        return {"status": "success"}
+    if sensor_weather.is_weather_sensor(sensor_id):
+        # Only the choice is forgotten; the module stays in the station.
+        if sensor_id not in weather_sensors:
+            raise HTTPException(status_code=404, detail="Sensor not found")
+        _save_weather_sensors(
+            {key: value for key, value in weather_sensors.items() if key != sensor_id}
+        )
         await _finish_sensor_mutation()
         return {"status": "success"}
     try:
@@ -4395,6 +4639,8 @@ async def simulate_sensor(request: Request, sensor_id: str, body: SensorSimulati
     _require_sensor_enabled()
     if sensor_verisure.is_verisure_sensor(sensor_id):
         return await _simulate_verisure_sensor(sensor_id, body)
+    if sensor_weather.is_weather_sensor(sensor_id):
+        return await _simulate_weather_sensor(sensor_id, body)
     if not _provider_can_simulate():
         # Deliberately the provider and not DEMO_MODE: the hub can be
         # simulated while the sensors are real, and a real sensor's battery
@@ -4474,6 +4720,8 @@ async def get_status():
         # Null unless the alarm integration is on, so a house without one
         # carries nothing to explain.
         "alarm": _alarm_public(),
+        # The same for the weather station.
+        "weather": _weather_public(),
     }
 
 
@@ -4554,12 +4802,28 @@ def _display_payload() -> Dict[str, Any]:
         "open_contacts": open_contacts,
         "unavailable_sensors": unavailable,
         # The house's pressure tendency: "steady", "falling", ... or null
-        # when no barometer has three hours behind it yet.
+        # when no barometer has three hours behind it yet. The weather
+        # station's, when there is one, otherwise the room barometers'.
         "weather_outlook": (
-            _display_outlook(pressure_history.outlook(time.time(), CLIMATE_STALE_SECONDS))
-            if enabled else None
+            _display_outlook(_house_outlook(time.time()))
+            if enabled or weather_settings.enabled else None
         ),
+        # Null unless the weather integration is on and the outdoor module
+        # has been read recently.
+        "outdoor": _display_outdoor(),
         "rooms": rooms,
+    }
+
+
+def _display_outdoor() -> Optional[Dict[str, Any]]:
+    outdoor = (_weather_public() or {}).get("outdoor")
+    if not outdoor or not outdoor["fresh"]:
+        return None
+    return {
+        "temperature": outdoor["temperature"],
+        "humidity": outdoor["humidity"],
+        "min_temperature": outdoor["min_temperature"],
+        "max_temperature": outdoor["max_temperature"],
     }
 
 
@@ -4866,6 +5130,13 @@ def _filter_sensor_notification_settings(out: Dict[str, Any]) -> Dict[str, Any]:
             if spec is None:
                 continue
             types[key] = {**spec, "unavailable": "Needs the alarm integration, which is off."}
+            out.get("events", {})[key] = False
+    if not weather_settings.enabled:
+        for key in ("outdoor_cold", "weather_battery_low", "weather_connection_lost"):
+            spec = types.get(key)
+            if spec is None:
+                continue
+            types[key] = {**spec, "unavailable": "Needs the weather station, which is off."}
             out.get("events", {})[key] = False
     if sensor_settings.enabled:
         _note_verisure_sensor_alerts(types)
@@ -7249,8 +7520,12 @@ def _alarm_settings_response() -> Dict[str, Any]:
     }
 
 
-def _require_secure_transport(request: Request) -> None:
+def _require_secure_transport(
+    request: Request, what: str = "Signing in to Verisure",
+) -> None:
     """The Verisure password is only accepted over HTTPS, or from the Pi itself.
+
+    The same goes for the Netatmo app's client secret and tokens.
 
     uvicorn is started with ``--proxy-headers --forwarded-allow-ips=127.0.0.1``,
     so the scheme is already Caddy's when Caddy is in front and a forged header
@@ -7266,7 +7541,7 @@ def _require_secure_transport(request: Request) -> None:
         pass
     raise HTTPException(
         status_code=403,
-        detail="Signing in to Verisure needs HTTPS. Open this page with https:// and try again.",
+        detail=f"{what} needs HTTPS. Open this page with https:// and try again.",
     )
 
 
@@ -7468,6 +7743,623 @@ async def simulate_alarm(request: Request, body: AlarmSimulation):
     await alarm_poll_once()
     await evaluate_sensor_automation()
     return _alarm_public()
+
+
+# ===========================================================================
+# Weather station integration (optional). See docs/WEATHER.md.
+#
+# Reads a weather station — a demo one, or the user's Netatmo station — for
+# three things: the temperature outside, shown on the front page; the
+# station's barometer, which gives the house its weather outlook; and indoor
+# modules a person has chosen as room thermometers. It never changes the
+# heating, and nothing is ever sent to the station.
+# ===========================================================================
+
+# A Netatmo module measures about every five minutes and the station uploads
+# about every ten, so reading more often only spends the account's quota.
+WEATHER_POLL_SECONDS = 5 * 60
+WEATHER_RATE_LIMIT_BACKOFF = (15 * 60, 30 * 60, 60 * 60)
+WEATHER_ERROR_BACKOFF = (60, 2 * 60, 5 * 60, 10 * 60)
+WEATHER_SIGNED_OUT_POLL_SECONDS = 60 * 60
+# A reading, or a module's own measurement, older than this is not believed.
+WEATHER_STALE_SECONDS = 30 * 60
+# The station's barometer has to have been heard within the hour for its
+# three-hour change to stand.
+WEATHER_PRESSURE_FRESH_SECONDS = 60 * 60
+WEATHER_CONNECTION_ALERT_SECONDS = 60 * 60
+# The outdoor warning clears this far above its limit.
+OUTDOOR_COLD_HYSTERESIS = 1.0
+# A replaced battery reads well above the warning; this keeps one wobbling
+# around 20% from warning twice.
+WEATHER_BATTERY_HYSTERESIS = 10
+# How long a "Connect to Netatmo" page may take before its state lapses.
+NETATMO_CONNECT_SECONDS = 10 * 60
+NETATMO_CALLBACK_PATH = "/api/weather/netatmo/callback"
+
+weather_settings: WeatherSettings = weather_persistence.load_settings()
+weather_ledger: WeatherLedger = weather_persistence.load_ledger()
+weather_provider = None
+netatmo_account = NetatmoAccount()
+weather_reading: Optional[WeatherReading] = None
+weather_failure: Optional[WeatherUnavailable] = None
+weather_failures = 0
+weather_last_good: Optional[float] = None
+weather_wakeup: Optional[asyncio.Event] = None
+weather_next_read: Optional[float] = None
+weather_poll_lock = asyncio.Lock()
+_weather_view: Optional[tuple] = None
+# The OAuth states handed out by "Connect", each tied to the user who asked
+# and to the address Netatmo is to send them back to.
+netatmo_pending: Dict[str, Dict[str, Any]] = {}
+
+station_pressure_history = PressureHistory(
+    zones=weather_persistence.load_pressure_history(),
+    save=weather_persistence.save_pressure_history,
+)
+outdoor_history = ClimateHistory(
+    zones=weather_persistence.load_outdoor_history(),
+    save=weather_persistence.save_outdoor_history,
+)
+
+
+def _forget_weather_history() -> None:
+    global station_pressure_history, outdoor_history
+    weather_persistence.clear_history()
+    station_pressure_history = PressureHistory(save=weather_persistence.save_pressure_history)
+    outdoor_history = ClimateHistory(save=weather_persistence.save_outdoor_history)
+
+
+def _weather_providers() -> List[str]:
+    return ["simulated", "netatmo"] if DEMO_MODE else ["netatmo"]
+
+
+def _weather_current_settings() -> WeatherSettings:
+    """As for the alarm: a real hub offers only Netatmo, so an unchosen
+    source reads as Netatmo there."""
+    if not DEMO_MODE and weather_settings.provider == "simulated":
+        return dataclasses.replace(weather_settings, provider="netatmo")
+    return weather_settings
+
+
+def _set_weather_ledger(**changes: Any) -> None:
+    global weather_ledger
+    updated = dataclasses.replace(weather_ledger, **changes)
+    if updated != weather_ledger:
+        weather_ledger = updated
+        weather_persistence.save_ledger(updated)
+
+
+def _create_weather_provider():
+    if weather_settings.provider == "netatmo":
+        return netatmo_account
+    return SimulatedWeather(weather_persistence.load_simulated, weather_persistence.save_simulated)
+
+
+async def start_weather_service() -> None:
+    global weather_provider, weather_last_good, weather_wakeup
+    if weather_wakeup is None:
+        weather_wakeup = asyncio.Event()
+    if not weather_settings.enabled or weather_provider is not None:
+        return
+    weather_provider = _create_weather_provider()
+    weather_last_good = time.time()
+    notifier.restore_condition("weather-connection", weather_ledger.connection_raised)
+    notifier.restore_condition("outdoor-cold", weather_ledger.cold_raised)
+    for module_id in weather_ledger.battery_low:
+        notifier.restore_condition(f"weather-battery:{module_id}", True)
+    wake_weather()
+
+
+async def stop_weather_service() -> None:
+    global weather_provider, weather_reading, weather_failure, weather_failures, _weather_view
+    weather_provider = None
+    weather_reading = None
+    weather_failure = None
+    weather_failures = 0
+    _weather_view = None
+    notifier.set_condition("weather_connection_lost", "weather-connection", False)
+    notifier.set_condition("outdoor_cold", "outdoor-cold", False)
+    for module_id in weather_ledger.battery_low:
+        notifier.set_condition("weather_battery_low", f"weather-battery:{module_id}", False)
+    _set_weather_ledger(connection_raised=False, cold_raised=False, battery_low=())
+    wake_sensor_automation()
+
+
+def _weather_backoff(failure: WeatherUnavailable) -> float:
+    if failure.kind == "rate_limited":
+        table = WEATHER_RATE_LIMIT_BACKOFF
+    elif failure.kind == "unreachable":
+        table = WEATHER_ERROR_BACKOFF
+    else:
+        return WEATHER_SIGNED_OUT_POLL_SECONDS
+    return float(table[min(weather_failures, len(table)) - 1])
+
+
+def _module_fresh(module, now: float) -> bool:
+    return (
+        module is not None and module.reachable and module.reported_at is not None
+        and now - module.reported_at <= WEATHER_STALE_SECONDS
+    )
+
+
+def _record_weather_history(reading: WeatherReading) -> None:
+    now = time.time()
+    base = reading.first("base")
+    if _module_fresh(base, now) and base.pressure is not None:
+        station_pressure_history.record({"station": (base.reported_at, base.pressure)}, now)
+    outdoor = reading.first("outdoor")
+    if _module_fresh(outdoor, now):
+        outdoor_history.record(
+            {"outdoor": (outdoor.reported_at, outdoor.temperature, outdoor.humidity)}, now,
+        )
+
+
+def _weather_alerts(reading: WeatherReading) -> None:
+    """The outdoor cold and low batteries, each said once and cleared once."""
+    now = time.time()
+    outdoor = reading.first("outdoor")
+    limit = weather_settings.outdoor_cold_below
+    if _module_fresh(outdoor, now) and outdoor.temperature is not None:
+        # Held until a degree above the limit, so a reading wobbling across
+        # it does not send an email each way.
+        cold = outdoor.temperature < limit or (
+            weather_ledger.cold_raised and outdoor.temperature < limit + OUTDOOR_COLD_HYSTERESIS
+        )
+        reading_text = f"{outdoor.temperature:.1f}°C"
+        notifier.set_condition(
+            "outdoor_cold", "outdoor-cold", cold,
+            subject=f"It is {reading_text} outside",
+            body=(
+                f"The weather station at {site_settings()['inline_name']} reads {reading_text} "
+                f"outside, below the {limit:.0f}°C chosen for this warning.\n\n"
+                "Nothing has been changed. It is the night the heaters work hardest, and "
+                "worth a look at any room that is kept just above freezing."
+            ),
+            severity="warning",
+            recovery_subject=f"It is {reading_text} outside again",
+            recovery_body=f"The weather station now reads {reading_text} outside.",
+            recovery_event_type="outdoor_cold",
+            facts=(("Outside", reading_text), ("Warning below", f"{limit:.0f}°C")),
+        )
+        _set_weather_ledger(cold_raised=cold)
+    low: List[str] = []
+    for module in reading.modules:
+        if module.battery is None:
+            continue
+        was_low = module.module_id in weather_ledger.battery_low
+        is_low = module.battery <= WEATHER_BATTERY_LOW_PERCENT or (
+            was_low and module.battery <= WEATHER_BATTERY_LOW_PERCENT + WEATHER_BATTERY_HYSTERESIS
+        )
+        notifier.set_condition(
+            "weather_battery_low", f"weather-battery:{module.module_id}", is_low,
+            subject=f"The {module.name} weather module's battery is low",
+            body=(
+                f"The weather station's {module.name} module reports {module.battery}% battery. "
+                "It usually runs for weeks after this; new batteries before the next trip "
+                "will do."
+            ),
+            severity="info",
+            recovery_subject=f"The {module.name} weather module has a new battery",
+            recovery_body=f"The {module.name} module now reports {module.battery}%.",
+            recovery_event_type="weather_battery_low",
+            facts=(("Module", module.name), ("Battery", f"{module.battery}%")),
+        )
+        if is_low:
+            low.append(module.module_id)
+    _set_weather_ledger(battery_low=tuple(sorted(low)))
+
+
+def _weather_connection_alert() -> None:
+    failure = weather_failure
+    since = weather_last_good or time.time()
+    raised = failure is not None and failure.kind != "not_configured" and (
+        failure.kind == "signed_out"
+        or time.time() - since >= WEATHER_CONNECTION_ALERT_SECONDS
+    )
+    notifier.set_condition(
+        "weather_connection_lost", "weather-connection", raised,
+        subject="The weather station cannot be read",
+        body=(
+            f"{site_settings()['display_name']} cannot read the weather station: "
+            f"{failure.args[0] if failure else ''}\n\n"
+            "The heating does not depend on it. Until it is fixed the outside "
+            "temperature is not shown, and any weather station module used as a room "
+            "thermometer reads as offline."
+        ),
+        severity="info",
+        recovery_subject="The weather station can be read again",
+        recovery_body="The weather station is being read again.",
+        recovery_event_type="weather_connection_lost",
+    )
+    _set_weather_ledger(connection_raised=raised)
+
+
+def _weather_signature() -> tuple:
+    reading = weather_reading
+    return (
+        weather_provider is not None,
+        weather_failure.kind if weather_failure else None,
+        None if reading is None else reading.modules,
+    )
+
+
+async def _weather_announce() -> None:
+    """Tell the room thermometers and the browsers, but only about a change."""
+    global _weather_view
+    view = _weather_signature()
+    if view != _weather_view:
+        _weather_view = view
+        wake_sensor_automation()
+        await broadcast_zone_update()
+
+
+async def weather_poll_once() -> float:
+    """Read the station once. Returns seconds until the next read."""
+    global weather_reading, weather_failure, weather_failures, weather_last_good
+    async with weather_poll_lock:
+        provider = weather_provider
+        if provider is None:
+            return float(WEATHER_POLL_SECONDS)
+        try:
+            reading = await provider.read()
+        except WeatherUnavailable as failure:
+            if provider is not weather_provider:
+                return float(WEATHER_POLL_SECONDS)
+            weather_failure = failure
+            weather_failures += 1
+            delay = _weather_backoff(failure)
+        else:
+            if provider is not weather_provider:
+                return float(WEATHER_POLL_SECONDS)
+            weather_reading = reading
+            weather_failure = None
+            weather_failures = 0
+            weather_last_good = time.time()
+            _record_weather_history(reading)
+            _weather_alerts(reading)
+            delay = float(WEATHER_POLL_SECONDS)
+        _weather_connection_alert()
+        _weather_schedule(delay)
+    await _weather_announce()
+    return delay
+
+
+def _weather_schedule(delay: float) -> None:
+    global weather_next_read
+    weather_next_read = time.monotonic() + delay
+    if weather_wakeup is not None:
+        weather_wakeup.set()
+
+
+async def weather_loop() -> None:
+    global weather_wakeup
+    if weather_wakeup is None:
+        weather_wakeup = asyncio.Event()
+    while True:
+        try:
+            if weather_provider is not None and (
+                weather_next_read is None or time.monotonic() >= weather_next_read
+            ):
+                await weather_poll_once()
+            weather_wakeup.clear()
+            due = weather_next_read
+            delay = None
+            if weather_provider is not None:
+                delay = 0.0 if due is None else max(0.0, due - time.monotonic())
+            try:
+                await asyncio.wait_for(weather_wakeup.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The guard every background loop here has. Nothing from Netatmo
+            # reaches this point — the provider turns its errors into ours.
+            logger.error("Weather loop error: %s", type(exc).__name__)
+            await asyncio.sleep(WEATHER_POLL_SECONDS)
+
+
+def wake_weather() -> None:
+    global weather_next_read
+    weather_next_read = None
+    if weather_wakeup is not None:
+        weather_wakeup.set()
+
+
+def _weather_module_public(module, now: float) -> Dict[str, Any]:
+    chosen = next(
+        (item for item in weather_sensors.values() if item.module_id == module.module_id), None,
+    )
+    return {
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "name": module.name,
+        "temperature": module.temperature,
+        "humidity": module.humidity,
+        "co2": module.co2,
+        "pressure": module.pressure,
+        "min_temperature": module.min_temperature,
+        "max_temperature": module.max_temperature,
+        "trend": module.temperature_trend,
+        "battery": module.battery,
+        "battery_low": module.battery is not None and module.battery <= WEATHER_BATTERY_LOW_PERCENT,
+        "reachable": module.reachable,
+        "fresh": _module_fresh(module, now),
+        "reported_at": weather_iso(module.reported_at),
+        "sensor_id": chosen.sensor_id if chosen else None,
+        "zone_id": chosen.zone_id if chosen else None,
+    }
+
+
+def _weather_public() -> Optional[Dict[str, Any]]:
+    """What any signed-in user may see: readings, never anything about the account."""
+    if not weather_settings.enabled:
+        return None
+    reading = weather_reading
+    failure = weather_failure
+    now = time.time()
+    fresh = reading is not None and now - reading.read_at <= WEATHER_STALE_SECONDS
+    outdoor_module = reading.first("outdoor") if reading else None
+    outdoor = None
+    if outdoor_module is not None:
+        outdoor = _weather_module_public(outdoor_module, now)
+        outdoor["fresh"] = fresh and outdoor["fresh"]
+        outdoor["cold"] = (
+            outdoor["fresh"] and outdoor_module.temperature is not None
+            and outdoor_module.temperature < weather_settings.outdoor_cold_below
+        )
+        outdoor["frost"] = (
+            outdoor["fresh"] and outdoor_module.temperature is not None
+            and outdoor_module.temperature <= 0
+        )
+        outdoor["last_24h"] = outdoor_history.summary("outdoor", now)
+    base = reading.first("base") if reading else None
+    return {
+        "enabled": True,
+        "provider": weather_settings.provider,
+        "connection": failure.kind if failure else ("ok" if reading else "starting"),
+        "message": failure.args[0] if failure else None,
+        "station_name": reading.station_name if reading else None,
+        "read_at": weather_iso(reading.read_at) if reading else None,
+        "fresh": fresh,
+        "outdoor": outdoor,
+        "outlook": _house_outlook(now),
+        "pressure": base.pressure if base is not None and fresh else None,
+        "pressure_24h": station_pressure_history.hourly("station", now),
+        "cold_below": weather_settings.outdoor_cold_below,
+        "modules": [
+            _weather_module_public(module, now) for module in (reading.modules if reading else ())
+        ],
+    }
+
+
+def _netatmo_redirect_uri(request: Request) -> str:
+    return str(request.base_url).rstrip("/") + NETATMO_CALLBACK_PATH
+
+
+def _weather_settings_response(request: Request) -> Dict[str, Any]:
+    current = _weather_current_settings()
+    return {
+        **dataclasses.asdict(current),
+        "providers": _weather_providers(),
+        "cold_limits": list(weather_persistence.COLD_LIMITS),
+        "sensors_enabled": sensor_settings.enabled,
+        "netatmo": {
+            **netatmo_account.public_state(),
+            # What to enter as the app's redirect URI on dev.netatmo.com.
+            "redirect_uri": _netatmo_redirect_uri(request),
+        },
+        "simulated": (
+            weather_provider.modules() if isinstance(weather_provider, SimulatedWeather) else None
+        ),
+        "status": _weather_public(),
+    }
+
+
+def _require_netatmo_selected() -> None:
+    if not weather_settings.enabled or weather_settings.provider != "netatmo":
+        raise HTTPException(status_code=409, detail="Choose Netatmo as the weather station first")
+
+
+class WeatherSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    outdoor_cold_below: Optional[float] = None
+
+
+class NetatmoApp(BaseModel):
+    client_id: str = Field(max_length=128)
+    client_secret: str = Field(max_length=256)
+
+
+class NetatmoToken(BaseModel):
+    refresh_token: str = Field(max_length=512)
+
+
+class WeatherSimulation(BaseModel):
+    module_id: str = Field(max_length=64)
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    pressure: Optional[float] = None
+    battery: Optional[int] = Field(default=None, ge=0, le=100)
+    reachable: Optional[bool] = None
+
+
+@app.get("/api/weather/settings")
+async def get_weather_settings(request: Request):
+    _require_admin(_get_session_or_401(request))
+    return _weather_settings_response(request)
+
+
+@app.put("/api/weather/settings")
+async def update_weather_settings(request: Request, body: WeatherSettingsUpdate):
+    global weather_settings
+    _require_admin(_get_session_or_401(request))
+    changes = body.model_dump(exclude_none=True)
+    previous = _weather_current_settings()
+    try:
+        if "outdoor_cold_below" in changes:
+            changes["outdoor_cold_below"] = weather_persistence.parse_cold_below(
+                changes["outdoor_cold_below"]
+            )
+    except weather_persistence.InvalidWeatherData as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    provider = changes.get("provider", previous.provider)
+    if provider not in weather_persistence.PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unknown weather station")
+    if provider == "simulated" and not DEMO_MODE:
+        raise HTTPException(
+            status_code=400, detail="The demo weather station is only available in demo mode",
+        )
+    updated = dataclasses.replace(previous, **changes)
+    if updated == weather_settings:
+        return _weather_settings_response(request)
+    restart = (updated.enabled, updated.provider) != (previous.enabled, previous.provider)
+    weather_persistence.save_settings(updated)
+    weather_settings = updated
+    if restart:
+        await stop_weather_service()
+        if previous.provider == "netatmo" and (
+            not updated.enabled or updated.provider != "netatmo"
+        ):
+            # Off means off: the app's secret and the tokens are deleted, not
+            # left lying in the data directory.
+            netatmo_account.forget()
+            netatmo_pending.clear()
+        if not updated.enabled:
+            _forget_weather_history()
+        await start_weather_service()
+        if weather_provider is not None:
+            await weather_poll_once()
+    else:
+        if weather_reading is not None and "outdoor_cold_below" in changes:
+            _weather_alerts(weather_reading)
+        await broadcast_zone_update()
+    add_log_entry(
+        "sent",
+        "Weather station turned on" if updated.enabled and not previous.enabled
+        else "Weather station turned off" if previous.enabled and not updated.enabled
+        else "Weather station settings changed",
+        source="api",
+    )
+    return _weather_settings_response(request)
+
+
+@app.post("/api/weather/netatmo/app")
+async def netatmo_set_app(request: Request, body: NetatmoApp):
+    _require_admin(_get_session_or_401(request))
+    _require_secure_transport(request, "Entering the Netatmo app's secret")
+    _require_netatmo_selected()
+    try:
+        netatmo_account.set_app(body.client_id, body.client_secret)
+    except NetatmoError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    add_log_entry("sent", "Netatmo app details saved", source="api")
+    return _weather_settings_response(request)
+
+
+@app.post("/api/weather/netatmo/connect")
+async def netatmo_connect(request: Request):
+    """Where to send the browser to sign in at Netatmo, with a one-time state."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    _require_secure_transport(request, "Connecting to Netatmo")
+    _require_netatmo_selected()
+    now = time.time()
+    for key in [k for k, v in netatmo_pending.items() if v["expires_at"] <= now]:
+        netatmo_pending.pop(key, None)
+    state = secrets.token_urlsafe(24)
+    redirect_uri = _netatmo_redirect_uri(request)
+    try:
+        url = netatmo_account.authorize_url(redirect_uri, state)
+    except NetatmoError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    netatmo_pending[state] = {
+        "username": session.get("username"),
+        "redirect_uri": redirect_uri,
+        "expires_at": now + NETATMO_CONNECT_SECONDS,
+    }
+    return {"authorize_url": url, "redirect_uri": redirect_uri}
+
+
+@app.get(NETATMO_CALLBACK_PATH)
+async def netatmo_callback(
+    request: Request, state: str = "", code: str = "", error: str = "",
+):
+    """Netatmo's page sends the browser back here. Any failure lands on Settings."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    pending = netatmo_pending.pop(state, None) if state else None
+    outcome = "failed"
+    if (
+        pending is not None and not error and code
+        and pending["expires_at"] > time.time()
+        and pending["username"] == session.get("username")
+        and weather_settings.enabled and weather_settings.provider == "netatmo"
+    ):
+        try:
+            await netatmo_account.exchange_code(code[:512], pending["redirect_uri"])
+            outcome = "connected"
+        except NetatmoError as exc:
+            logger.warning("Netatmo sign-in failed: %s", exc)
+    elif error == "access_denied":
+        outcome = "denied"
+    add_log_entry(
+        "sent" if outcome == "connected" else "error",
+        "Weather station connected to Netatmo" if outcome == "connected"
+        else "Connecting to Netatmo did not finish",
+        source="api",
+    )
+    if outcome == "connected":
+        wake_weather()
+        await weather_poll_once()
+    return RedirectResponse(url=f"/?weather={outcome}", status_code=303)
+
+
+@app.post("/api/weather/netatmo/token")
+async def netatmo_use_token(request: Request, body: NetatmoToken):
+    """A refresh token generated on Netatmo's developer page, instead of signing in."""
+    _require_admin(_get_session_or_401(request))
+    _require_secure_transport(request, "Entering a Netatmo token")
+    _require_netatmo_selected()
+    try:
+        await netatmo_account.use_refresh_token(body.refresh_token)
+    except NetatmoError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    add_log_entry("sent", "Weather station connected to Netatmo", source="api")
+    wake_weather()
+    await weather_poll_once()
+    return _weather_settings_response(request)
+
+
+@app.post("/api/weather/netatmo/disconnect")
+async def netatmo_disconnect(request: Request):
+    _require_admin(_get_session_or_401(request))
+    _require_netatmo_selected()
+    netatmo_account.disconnect()
+    netatmo_pending.clear()
+    add_log_entry("sent", "Weather station disconnected from Netatmo", source="api")
+    await weather_poll_once()
+    return _weather_settings_response(request)
+
+
+@app.post("/api/weather/simulate")
+async def simulate_weather(request: Request, body: WeatherSimulation):
+    _require_admin(_get_session_or_401(request))
+    provider = weather_provider
+    if not isinstance(provider, SimulatedWeather):
+        raise HTTPException(status_code=409, detail="Only the demo weather station can be set by hand")
+    try:
+        provider.set_module(
+            body.module_id, temperature=body.temperature, humidity=body.humidity,
+            pressure=body.pressure, battery=body.battery, reachable=body.reachable,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="The demo station has no such module")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    await weather_poll_once()
+    return _weather_settings_response(request)
 
 
 @app.get("/api/week_profiles")

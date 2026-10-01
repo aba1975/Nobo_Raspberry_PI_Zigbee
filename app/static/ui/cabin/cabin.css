@@ -200,6 +200,78 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   margin: 0 0 .3rem; font-size: .72rem; font-weight: 700;
   letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint);
 }
+/* The name on the left and, with a weather station, the temperature outside on
+   the right. The eyebrow's margin moves here so the row keeps the old gap. */
+.trip-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: .75rem; margin: 0 0 .3rem;
+}
+.trip-head .trip-eyebrow { margin: 0; padding-top: .1rem; min-width: 0; }
+.trip-weather {
+  flex: none; display: inline-flex; align-items: center; gap: .5rem;
+  max-width: 62%; margin: -.35rem -.35rem 0 0;
+  padding: .3rem .75rem .3rem .35rem;
+  border: 1px solid var(--rule); border-radius: 22px;
+  background: var(--paper); color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.trip-weather[hidden] { display: none; }
+.trip-weather:hover { border-color: color-mix(in srgb, var(--pine) 40%, var(--rule)); }
+.trip-weather-icon {
+  flex: none; width: 1.75rem; height: 1.75rem; border-radius: 999px;
+  display: grid; place-items: center;
+  color: var(--frost); background: var(--frost-wash);
+}
+.trip-weather-text { display: grid; min-width: 0; line-height: 1.15; }
+.trip-weather-text strong {
+  font-size: 1.05rem; font-weight: 680; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trip-weather-text strong small { font-size: .74rem; font-weight: 600; color: var(--ink-soft); }
+.trip-weather-text > small {
+  font-size: .74rem; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.trip-weather.is-storm { border-color: color-mix(in srgb, var(--danger) 45%, var(--rule)); }
+.trip-weather.is-storm .trip-weather-icon { color: var(--danger); background: var(--danger-wash); }
+.trip-weather.is-worse .trip-weather-icon { color: var(--amber); background: var(--amber-wash); }
+.trip-weather.is-better .trip-weather-icon { color: var(--pine); background: var(--pine-wash); }
+.trip-weather.is-cold { border-color: color-mix(in srgb, var(--frost) 55%, var(--rule)); }
+.trip-weather.is-cold .trip-weather-icon { color: var(--frost); background: var(--frost-wash); }
+.trip-weather.is-stale strong { color: var(--ink-faint); }
+
+/* The weather station sheet: the temperature outside, large, beside its story. */
+.wx-outside {
+  display: flex; align-items: center; gap: 1rem;
+  padding: .9rem 1rem; margin: 0 0 1rem;
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  background: var(--paper);
+}
+.wx-outside.is-cold { border-color: color-mix(in srgb, var(--frost) 55%, var(--rule)); }
+.wx-outside-temp {
+  flex: none; font-size: 2.3rem; line-height: 1; font-weight: 660;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.wx-outside.is-cold .wx-outside-temp { color: var(--frost); }
+.wx-outside-copy { display: grid; gap: .15rem; min-width: 0; color: var(--ink-soft); font-size: .88rem; }
+.wx-outside-copy strong { color: var(--ink); font-size: .98rem; }
+
+.wx-steps { margin: 0 0 .9rem; padding-left: 1.2rem; font-size: .88rem; color: var(--ink-soft); }
+.wx-steps li { margin: .3rem 0; }
+.wx-uri {
+  display: inline-block; max-width: 100%; overflow-wrap: anywhere;
+  padding: .1rem .35rem; border-radius: 6px; background: var(--paper);
+  font-size: .8rem; color: var(--ink);
+}
+.wx-demo-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: .5rem .75rem; align-items: end;
+  padding: .6rem 0; border-top: 1px solid var(--rule);
+}
+.wx-demo-row > strong { grid-column: 1 / -1; font-size: .92rem; }
+.wx-demo-row > strong small { color: var(--ink-faint); font-weight: 500; margin-left: .3rem; }
+.wx-demo-row .field { margin: 0; }
+.wx-demo-row .exc-row { align-self: center; }
 .trip-state {
   margin: 0; font-size: clamp(1.5rem, 5.2vw, 2.05rem);
   line-height: 1.15; font-weight: 660; letter-spacing: -.02em;
@@ -1752,6 +1824,8 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
      gone quiet keeps its line, because that is news. */
   .sensor-row .sensor-copy small:not(.is-alert) { display: none; }
   .sensor-row .sensor-copy small.is-alert { color: var(--amber); font-weight: 600; }
+  /* A weather station module has no card around it, so its line stays. */
+  .sensor-row.wx-module .sensor-copy small:not(.is-alert) { display: block; }
 
   .climate-facts {
     grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);

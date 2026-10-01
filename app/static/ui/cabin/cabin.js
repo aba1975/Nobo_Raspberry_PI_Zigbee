@@ -209,6 +209,7 @@
     if (!state.me) state.me = await Nobo.api.me().catch(() => null);
     if (state.me && state.me.role === 'admin') {
       state.alarmSettings = await Nobo.api.alarmSettings().catch(() => state.alarmSettings);
+      state.weatherSettings = await Nobo.api.weatherSettings().catch(() => state.weatherSettings);
       state.sensorSettings = await Nobo.api.sensorSettings().catch(() => state.sensorSettings);
       const network = state.sensorSettings && state.sensorSettings.enabled
         ? await Nobo.api.sensorNetwork().catch(() => null)
@@ -1073,6 +1074,16 @@
     return !!sensor && sensor.source === 'verisure';
   }
 
+  function isWeatherSensor(sensor) {
+    return !!sensor && sensor.source === 'netatmo';
+  }
+
+  /* Read from another system rather than paired here: nothing to replace,
+     and its radio is that system's to watch. */
+  function isBorrowedSensor(sensor) {
+    return isVerisureSensor(sensor) || isWeatherSensor(sensor);
+  }
+
   function sensorPolicyFor(zoneId) {
     const policy = state.sensorSettings && state.sensorSettings.zones
       ? state.sensorSettings.zones[String(zoneId)] : null;
@@ -1382,6 +1393,9 @@
     if (sensor.standing_by === 'zigbee_thermometer') {
       return 'standing by: a Zigbee thermometer is reading this room';
     }
+    if (sensor.standing_by === 'weather_station') {
+      return 'standing by: the weather station is reading this room';
+    }
     if (sensor.standing_by === 'zigbee_reporting') {
       return `backup for ${sensor.backup_for_name || 'a Zigbee sensor'}, standing by`;
     }
@@ -1407,6 +1421,7 @@
         : sensor.state;
     const low = sensor.battery != null && sensor.battery <= 20;
     const verisure = isVerisureSensor(sensor);
+    const weather = isWeatherSensor(sensor);
     /* A battery sensor reports its level on its own schedule, and Aqara warns
        that can take up to a day. Rendering nothing for a level we have not
        been told reads as a broken sensor, so the gap is named instead. */
@@ -1443,6 +1458,11 @@
        either to anybody else, so the row names the source instead. */
     const health = verisure
       ? `<span class="sensor-source" title="Read from the Verisure alarm about once a minute. Its battery and radio are the alarm's to watch.">Verisure</span>`
+      : weather
+      ? `<span class="sensor-source" title="Read from the weather station every five minutes. A low battery is the weather station's own alert.">${weatherIsSimulated() ? 'Demo station' : 'Netatmo'}</span>${
+          sensor.battery == null ? '' : `<span class="sensor-batt ${low ? 'is-low' : ''}"
+           title="Battery ${esc(sensor.battery)}%">${esc(sensor.battery)}%<span
+           class="phone-only"> battery</span>${low ? ' low' : ''}</span>`}`
       : `${battery}
           ${sensorSignal(sensor)}`;
     const backup = verisure && !!sensor.backup_for;
@@ -1466,7 +1486,7 @@
             title="Move to another room" aria-label="Move ${esc(sensor.name)}">${Nobo.icon('move')}</button>`}
           ${climate || backup ? '' : `<button class="icon-btn act-move" type="button" data-heating-sensor="${esc(sensor.sensor_id)}"
             title="Heating it controls" aria-label="Heating ${esc(sensor.name)} controls">${Nobo.icon('rooms')}</button>`}
-          ${verisure ? '' : `<button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
+          ${verisure || weather ? '' : `<button class="icon-btn act-replace" type="button" data-replace-sensor="${esc(sensor.sensor_id)}"
             title="Replace this sensor" aria-label="Replace ${esc(sensor.name)}">${Nobo.icon('replace')}</button>`}
           <button class="icon-btn act-remove" type="button" data-remove-sensor="${esc(sensor.sensor_id)}"
             title="Remove this sensor" aria-label="Remove ${esc(sensor.name)}">${Nobo.icon('remove')}</button>
@@ -2104,11 +2124,13 @@
   }
 
   /* Only when the weather is on the move, so a steady day adds nothing to
-     read on the page somebody opens most. */
+     read on the page somebody opens most. With a weather station the
+     outlook moves into the top card, beside the temperature outside. */
   function renderWeather() {
+    renderTripWeather();
     const el = $('#weatherChip');
     if (!el) return;
-    const found = houseOutlook();
+    const found = stationWeather() ? null : houseOutlook();
     const show = !!found && found.outlook.tendency !== 'steady';
     el.hidden = !show;
     if (!show) { el.innerHTML = ''; el.onclick = null; return; }
@@ -2120,6 +2142,122 @@
         <small>${esc(pressureChangeText(found.outlook.change_3h))}</small></span>`;
     el.setAttribute('aria-label', `Weather outlook: ${known.title}. ${pressureChangeText(found.outlook.change_3h)}. Open ${found.zone.name}.`);
     el.onclick = () => showZone(found.zone.zone_id);
+  }
+
+  function stationWeather() {
+    const weather = (state.status || {}).weather;
+    return weather && weather.enabled ? weather : null;
+  }
+
+  function outdoorReading(weather) {
+    const outdoor = weather && weather.outdoor;
+    return outdoor && outdoor.fresh && outdoor.temperature != null ? outdoor : null;
+  }
+
+  /* The top card's corner: the temperature outside, and the outlook under
+     it. A station that cannot be read says so here rather than going blank,
+     because a missing number on the front page reads as a mild day. */
+  function renderTripWeather() {
+    const el = $('#tripWeather');
+    if (!el) return;
+    const weather = stationWeather();
+    el.hidden = !weather;
+    if (!weather) { el.innerHTML = ''; el.onclick = null; return; }
+    const outdoor = outdoorReading(weather);
+    const outlook = weather.outlook && weather.outlook.tendency
+      ? PRESSURE_OUTLOOK[weather.outlook.tendency] : null;
+    const temp = outdoor ? `${Nobo.fmtTemp(outdoor.temperature)}\u00B0` : '\u2013';
+    const learning = weather.outlook && !weather.outlook.tendency && weather.outlook.ready_at;
+    const line = weather.connection !== 'ok' && weather.connection !== 'starting' ? 'Station not read'
+      : outlook ? outlook.title
+      : !outdoor ? 'No outdoor reading'
+      : learning ? 'Outlook soon' : '';
+    const tone = outdoor && outdoor.cold ? 'is-cold' : outlook ? `is-${outlook.tone}` : 'is-steady';
+    el.className = `trip-weather ${tone}${outdoor ? '' : ' is-stale'}`;
+    el.innerHTML = `
+      <span class="trip-weather-icon" aria-hidden="true">${
+        Nobo.icon(outlook ? outlook.icon : 'thermo', '1.15em')}</span>
+      <span class="trip-weather-text">
+        <strong>${esc(temp)}<small> outside</small></strong>
+        ${line ? `<small>${esc(line)}</small>` : ''}
+      </span>`;
+    el.setAttribute('aria-label',
+      `Weather: ${outdoor ? `${Nobo.fmtTemp(outdoor.temperature)} degrees outside` : 'no outdoor reading'}${
+        outlook ? `, ${outlook.title}` : ''}. Open the weather station.`);
+    el.onclick = weatherSheet;
+  }
+
+  function weatherModuleRow(module) {
+    const offline = !module.fresh;
+    const facts = [];
+    if (!offline && module.humidity != null) facts.push(`${Math.round(module.humidity)}% humidity`);
+    if (!offline && module.co2 != null) facts.push(`${module.co2} ppm CO\u2082`);
+    if (module.battery != null) facts.push(`battery ${module.battery}%${module.battery_low ? ' \u2014 low' : ''}`);
+    if (module.zone_id) facts.push(`thermometer for ${zoneName(module.zone_id) || 'a room'}`);
+    if (offline) facts.push(`last heard from ${Nobo.fmtAgo(module.reported_at) || 'unknown'}`);
+    const label = offline || module.temperature == null ? 'Offline' : `${Nobo.fmtTemp(module.temperature)}\u00B0`;
+    return `
+      <li class="sensor-row wx-module ${offline ? 'is-offline' : ''}">
+        ${sensorIcon({ kind: 'climate' })}
+        <span class="sensor-copy">
+          <strong>${esc(module.name)}</strong>
+          <small class="${offline || module.battery_low ? 'is-alert' : ''}">${esc(facts.join(' \u00B7 '))}</small>
+        </span>
+        <span class="sensor-facts">
+          <span class="sensor-state ${offline ? 'sensor-unavailable' : 'sensor-reading'}">${esc(label)}</span>
+        </span>
+      </li>`;
+  }
+
+  /* Everything the station says: outside, the outlook it is read from, and
+     each module. For reading only; the setup is under Settings. */
+  function weatherSheet() {
+    const weather = stationWeather();
+    if (!weather) return;
+    const outdoor = weather.outdoor;
+    const fresh = outdoorReading(weather);
+    const day = outdoor && outdoor.last_24h;
+    const range = (low, high) => low == null || high == null ? ''
+      : `${Nobo.fmtTemp(low)}\u00B0 to ${Nobo.fmtTemp(high)}\u00B0`;
+    const trend = { up: 'rising', down: 'falling', stable: 'steady' };
+    const outsideFacts = fresh ? [
+      fresh.humidity != null ? `${Math.round(fresh.humidity)}% humidity` : '',
+      fresh.trend && trend[fresh.trend] ? `temperature ${trend[fresh.trend]}` : '',
+      range(fresh.min_temperature, fresh.max_temperature)
+        ? `today ${range(fresh.min_temperature, fresh.max_temperature)}` : '',
+      day && (day.hours || []).length > 2 && range(day.temperature_min, day.temperature_max)
+        ? `last 24 h ${range(day.temperature_min, day.temperature_max)}` : '',
+    ].filter(Boolean) : [];
+    const problem = weather.connection !== 'ok' && weather.connection !== 'starting'
+      ? `<div class="note note-warn">${esc(weather.message || 'The weather station cannot be read.')}</div>` : '';
+    const outside = !outdoor ? '' : `
+      <div class="wx-outside${fresh && fresh.cold ? ' is-cold' : ''}">
+        <span class="wx-outside-temp">${fresh ? `${esc(Nobo.fmtTemp(fresh.temperature))}\u00B0` : '\u2013'}</span>
+        <span class="wx-outside-copy">
+          <strong>Outside${fresh && fresh.cold ? ' \u2014 very cold' : ''}</strong>
+          <small>${esc(fresh ? outsideFacts.join(' \u00B7 ')
+            : `No recent reading. Last heard from ${Nobo.fmtAgo(outdoor.reported_at) || 'unknown'}.`)}</small>
+        </span>
+      </div>`;
+    const indoor = (weather.modules || []).filter(module => module.kind !== 'outdoor'
+      && module.kind !== 'rain' && module.kind !== 'wind');
+    const source = weather.provider === 'simulated' ? 'the demo weather station' : 'Netatmo';
+    openSheet(weather.station_name || 'Weather', `
+      ${problem}
+      ${outside}
+      ${weather.outlook ? pressureOutlook({
+        pressure_outlook: weather.outlook, pressure_24h: weather.pressure_24h }) : ''}
+      ${indoor.length ? `
+        <h3>Inside</h3>
+        <ul class="sensor-list">${indoor.map(weatherModuleRow).join('')}</ul>` : ''}
+      <small class="field-hint">Read from ${esc(source)} every five minutes${
+        weather.read_at ? `, last at ${esc(Nobo.fmtTimeOfDay(weather.read_at))}` : ''}.
+        It only ever reads: the heating is not changed by anything here.</small>
+      <div class="sheet-actions">
+        <button class="btn btn-primary" type="button" data-act="cancel">Close</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+    });
   }
 
   function thresholdOptions(value, from, to, noneLabel) {
@@ -2385,7 +2523,7 @@
        sensor can come from — asked first, because nothing is paired for
        those. A replacement is always paired: an alarm device is not replaced
        from here. */
-    if (!replacing && alarmSensorsOffered()) {
+    if (!replacing && (alarmSensorsOffered() || weatherSensorsOffered())) {
       sensorSourceSheet(defaultZoneId);
       return;
     }
@@ -2409,6 +2547,16 @@
     return !!(alarm && alarm.provider === 'simulated');
   }
 
+  function weatherSensorsOffered() {
+    const weather = (state.status || {}).weather;
+    return !!(weather && weather.enabled);
+  }
+
+  function weatherIsSimulated() {
+    const weather = (state.status || {}).weather;
+    return !!(weather && weather.provider === 'simulated');
+  }
+
   function sensorSourceSheet(defaultZoneId) {
     const settings = state.sensorSettings || {};
     const own = settings.simulated ? 'A simulated sensor' : 'A Zigbee sensor';
@@ -2420,9 +2568,13 @@
       <p class="zd-sub">Where does it come from?</p>`, [
       { icon: 'signal', cls: 'act-rename', label: own, hint: ownHint,
         run: () => pairNewSensorSheet(defaultZoneId) },
-      { icon: 'door', cls: 'act-move', label: `From ${alarmWord}`,
+      ...(alarmSensorsOffered() ? [{ icon: 'door', cls: 'act-move', label: `From ${alarmWord}`,
         hint: 'A door, window or smoke detector the alarm already has. Nothing to pair.',
-        run: () => verisureSensorSheet(defaultZoneId) },
+        run: () => verisureSensorSheet(defaultZoneId) }] : []),
+      ...(weatherSensorsOffered() ? [{ icon: 'thermo', cls: 'act-move',
+        label: `From ${weatherIsSimulated() ? 'the demo weather station' : 'the Netatmo weather station'}`,
+        hint: 'An indoor module, as the room\u2019s thermometer. Nothing to pair.',
+        run: () => weatherSensorSheet(defaultZoneId) }] : []),
     ]);
   }
 
@@ -2559,6 +2711,92 @@
         else body.zone_id = root.querySelector('#vsZone').value;
         try {
           await Nobo.api.addVerisureSensor(body);
+          closeSheet();
+          Nobo.toast(`${label} added`);
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  function weatherModuleLabel(module) {
+    const reading = !module.reachable || module.temperature == null ? 'no reading'
+      : `${Nobo.fmtTemp(module.temperature)}\u00B0`;
+    const where = module.kind === 'base' ? 'base station, ' : '';
+    const taken = module.sensor_id ? ' \u2014 already added' : '';
+    return `${module.name} (${where}${reading})${taken}`;
+  }
+
+  /* The weather station's indoor modules, offered as room thermometers. A
+     choice from a list, like the alarm's devices: the module already belongs
+     to the station, and the outdoor one is not a room. */
+  async function weatherSensorSheet(defaultZoneId) {
+    const title = 'Add from the weather station';
+    workingSheet(title, 'Reading the weather station\u2026');
+    let found;
+    try {
+      found = await Nobo.api.weatherModules();
+    } catch (e) {
+      closeSheet();
+      Nobo.toast(e.message, 'error');
+      return;
+    }
+    const modules = found.modules || [];
+    const free = modules.filter(module => !module.sensor_id);
+    if (!found.available || !free.length) {
+      openSheet(title, `
+        <p class="zd-sub">${esc(!found.available ? (found.reason || 'The weather station cannot be read right now.')
+          : modules.length ? 'Every indoor module is already a sensor here.'
+          : 'The weather station reported no indoor modules.')}</p>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="cancel">Close</button>
+        </div>`, (root) => {
+        root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      });
+      return;
+    }
+    openSheet(title, `
+      <p class="zd-sub">The station is read every five minutes. A Zigbee thermometer
+        in the same room is believed first; this one fills in where there is none.</p>
+      <label class="field"><span>Module</span>
+        <select id="wsModule">${modules.map(module => `<option value="${esc(module.module_id)}"
+          ${module.sensor_id ? 'disabled' : ''}>${esc(weatherModuleLabel(module))}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field"><span>Name</span>
+        <input id="wsName" type="text" maxlength="80" autocomplete="off">
+      </label>
+      <label class="field"><span>Room</span>
+        <select id="wsZone">${sensorZoneOptions(defaultZoneId)}</select>
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="add">Add sensor</button>
+      </div>`, (root) => {
+      const pick = root.querySelector('#wsModule');
+      const name = root.querySelector('#wsName');
+      let named = false;
+      name.oninput = () => { named = true; };
+      const sync = () => {
+        const chosen = modules.find(item => item.module_id === pick.value);
+        if (chosen && !named) name.value = chosen.name;
+      };
+      pick.value = free[0].module_id;
+      pick.onchange = sync;
+      sync();
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="add"]').onclick = async (event) => {
+        const label = name.value.trim();
+        if (!label) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          await Nobo.api.addWeatherSensor({
+            module_id: pick.value, name: label, zone_id: root.querySelector('#wsZone').value,
+          });
           closeSheet();
           Nobo.toast(`${label} added`);
           await refresh(true);
@@ -2818,6 +3056,7 @@
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
     if (isVerisureSensor(sensor)) { editVerisureSensorSheet(sensor); return; }
+    if (isWeatherSensor(sensor)) { editWeatherSensorSheet(sensor); return; }
     /* Whether these sensors can be *made* to say things, which is not the
        same question as whether the hub is simulated: real Zigbee sensors
        beside a demo hub is a supported arrangement, and offering to type
@@ -2996,6 +3235,62 @@
     });
   }
 
+  function editWeatherSensorSheet(sensor) {
+    const demo = weatherIsSimulated();
+    const number = (id, label, value, min, max, step) => `
+        <label class="field"><span>${esc(label)}</span>
+          <input id="${id}" type="number" min="${min}" max="${max}" step="${step}"
+            inputmode="decimal" value="${value == null ? '' : esc(value)}">
+        </label>`;
+    openSheet(`Edit ${sensor.name}`, `
+      <p class="zd-sub">Read from the ${demo ? 'demo weather station' : 'Netatmo weather station'}.
+        Removing it here leaves it in the station.</p>
+      <label class="field"><span>Name</span>
+        <input id="editSensorName" type="text" maxlength="80" value="${esc(sensor.name)}">
+      </label>
+      ${demo ? `
+        <h3>Simulated module</h3>
+        ${number('editSensorTemp', 'Temperature (°C)', sensor.temperature, -50, 60, 0.1)}
+        ${number('editSensorHumidity', 'Humidity (%)', sensor.humidity, 0, 100, 1)}
+        ${number('editSensorBattery', 'Battery (%)', sensor.battery, 0, 100, 1)}
+        <label class="field"><span>Radio</span>
+          <select id="editSensorReach">
+            <option value="1" ${sensor.available ? 'selected' : ''}>Heard by the base station</option>
+            <option value="0" ${sensor.available ? '' : 'selected'}>Out of reach</option>
+          </select>
+        </label>` : ''}
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Save</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const name = root.querySelector('#editSensorName').value.trim();
+        if (!name) { Nobo.toast('Give the sensor a name', 'error'); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          await Nobo.api.updateSensor(sensor.sensor_id, { name });
+          if (demo) {
+            const said = { available: root.querySelector('#editSensorReach').value === '1' };
+            [['temperature', '#editSensorTemp'], ['humidity', '#editSensorHumidity'],
+              ['battery', '#editSensorBattery']].forEach(([key, id]) => {
+              const value = root.querySelector(id).value;
+              if (value !== '') said[key] = Number(value);
+            });
+            await Nobo.api.simulateSensor(sensor.sensor_id, said);
+          }
+          closeSheet();
+          Nobo.toast('Sensor updated');
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
   function moveSensorSheet(sensorId) {
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
@@ -3047,6 +3342,8 @@
     confirmSheet('Remove this sensor?',
       isVerisureSensor(sensor)
         ? `${sensor.name} stops being a sensor here. It stays in the alarm, and can be added again.`
+        : isWeatherSensor(sensor)
+        ? `${sensor.name} stops being a sensor here. It stays in the weather station, and can be added again.`
         : paired
         ? `${sensor.name} is unpaired from the hub and its room assignment is forgotten. `
           + 'Battery sensors are asleep most of the time, so if it does not answer '
@@ -3284,6 +3581,7 @@
     const sensor = configuredSensor(sensorId);
     if (!sensor) return;
     const verisure = isVerisureSensor(sensor);
+    const borrowed = isBorrowedSensor(sensor);
     const backup = verisure && !!sensor.backup_for;
     /* The row on a phone is name and state only; the rest is here. */
     const row = document.createElement('ul');
@@ -3309,7 +3607,7 @@
         icon: 'rooms', cls: 'act-move', label: 'Heating it controls',
         hint: heatingControlsHint(sensor),
         run: () => sensorHeatingSheet(sensorId) }]),
-      ...(verisure ? [] : [{ icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
+      ...(borrowed ? [] : [{ icon: 'replace', cls: 'act-replace', label: 'Replace this sensor',
         hint: 'Pair a new one in its place',
         run: () => pairSensorSheet('', configuredSensor(sensorId)) }]),
       { icon: 'remove', cls: 'act-remove', label: 'Remove this sensor',
@@ -5447,7 +5745,7 @@
   function sensorMeshNote() {
     if (state.sensorSettings && state.sensorSettings.simulated) return '';
     const routers = state.sensorRouters || [];
-    const sensors = (state.sensorDevices || []).filter(sensor => !isVerisureSensor(sensor));
+    const sensors = (state.sensorDevices || []).filter(sensor => !isBorrowedSensor(sensor));
     if (!sensors.length && !routers.length) return '';
     if (!routers.length) {
       return `<div class="note">
@@ -5474,9 +5772,11 @@
     if (!isAdmin || !state.me || !state.sensorSettings) return '';
     const settings = state.sensorSettings;
     const everything = allConfiguredSensors();
-    const sensors = everything.filter(sensor => !isVerisureSensor(sensor));
-    const fromAlarm = everything.length - sensors.length;
-    const alarmNote = fromAlarm ? ` · ${fromAlarm} from ${alarmIsSimulated() ? 'the demo alarm' : 'Verisure'}` : '';
+    const sensors = everything.filter(sensor => !isBorrowedSensor(sensor));
+    const fromAlarm = everything.filter(isVerisureSensor).length;
+    const fromStation = everything.filter(isWeatherSensor).length;
+    const alarmNote = (fromAlarm ? ` · ${fromAlarm} from ${alarmIsSimulated() ? 'the demo alarm' : 'Verisure'}` : '')
+      + (fromStation ? ` · ${fromStation} from the weather station` : '');
     const knownZones = new Set(state.zones.map(zone => String(zone.zone_id)));
     const unassigned = everything.filter(sensor =>
       sensor.zone_id == null || !knownZones.has(String(sensor.zone_id))
@@ -5756,6 +6056,346 @@
             sides[method] || 'outside', { label: `${lockMethodLabel(method)} counts as` }),
         )).join('')}
       </details>`;
+  }
+
+  /* ------------------------------------------------------------------
+   * Weather station (optional)
+   *
+   * The temperature outside on the front page, the outlook from the
+   * station's barometer, and indoor modules as room thermometers. It only
+   * reads; nothing here changes the heating.
+   * ---------------------------------------------------------------- */
+
+  const WEATHER_PROVIDER_LABELS = { simulated: 'Demo', netatmo: 'Netatmo' };
+
+  function weatherAccountBlock(settings) {
+    const account = settings.netatmo || {};
+    const secure = alarmTransportSecure();
+    const httpsNote = secure ? '' : `
+      <div class="note note-warn"><strong>Setting up Netatmo needs HTTPS</strong>
+        <span>This page was opened over plain http, so the app's secret could be
+        read on the way. Open it with https:// to carry on.</span></div>`;
+    if (!account.app_configured) {
+      return `
+        ${httpsNote}
+        <ol class="wx-steps">
+          <li>Sign in at <a href="https://dev.netatmo.com/apps" target="_blank" rel="noopener">dev.netatmo.com</a>
+            with your Netatmo account and create an app. Any name will do.</li>
+          <li>Give it this redirect URI:
+            <code class="wx-uri">${esc(account.redirect_uri || '')}</code></li>
+          <li>Copy its client ID and client secret here.</li>
+        </ol>
+        <label class="field"><span>Client ID</span>
+          <input id="wxClientId" type="text" autocomplete="off" maxlength="128" spellcheck="false">
+        </label>
+        <label class="field"><span>Client secret</span>
+          <input id="wxClientSecret" type="password" autocomplete="off" maxlength="256">
+        </label>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="wx-app" ${secure ? '' : 'disabled'}>Save</button>
+        </div>
+        <small class="field-hint">The secret is kept in a file only this system can
+        read, and is never shown again. It is deleted when the weather station is
+        turned off.</small>`;
+    }
+    if (account.connected) {
+      return `
+        <div class="alarm-account">
+          <div class="user-row">
+            <div><strong>Connected to Netatmo</strong>
+              <small class="field-hint">App ${esc(account.client_id || '')}${
+                account.connected_at ? ` · since ${esc(Nobo.fmtDayMonth(account.connected_at * 1000))}` : ''}</small></div>
+            <button class="btn" type="button" data-act="wx-disconnect">Disconnect</button>
+          </div>
+        </div>`;
+    }
+    return `
+      ${httpsNote}
+      <div class="alarm-account">
+        <div class="user-row">
+          <div><strong>Netatmo app saved</strong>
+            <small class="field-hint">App ${esc(account.client_id || '')} · not connected</small></div>
+          <button class="btn" type="button" data-act="wx-forget">Change app</button>
+        </div>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn btn-primary" type="button" data-act="wx-connect"
+          ${secure ? '' : 'disabled'}>Connect to Netatmo</button>
+      </div>
+      <small class="field-hint">Opens Netatmo's page, where you allow this system to
+      read the weather station, and comes back here. The redirect URI registered for
+      the app has to be <code class="wx-uri">${esc(account.redirect_uri || '')}</code></small>
+      <details class="alarm-lock-sides">
+        <summary>Connect with a token instead</summary>
+        <p class="zd-sub">For when this page is not opened at the address above. On
+          dev.netatmo.com, open the app, choose the scope <b>read_station</b> in the
+          token generator, and paste the refresh token it gives you.</p>
+        <label class="field"><span>Refresh token</span>
+          <input id="wxRefreshToken" type="password" autocomplete="off" maxlength="512">
+        </label>
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="wx-token" ${secure ? '' : 'disabled'}>Use token</button>
+        </div>
+      </details>`;
+  }
+
+  function weatherStatusBlock(weather) {
+    if (!weather) return '';
+    if (weather.connection !== 'ok') {
+      const text = weather.connection === 'starting' ? 'Reading the weather station\u2026'
+        : weather.message || 'The weather station cannot be read.';
+      return `<div class="note${weather.connection === 'starting' ? '' : ' note-warn'}">${esc(text)}</div>`;
+    }
+    const outdoor = outdoorReading(weather);
+    const modules = (weather.modules || []).length;
+    return `
+      <div class="sensor-settings-summary alarm-status">
+        <strong>${esc(weather.station_name || 'Weather station')}</strong>
+        <span>${outdoor ? `${esc(Nobo.fmtTemp(outdoor.temperature))}\u00B0 outside · ` : ''}${
+          modules} ${modules === 1 ? 'module' : 'modules'}${
+          weather.read_at ? ` · read at ${esc(Nobo.fmtTimeOfDay(weather.read_at))}` : ''}</span>
+      </div>`;
+  }
+
+  /* The demo station's modules, each set by hand. */
+  function weatherDemoControls(settings) {
+    const modules = settings.simulated || [];
+    if (!modules.length) return '';
+    const kinds = { base: 'Base station', indoor: 'Indoor', outdoor: 'Outdoor' };
+    return `
+      <div class="alarm-demo">
+        <p class="zd-sub">Demo weather station \u2014 set its readings as if the weather had changed.</p>
+        ${modules.map(module => `
+          <div class="wx-demo-row" data-wx-module="${esc(module.module_id)}">
+            <strong>${esc(module.name)} <small>${esc(kinds[module.kind] || module.kind)}</small></strong>
+            <label class="field"><span>°C</span>
+              <input type="number" data-wx-field="temperature" step="0.1" min="-50" max="60"
+                inputmode="decimal" value="${module.temperature == null ? '' : esc(module.temperature)}">
+            </label>
+            ${module.kind === 'base' ? `
+            <label class="field"><span>hPa</span>
+              <input type="number" data-wx-field="pressure" step="0.1" min="900" max="1100"
+                inputmode="decimal" value="${module.pressure == null ? '' : esc(module.pressure)}">
+            </label>` : `
+            <label class="field"><span>Battery %</span>
+              <input type="number" data-wx-field="battery" step="1" min="0" max="100"
+                inputmode="numeric" value="${module.battery == null ? '' : esc(module.battery)}">
+            </label>`}
+            <label class="exc-row"><input type="checkbox" data-wx-field="reachable"
+              ${module.reachable === false ? '' : 'checked'}><span class="exc-name">Reachable</span></label>
+          </div>`).join('')}
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-act="wx-simulate">Apply</button>
+        </div>
+      </div>`;
+  }
+
+  function renderWeatherSettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.weatherSettings) return '';
+    const settings = state.weatherSettings;
+    const weather = settings.status;
+    const providers = settings.providers || ['netatmo'];
+    const provider = WEATHER_PROVIDER_LABELS[settings.provider] || settings.provider;
+    const netatmo = settings.netatmo || {};
+    const notConnected = settings.enabled && settings.provider === 'netatmo' && !netatmo.connected;
+    const outdoor = outdoorReading(weather);
+
+    const summary = !settings.enabled ? '<b>Off</b>'
+      : notConnected ? `<b>${esc(provider)}</b> · not connected`
+      : `<b>${esc(provider)}</b>${outdoor ? ` · ${esc(Nobo.fmtTemp(outdoor.temperature))}\u00B0 outside` : ''}`;
+
+    const onOff = settingRow('Use a weather station',
+      'The temperature outside on the front page, a weather outlook, and indoor modules as room thermometers.',
+      segControl('wx-enabled', [['off', 'Off'], ['on', 'On']],
+        settings.enabled ? 'on' : 'off', { label: 'Use a weather station' }));
+    const sourceRow = !settings.enabled || providers.length < 2 ? '' : settingRow(
+      'Source', settings.provider === 'simulated'
+        ? 'An invented station whose readings you set yourself.'
+        : 'Your Netatmo weather station, read from Netatmo.',
+      segControl('wx-source', providers.map(p => [p, WEATHER_PROVIDER_LABELS[p] || p]),
+        settings.provider, { label: 'Which weather station' }));
+    const limits = settings.cold_limits || [-40, 10];
+    const coldChoices = [];
+    for (let t = limits[0]; t <= limits[1]; t += 5) coldChoices.push(t);
+    if (!coldChoices.includes(settings.outdoor_cold_below)) {
+      coldChoices.push(settings.outdoor_cold_below);
+      coldChoices.sort((a, b) => a - b);
+    }
+    const noSensors = settings.sensors_enabled ? '' : `
+      <div class="note">To use an indoor module as a room's thermometer, turn on
+      door, window and temperature sensors above.</div>`;
+
+    const body = !settings.enabled
+      ? '<div class="note">Nothing about a weather station is shown elsewhere while this is off.</div>'
+      : `
+        ${sourceRow}
+        ${settings.provider === 'netatmo' ? weatherAccountBlock(settings) : ''}
+        ${notConnected && settings.provider === 'netatmo' ? '' : weatherStatusBlock(weather)}
+        ${settings.provider === 'simulated' ? weatherDemoControls(settings) : ''}
+        <h4 class="notify-head">Warnings</h4>
+        <label class="field"><span>Warn when it is colder than this outside</span>
+          <select id="wxColdBelow">${coldChoices.map(t => `<option value="${t}"
+            ${t === settings.outdoor_cold_below ? 'selected' : ''}>${esc(fmtLimit(t))} \u00B0C</option>`).join('')}
+          </select>
+          <small>The email itself is under Alerts, with a low module battery and a
+          station that cannot be read.</small>
+        </label>
+        <h4 class="notify-head">Room thermometers</h4>
+        <p class="zd-sub">Add an indoor module to a room from the room's sensors, as
+          \u201cFrom the weather station\u201d. A Zigbee thermometer in the same room is
+          believed first, and a Verisure smoke detector after the module.</p>
+        ${noSensors}`;
+
+    return settingsSection('weather', 'Weather Station', summary, `
+      <p class="zd-sub">Optional. Reads your weather station. It only ever reads,
+      and the heating does not depend on it.</p>
+      ${onOff}
+      ${body}
+    `, { icon: 'wx-clear', alert: notConnected && !!netatmo.app_configured });
+  }
+
+  async function saveWeatherSettings(changes) {
+    state.weatherSettings = await Nobo.api.setWeatherSettings(changes);
+    await refresh(true);
+    renderSettings();
+  }
+
+  function wireWeatherSettings(root) {
+    const settings = state.weatherSettings;
+    if (!settings) return;
+    const guarded = (fn) => async (...args) => {
+      try { await fn(...args); } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    const reload = async (next) => {
+      state.weatherSettings = next || await Nobo.api.weatherSettings();
+      await refresh(true);
+      renderSettings();
+    };
+
+    root.querySelectorAll('[data-seg="wx-enabled"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        if (button.dataset.value === 'on') {
+          const provider = settings.providers.includes(settings.provider)
+            ? settings.provider : settings.providers[0];
+          await saveWeatherSettings({ enabled: true, provider });
+          Nobo.toast('Weather station on');
+          return;
+        }
+        const off = async () => {
+          try {
+            await saveWeatherSettings({ enabled: false });
+            Nobo.toast('Weather station off');
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+        };
+        if (settings.provider === 'netatmo' && (settings.netatmo || {}).app_configured) {
+          confirmSheet('Turn the weather station off?',
+            'The Netatmo app\u2019s secret and the connection are deleted from this system. Turning it on again means entering them again and connecting once more.',
+            'Turn off', off, true);
+        } else {
+          await off();
+        }
+      });
+    });
+
+    root.querySelectorAll('[data-seg="wx-source"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        await saveWeatherSettings({ provider: button.dataset.value });
+      });
+    });
+
+    const cold = root.querySelector('#wxColdBelow');
+    if (cold) cold.onchange = guarded(async () => {
+      await saveWeatherSettings({ outdoor_cold_below: Number(cold.value) });
+    });
+
+    const saveApp = root.querySelector('[data-act="wx-app"]');
+    if (saveApp) saveApp.onclick = guarded(async () => {
+      const id = root.querySelector('#wxClientId');
+      const secret = root.querySelector('#wxClientSecret');
+      if (!id.value.trim() || !secret.value.trim()) {
+        Nobo.toast('Fill in both', 'error');
+        return;
+      }
+      saveApp.disabled = true;
+      try {
+        const next = await Nobo.api.netatmoApp(id.value.trim(), secret.value.trim());
+        secret.value = '';
+        Nobo.toast('Netatmo app saved');
+        await reload(next);
+      } finally {
+        saveApp.disabled = false;
+      }
+    });
+
+    const connect = root.querySelector('[data-act="wx-connect"]');
+    if (connect) connect.onclick = guarded(async () => {
+      connect.disabled = true;
+      try {
+        const started = await Nobo.api.netatmoConnect();
+        window.location.assign(started.authorize_url);
+      } finally {
+        connect.disabled = false;
+      }
+    });
+
+    const token = root.querySelector('[data-act="wx-token"]');
+    if (token) token.onclick = guarded(async () => {
+      const input = root.querySelector('#wxRefreshToken');
+      if (!input.value.trim()) { Nobo.toast('Paste the refresh token', 'error'); return; }
+      token.disabled = true;
+      try {
+        const next = await Nobo.api.netatmoToken(input.value.trim());
+        input.value = '';
+        Nobo.toast('Connected to Netatmo');
+        await reload(next);
+      } finally {
+        token.disabled = false;
+      }
+    });
+
+    const disconnect = root.querySelector('[data-act="wx-disconnect"]');
+    if (disconnect) disconnect.onclick = () => confirmSheet('Disconnect from Netatmo?',
+      'The connection is deleted here, and the station is not read until it is connected again. To withdraw the access at Netatmo too, remove the app under your Netatmo account\u2019s settings.',
+      'Disconnect', async () => {
+        try {
+          await reload(await Nobo.api.netatmoDisconnect());
+          Nobo.toast('Disconnected from Netatmo');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      }, true);
+
+    const forget = root.querySelector('[data-act="wx-forget"]');
+    if (forget) forget.onclick = () => confirmSheet('Use a different Netatmo app?',
+      'The saved client ID and secret are deleted here, and you enter another app\u2019s.',
+      'Change app', async () => {
+        try {
+          // Off and on again under Netatmo: the secret is deleted on the way.
+          await Nobo.api.setWeatherSettings({ enabled: false });
+          await saveWeatherSettings({ enabled: true, provider: 'netatmo' });
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+      }, true);
+
+    const simulate = root.querySelector('[data-act="wx-simulate"]');
+    if (simulate) simulate.onclick = guarded(async () => {
+      simulate.disabled = true;
+      try {
+        let next = null;
+        for (const row of root.querySelectorAll('[data-wx-module]')) {
+          const body = { module_id: row.dataset.wxModule };
+          row.querySelectorAll('[data-wx-field]').forEach(input => {
+            const field = input.dataset.wxField;
+            if (input.type === 'checkbox') body[field] = input.checked;
+            else if (input.value !== '') body[field] = Number(input.value);
+          });
+          next = await Nobo.api.simulateWeather(body);
+        }
+        Nobo.toast('Demo weather updated');
+        await reload(next);
+      } finally {
+        simulate.disabled = false;
+      }
+    });
   }
 
   function renderAlarmSettingsCard(isAdmin) {
@@ -6673,6 +7313,8 @@
 
       ${renderAlarmSettingsCard(isAdmin)}
 
+      ${renderWeatherSettingsCard(isAdmin)}
+
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
         <div class="section-head">
@@ -6795,6 +7437,7 @@
     loadNotifications(isAdmin);
     wireSensorSettings(root);
     wireAlarmSettings(root);
+    wireWeatherSettings(root);
     wireZoneGroups(root);
   }
 
@@ -7343,10 +7986,25 @@
    * Boot
    * ---------------------------------------------------------------- */
 
+  /* Netatmo's sign-in page sends the browser back to the front page with
+     how it went. Said once, then taken out of the address. */
+  function announceWeatherReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('weather');
+    if (!outcome) return;
+    params.delete('weather');
+    const rest = params.toString();
+    history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash);
+    if (outcome === 'connected') Nobo.toast('Connected to Netatmo');
+    else if (outcome === 'denied') Nobo.toast('Netatmo was not given access', 'error');
+    else Nobo.toast('Connecting to Netatmo did not finish. Try again under Settings.', 'error');
+  }
+
   (async function boot() {
     await loadAll();
     showHome();
     renderLink();
+    announceWeatherReturn();
 
     Nobo.subscribe(
       (zones) => {
@@ -7357,7 +8015,7 @@
         /* Only zones travel over the socket. The alarm's state lives in the
            status, and an alarm change is announced as a zone update, so it
            is re-read here rather than waiting for the next poll. */
-        if (state.status && state.status.alarm) {
+        if (state.status && (state.status.alarm || state.status.weather)) {
           Nobo.api.status().then(status => {
             if (!status || held() || !sheetEl.hidden) return;
             state.status = status;
@@ -7378,7 +8036,7 @@
       if (held() || !sheetEl.hidden) return;
       try {
         state.status = await Nobo.api.status();
-        if (state.view === 'home') { renderTrip(); renderSystem(); }
+        if (state.view === 'home') { renderTrip(); renderWeather(); renderSystem(); }
         renderLink();
       } catch (_) { /* the connection pill already reports this */ }
     }, 30000);

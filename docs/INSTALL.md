@@ -246,6 +246,24 @@ sign in again. The full story is in [ALARM.md](ALARM.md).
 
 ---
 
+## Optional: a Netatmo weather station
+
+The temperature outside on the front page, a weather outlook, and indoor
+modules as room thermometers. Nothing to install and no extra hardware.
+
+1. Set up **HTTPS** first — see [a proper address](#optional-a-proper-address-instead-of-an-ip)
+   below.
+2. At [dev.netatmo.com/apps](https://dev.netatmo.com/apps), sign in with your
+   Netatmo account and create an app. Give it the redirect URI shown under
+   **Settings → Weather Station** — your address followed by
+   `/api/weather/netatmo/callback`.
+3. **Settings → Weather Station → On → Netatmo**, paste the app's client ID
+   and secret, and press **Connect to Netatmo**.
+
+No Netatmo password reaches the Pi. The full story is in [WEATHER.md](WEATHER.md).
+
+---
+
 ## Looking after it
 
 | I want to... | Type this |
@@ -262,7 +280,9 @@ re-pairing every sensor by hand, at every window. With a real hub, the rooms,
 heaters and schedules themselves are stored in the hub, so they are not in the
 backup and are not lost if the Pi is.
 The Verisure sign-in is deliberately left out: after restoring, sign in again.
-Which of the alarm's sensors you added to rooms is kept.
+Which of the alarm's sensors you added to rooms is kept. The same goes for the
+Netatmo connection: after restoring, connect again under Settings → Weather
+Station.
 
 It starts itself after a power cut. Nothing to do.
 

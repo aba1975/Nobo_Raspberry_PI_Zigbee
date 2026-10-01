@@ -143,6 +143,25 @@ const Nobo = (() => {
     simulateAlarm:     (body) => req('/api/alarm/simulate', {
                                   method: 'POST', body: JSON.stringify(body) }),
 
+    /* The weather station. Admin only, except the readings, which come with
+       the status. The Netatmo app's secret goes to the server once, over
+       HTTPS, and is never sent back. */
+    weatherSettings:    ()     => req('/api/weather/settings'),
+    setWeatherSettings: (body) => req('/api/weather/settings', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    netatmoApp:        (client_id, client_secret) => req('/api/weather/netatmo/app', {
+                                  method: 'POST', body: JSON.stringify({ client_id, client_secret }) }),
+    netatmoConnect:    ()     => req('/api/weather/netatmo/connect', { method: 'POST' }),
+    netatmoToken:      (refresh_token) => req('/api/weather/netatmo/token', {
+                                  method: 'POST', body: JSON.stringify({ refresh_token }) }),
+    netatmoDisconnect: ()     => req('/api/weather/netatmo/disconnect', { method: 'POST' }),
+    simulateWeather:   (body) => req('/api/weather/simulate', {
+                                  method: 'POST', body: JSON.stringify(body) }),
+    /* The station's indoor modules, offered as room thermometers. */
+    weatherModules:    ()     => req('/api/sensors/weather'),
+    addWeatherSensor:  (body) => req('/api/sensors/weather', {
+                                  method: 'POST', body: JSON.stringify(body) }),
+
     devices:      ()               => req('/api/devices').then(r => r.devices || r),
     addDevice:    (body)           => req('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
     updateDevice: (serial, body)   => req(`/api/devices/${encodeURIComponent(serial)}`, {

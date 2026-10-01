@@ -507,14 +507,15 @@ def test_no_change_is_written_as_no_change():
     assert out == ["No change in 3 hours", "Down 0.1\u00a0hPa in 3 hours", ""]
 
 
-def _front_page(zones):
+def _front_page(zones, weather=None):
     return _node("""
       const el = { hidden: true, innerHTML: '', className: '', attrs: {},
                    setAttribute(k, v) { this.attrs[k] = v; } };
       const $ = () => el;
       const opened = [];
       const showZone = (id) => opened.push(id);
-      const state = { zones: %s };
+      const renderTripWeather = () => {};
+      const state = { zones: %s, status: { weather: %s } };
       function climateOf(zone) {
         const climate = zone && zone.climate;
         return climate && climate.sensor_count ? climate : null;
@@ -523,8 +524,8 @@ def _front_page(zones):
       if (el.onclick) el.onclick();
       console.log(JSON.stringify({ hidden: el.hidden, html: el.innerHTML,
                                    cls: el.className, opened }));
-    """ % json.dumps(zones), "pressureChangeText", "houseOutlook", "renderWeather",
-        consts=("PRESSURE_OUTLOOK",))
+    """ % (json.dumps(zones), json.dumps(weather)), "pressureChangeText", "houseOutlook",
+        "renderWeather", "stationWeather", consts=("PRESSURE_OUTLOOK",))
 
 
 def _barometer_zone(tendency, change=-4.4, zone_id="4", summary=True):
@@ -551,6 +552,14 @@ def test_the_front_page_mentions_the_weather_only_when_it_is_changing():
 
     steady = _front_page([_barometer_zone("steady", 0.3)])
     assert steady["hidden"] is True and steady["html"] == ""
+
+
+@needs_node
+def test_with_a_weather_station_the_outlook_moves_to_the_top_card():
+    """The station's own corner of the top card carries the outlook, so the
+    room-sensor chip would only say the same thing twice."""
+    out = _front_page([_barometer_zone("falling_fast")], weather={"enabled": True})
+    assert out["hidden"] is True and out["html"] == ""
 
 
 @needs_node

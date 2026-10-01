@@ -104,7 +104,7 @@ def test_the_log_names_the_alarm():
 
 def test_an_alarm_change_is_picked_up_without_waiting_for_the_poll():
     boot = CABIN[CABIN.index("(async function boot()"):]
-    assert "if (state.status && state.status.alarm) {" in boot[:1500]
+    assert "if (state.status && (state.status.alarm || state.status.weather)) {" in boot[:1500]
 
 
 def test_classic_is_left_alone():

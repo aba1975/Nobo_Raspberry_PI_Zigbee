@@ -22,7 +22,9 @@ sensors and smoke-detector temperatures (`sensor_verisure.py`), is not a
 provider: it has no pairing and nothing to command, so it turns the alarm's
 latest reading into the same snapshots, tagged `source: "verisure"`, and they
 join the Zigbee ones before the rules see them — see
-[Other sources](#other-sources-the-alarms-own-sensors). The API, warning aggregation, WebSocket
+[Other sources](#other-sources-the-alarms-own-sensors). A weather station's
+indoor modules (`sensor_weather.py`, source `netatmo`) join the same way, as
+thermometers only. The API, warning aggregation, WebSocket
 payloads, UI, persistence policy, and heating automation do not depend on either
 one's storage format.
 
@@ -903,6 +905,27 @@ Zigbee sensor it backs up) and builds snapshots from each alarm reading.
 - Everything set aside carries `counts: false` and a reason in the API, so
   sensor counts, the left-open warning and the alarm warning each see a door
   once.
+
+### The weather station's modules
+
+With the [weather station](WEATHER.md) on, its base station and indoor modules
+can be added to rooms the same way, as thermometers only
+(`data/weather_sensors.json`, ids `netatmo-<module id>`). The order of belief
+for a room's temperature is **Zigbee, then the weather station, then
+Verisure**:
+
+- A module stands by (reason `zigbee_thermometer`) while its room has a Zigbee
+  thermometer with a reading younger than `CLIMATE_STALE_SECONDS`.
+- A Verisure temperature stands by (reason `weather_station`) while its room has
+  a module whose reading is younger than `WEATHER_STALE_SECONDS`, even if there
+  is no Zigbee thermometer.
+
+A module reads **offline** when the station has not refreshed it for
+`WEATHER_STALE_SECONDS` or reports it unreachable. Its battery is shown, but a
+low battery is the weather station's own alert, not the sensor one, and the
+Zigbee *not heard from* alert skips it.
+
+### When a Verisure sensor cannot be read
 
 A Verisure sensor is **unavailable**, never closed, when the alarm's reading
 is older than `ALARM_STALE_SECONDS`, the last read failed, or the device is no
