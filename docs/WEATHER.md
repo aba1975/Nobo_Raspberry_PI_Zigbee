@@ -20,7 +20,7 @@ and have not been observed here. Treat the first real connection as a test.
 | Where | What |
 | --- | --- |
 | **Front page, top card** | The temperature outside, in the card's top-right corner, with the outlook under it ("Weather turning", "Improving"…). Tap it for the details. A reading the station has not refreshed for 30 minutes is not shown as the temperature now; the corner says the station is not being read instead. |
-| **The weather sheet** | Outside: temperature, humidity, today's lowest and highest, the last 24 hours, and the outdoor module's battery (amber when low, and shown even when the reading is stale, since a flat battery is the usual reason). The outlook with its 24-hour pressure curve. Each indoor module with its temperature, humidity, CO₂, battery and which room uses it. |
+| **The weather sheet** | Headed with the home's name in Netatmo (not the base station's, which Netatmo appends in brackets). Outside, under the outdoor module's own name: temperature, humidity, today's lowest and highest, the last 24 hours, and the outdoor module's battery (amber when low, and shown even when the reading is stale, since a flat battery is the usual reason). The outlook with its 24-hour pressure curve. Each indoor module with its temperature, humidity, CO₂, battery and which room uses it. |
 | **Rooms** | An indoor module (or the base station) added to a room is that room's thermometer: its **Actual** temperature, humidity, limits, near-freezing warning and 24 hours of history, exactly as a Zigbee thermometer. |
 
 ### The outlook

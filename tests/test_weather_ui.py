@@ -391,3 +391,10 @@ def test_no_battery_line_when_the_station_reports_none():
 
 def test_a_low_outdoor_battery_is_styled_as_an_alert():
     assert ".wx-outside-copy small.is-alert" in CABIN_CSS
+
+
+@needs_node
+def test_the_outside_panel_names_its_module():
+    html = _outside_block({"outdoor": {"name": "Mostugu Outdoor Module", "temperature": 10.3,
+                                       "fresh": True}})
+    assert 'class="wx-module-name">Mostugu Outdoor Module<' in html

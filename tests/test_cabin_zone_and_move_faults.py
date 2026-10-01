@@ -336,3 +336,22 @@ def test_a_silent_thermometer_is_not_the_same_as_no_thermometer():
 
     assert "No recent reading" in markup, markup
     assert ">No sensor<" not in markup
+
+
+def test_the_stepper_is_never_squeezed_on_a_desktop_card():
+    """A desktop grid card is narrower than a phone, and the stacked buttons
+    have overflow: hidden, which lets a grid item shrink below its contents -
+    the Hallway's stepper came out half width beside an Actual reading."""
+    assert ".zt-set .vstep { min-width: max-content; }" in CSS
+    two = CSS[CSS.index(".zone-temps:not(.one) {"):]
+    two = two[:two.index("}")]
+    assert "container-type: inline-size" in two
+    assert "minmax(max-content, 1fr) minmax(0, 1fr)" in two
+
+
+def test_two_temperatures_shrink_with_the_card_not_the_window():
+    rule = CSS[CSS.index(".zone-temps:not(.one) .set-value {"):]
+    rule = rule[:rule.index("}")]
+    # Never larger than the phone's own size, and scaled to the card width.
+    assert "clamp(1.85rem, 6vw, 2.35rem)" in rule
+    assert "cqi" in rule

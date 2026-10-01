@@ -256,6 +256,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .wx-outside-copy { display: grid; gap: .15rem; min-width: 0; color: var(--ink-soft); font-size: .88rem; }
 .wx-outside-copy strong { color: var(--ink); font-size: .98rem; }
 .wx-outside-copy small.is-alert { color: var(--amber); font-weight: 600; }
+.wx-outside-copy .wx-module-name { margin-top: -.1rem; font-size: .78rem; color: var(--ink-faint); }
 
 .wx-steps { margin: 0 0 .9rem; padding-left: 1.2rem; font-size: .88rem; color: var(--ink-soft); }
 .wx-steps li { margin: .3rem 0; }
@@ -978,6 +979,18 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   display: grid; grid-template-columns: 1fr 1fr; align-items: start;
   margin-top: .6rem; line-height: 1;
 }
+/* A desktop grid card is narrower than a phone's: two whole temperatures and
+   the stepper only just fit. The half with the stepper is never given less
+   than it needs, and the numbers shrink with the card (cqi) rather than the
+   window, so the stepper keeps its size and the actual reading never runs
+   into the card's edge. */
+.zone-temps:not(.one) {
+  container-type: inline-size;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
+}
+.zone-temps:not(.one) .set-value {
+  font-size: min(clamp(1.85rem, 6vw, 2.35rem), max(1.6rem, calc(18.4cqi - 16px)));
+}
 .zone-temps.one { grid-template-columns: 1fr; }
 .zt-cell { min-width: 0; }
 .zt-cell + .zt-cell { border-left: 1px solid var(--rule); padding-left: .9rem; }
@@ -992,6 +1005,9 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .zt-set .set-label, .zt-set .set-value, .zt-set .set-none { grid-column: 1; }
 .zt-set .vstep { grid-column: 2; grid-row: 1 / 4; align-self: start; }
+/* overflow: hidden lets a grid item shrink below its buttons; it must not. */
+.zt-set .vstep { min-width: max-content; }
+.zone-temps:not(.one) .zt-set { padding-right: .65rem; }
 .set-value {
   font-size: clamp(1.85rem, 6vw, 2.35rem);
   font-weight: 660; letter-spacing: -.03em;

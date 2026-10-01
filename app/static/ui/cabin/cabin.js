@@ -2237,6 +2237,7 @@
         <span class="wx-outside-temp">${fresh ? `${esc(Nobo.fmtTemp(fresh.temperature))}\u00B0` : '\u2013'}</span>
         <span class="wx-outside-copy">
           <strong>Outside${fresh && fresh.cold ? ' \u2014 very cold' : ''}</strong>
+          ${outdoor.name ? `<small class="wx-module-name">${esc(outdoor.name)}</small>` : ''}
           <small>${esc(fresh ? outsideFacts.join(' \u00B7 ')
             : `No recent reading. Last heard from ${Nobo.fmtAgo(outdoor.reported_at) || 'unknown'}.`)}</small>
           ${weatherOutdoorBattery(outdoor)}

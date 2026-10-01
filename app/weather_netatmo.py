@@ -160,6 +160,25 @@ def _module(raw: Mapping[str, Any], fallback_name: str) -> Optional[WeatherModul
     )
 
 
+def _station_name(station: Mapping[str, Any]) -> str:
+    """The home the station is in, which heads the weather sheet.
+
+    Netatmo's ``station_name`` is "Home (base station module)", so renaming the
+    base station in Netatmo's app renamed the whole sheet to an indoor room.
+    ``home_name`` is the home alone; without it, the base module's name is
+    taken off the end of ``station_name``.
+    """
+    home = str(station.get("home_name") or "").strip()
+    if home:
+        return home
+    name = str(station.get("station_name") or "").strip()
+    base = str(station.get("module_name") or "").strip()
+    suffix = f" ({base})"
+    if base and name.endswith(suffix) and len(name) > len(suffix):
+        name = name[:-len(suffix)].strip()
+    return name or "Weather station"
+
+
 def parse_stations(payload: Any, now: float) -> WeatherReading:
     """The first station in an account, as one reading.
 
@@ -182,9 +201,8 @@ def parse_stations(payload: Any, now: float) -> WeatherReading:
             module = _module(raw, MODULE_TYPES.get(str(raw.get("type")), "module").capitalize())
             if module is not None:
                 modules.append(module)
-    name = station.get("station_name") or station.get("home_name") or "Weather station"
     return WeatherReading(
-        station_name=str(name)[:80], modules=tuple(modules[:weather_persistence.MAX_MODULES]),
+        station_name=_station_name(station)[:80], modules=tuple(modules[:weather_persistence.MAX_MODULES]),
         read_at=now,
     )
 

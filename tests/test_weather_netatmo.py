@@ -372,3 +372,27 @@ def test_a_damaged_account_file_is_deleted(account):
     weather_persistence.NETATMO_ACCOUNT_FILE.write_text("{not json")
     assert account.public_state()["app_configured"] is False
     assert not weather_persistence.NETATMO_ACCOUNT_FILE.exists()
+
+
+def _named(**station):
+    payload = station_payload()
+    device = payload["body"]["devices"][0]
+    device.pop("station_name")
+    device.update(station)
+    return weather_netatmo.parse_stations(payload, NOW).station_name
+
+
+def test_the_sheet_is_named_after_the_home_not_the_base_station():
+    """Netatmo's station_name is "Home (base module)"; a base station renamed to
+    a room in Netatmo's app must not rename the whole sheet to that room."""
+    assert _named(station_name="Mostugu Mosetertoppen (Mostugu Kitchen)",
+                  module_name="Mostugu Kitchen",
+                  home_name="Mostugu Mosetertoppen") == "Mostugu Mosetertoppen"
+    assert _named(station_name="Mostugu Mosetertoppen (Mostugu Kitchen)",
+                  module_name="Mostugu Kitchen") == "Mostugu Mosetertoppen"
+
+
+def test_a_station_name_without_the_module_is_kept_whole():
+    assert _named(station_name="Cabin (old)", module_name="Stue") == "Cabin (old)"
+    assert _named(station_name="", module_name="Stue") == "Weather station"
+    assert _named(station_name="(Stue)", module_name="Stue") == "(Stue)"
