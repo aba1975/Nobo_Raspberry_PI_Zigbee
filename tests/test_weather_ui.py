@@ -352,3 +352,42 @@ def test_a_stale_reading_is_not_shown_as_the_temperature_now():
     assert "5.0" not in el["innerHTML"]
     assert "Station not read" in el["innerHTML"]
     assert "is-stale" in el["className"]
+
+
+def _outside_block(weather):
+    script = """
+      const esc = (v) => String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const Nobo = { fmtTemp: (v) => Number(v).toFixed(1), fmtAgo: () => '2 hours ago' };
+      %s
+      console.log(JSON.stringify(weatherOutsideBlock(%s)));
+    """ % (_lift("function outdoorReading", "function weatherOutdoorBattery",
+                 "function weatherOutsideBlock"), json.dumps(weather))
+    return json.loads(_node(script))
+
+
+@needs_node
+def test_the_sheet_shows_the_outdoor_modules_battery():
+    html = _outside_block({"outdoor": {"temperature": 10.3, "humidity": 88, "fresh": True,
+                                       "battery": 63, "battery_low": False}})
+    assert "Battery 63%" in html
+    assert "is-alert" not in html
+
+
+@needs_node
+def test_a_low_outdoor_battery_is_marked_even_when_the_reading_is_stale():
+    html = _outside_block({"outdoor": {"temperature": 4.0, "fresh": False,
+                                       "battery": 8, "battery_low": True}})
+    assert "No recent reading" in html
+    assert "Battery 8%" in html and "low, replace soon" in html
+    assert 'class="wx-battery is-alert"' in html
+
+
+@needs_node
+def test_no_battery_line_when_the_station_reports_none():
+    html = _outside_block({"outdoor": {"temperature": 4.0, "fresh": True, "battery": None}})
+    assert "Battery" not in html
+
+
+def test_a_low_outdoor_battery_is_styled_as_an_alert():
+    assert ".wx-outside-copy small.is-alert" in CABIN_CSS

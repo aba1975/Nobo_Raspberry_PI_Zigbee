@@ -2209,11 +2209,15 @@
       </li>`;
   }
 
-  /* Everything the station says: outside, the outlook it is read from, and
-     each module. For reading only; the setup is under Settings. */
-  function weatherSheet() {
-    const weather = stationWeather();
-    if (!weather) return;
+  /* The outdoor module's battery, under its reading. Shown even when the
+     reading is stale, because a flat battery is the usual reason it is. */
+  function weatherOutdoorBattery(outdoor) {
+    if (!outdoor || outdoor.battery == null) return '';
+    return `<small class="wx-battery${outdoor.battery_low ? ' is-alert' : ''}">Battery ${
+      esc(outdoor.battery)}%${outdoor.battery_low ? ' \u2014 low, replace soon' : ''}</small>`;
+  }
+
+  function weatherOutsideBlock(weather) {
     const outdoor = weather.outdoor;
     const fresh = outdoorReading(weather);
     const day = outdoor && outdoor.last_24h;
@@ -2228,17 +2232,26 @@
       day && (day.hours || []).length > 2 && range(day.temperature_min, day.temperature_max)
         ? `last 24 h ${range(day.temperature_min, day.temperature_max)}` : '',
     ].filter(Boolean) : [];
-    const problem = weather.connection !== 'ok' && weather.connection !== 'starting'
-      ? `<div class="note note-warn">${esc(weather.message || 'The weather station cannot be read.')}</div>` : '';
-    const outside = !outdoor ? '' : `
+    return !outdoor ? '' : `
       <div class="wx-outside${fresh && fresh.cold ? ' is-cold' : ''}">
         <span class="wx-outside-temp">${fresh ? `${esc(Nobo.fmtTemp(fresh.temperature))}\u00B0` : '\u2013'}</span>
         <span class="wx-outside-copy">
           <strong>Outside${fresh && fresh.cold ? ' \u2014 very cold' : ''}</strong>
           <small>${esc(fresh ? outsideFacts.join(' \u00B7 ')
             : `No recent reading. Last heard from ${Nobo.fmtAgo(outdoor.reported_at) || 'unknown'}.`)}</small>
+          ${weatherOutdoorBattery(outdoor)}
         </span>
       </div>`;
+  }
+
+  /* Everything the station says: outside, the outlook it is read from, and
+     each module. For reading only; the setup is under Settings. */
+  function weatherSheet() {
+    const weather = stationWeather();
+    if (!weather) return;
+    const problem = weather.connection !== 'ok' && weather.connection !== 'starting'
+      ? `<div class="note note-warn">${esc(weather.message || 'The weather station cannot be read.')}</div>` : '';
+    const outside = weatherOutsideBlock(weather);
     const indoor = (weather.modules || []).filter(module => module.kind !== 'outdoor'
       && module.kind !== 'rain' && module.kind !== 'wind');
     const source = weather.provider === 'simulated' ? 'the demo weather station' : 'Netatmo';

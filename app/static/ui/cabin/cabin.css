@@ -255,6 +255,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .wx-outside.is-cold .wx-outside-temp { color: var(--frost); }
 .wx-outside-copy { display: grid; gap: .15rem; min-width: 0; color: var(--ink-soft); font-size: .88rem; }
 .wx-outside-copy strong { color: var(--ink); font-size: .98rem; }
+.wx-outside-copy small.is-alert { color: var(--amber); font-weight: 600; }
 
 .wx-steps { margin: 0 0 .9rem; padding-left: 1.2rem; font-size: .88rem; color: var(--ink-soft); }
 .wx-steps li { margin: .3rem 0; }
