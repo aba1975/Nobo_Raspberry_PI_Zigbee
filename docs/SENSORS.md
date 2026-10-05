@@ -262,6 +262,33 @@ the bootloader, so it is worth reading the row rather than guessing.
 
 Reversible: write the coordinator image back and it is a coordinator again.
 
+**Done for real on 5 October 2026**, the same stick (`0x00124b003a21360e`)
+going back to being a coordinator for the demo Pi after a fortnight as
+production's second repeater. The script was not used — it writes only the
+router image, deliberately — so its steps were followed by hand: the same
+pinned `cc2538-bsl`, `CC1352P2_CC2652P_launchpad_coordinator_20250321.zip`
+from Koenkk's release, checked against GitHub's digest, and 360,448 bytes
+written and CRC-verified. The IEEE address was read first, read-only (`-r -l 4`),
+to prove the stick on the bench was the retired repeater and not production's
+working one.
+
+Two things had to happen beside the flash, and both are easy to forget:
+
+- **The Pi's old `zigbee2mqtt-data` volume had to go first.** It still held
+  *production's* network key from when the coordinator was moved. Started on
+  it, the new stick would have been written with that key and PAN id — a
+  second coordinator for production's mesh. Mosquitto's volume went too: its
+  retained messages described production's devices.
+- **An empty volume had never been started before**, and Zigbee2MQTT 2.x does
+  not form a network on one: it waits on an onboarding form on port 8080, on
+  every interface. `compose.yml` now sets `Z2M_ONBOARD_NO_SERVER` and the
+  settings the copied file used to supply; see the comment there.
+
+The demo Pi's channel is **25**, from a scan on the day: its own site has
+strong Wi-Fi on 1, 6 (−40 dBm) and 11 (−44 dBm), so 15 and 20 each sit
+between two busy channels and 25 has a neighbour on one side only. Production
+stays on 15, chosen for its own site.
+
 **Run for real on 24 September 2026**, on the demo Pi, with the coordinator
 plugged in beside the spare. The script refused nothing it should not have,
 fetched `CC1352P2_CC2652P_launchpad_router_20250403.zip`, matched GitHub's

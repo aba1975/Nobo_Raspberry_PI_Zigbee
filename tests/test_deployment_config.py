@@ -528,6 +528,36 @@ class TestTheInterfaceIsCompressed:
         assert "encode zstd gzip" in CADDYFILE.read_text(encoding="utf-8")
 
 
+class TestAnEmptyVolumeFormsANetwork:
+    """Both Pis first ran on a configuration.yaml copied from the test rig, so
+    a start on an empty volume had never happened. Zigbee2MQTT 2.x then waits
+    on an unauthenticated onboarding page on 0.0.0.0:8080 instead of forming a
+    network, and its minimal defaults point MQTT at ``localhost`` and leave
+    availability off. Found when a spare stick became the demo coordinator.
+    """
+
+    @staticmethod
+    def _env(compose):
+        return [str(e) for e in (compose["services"]["zigbee2mqtt"].get("environment") or [])]
+
+    def test_it_does_not_wait_on_an_onboarding_page(self, compose):
+        assert "Z2M_ONBOARD_NO_SERVER=1" in self._env(compose)
+
+    def test_it_finds_the_broker_on_the_address_mosquitto_listens_on(self, compose):
+        conf = (ROOT / "zigbee" / "mosquitto.conf").read_text(encoding="utf-8")
+        assert re.search(r"^listener\s+1883\s+127\.0\.0\.1\s*$", conf, re.M)
+        assert "ZIGBEE2MQTT_CONFIG_MQTT_SERVER=mqtt://127.0.0.1:1883" in self._env(compose)
+
+    def test_it_opens_the_adapter_compose_passes_in(self, compose):
+        service = compose["services"]["zigbee2mqtt"]
+        assert any(str(d).endswith(":/dev/ttyUSB0") for d in service["devices"])
+        assert "ZIGBEE2MQTT_CONFIG_SERIAL_PORT=/dev/ttyUSB0" in self._env(compose)
+        assert "ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER=zstack" in self._env(compose)
+
+    def test_a_silent_sensor_can_be_reported_unavailable(self, compose):
+        assert "ZIGBEE2MQTT_CONFIG_AVAILABILITY_ENABLED=true" in self._env(compose)
+
+
 def test_the_zigbee_frontend_answers_the_pi_only(compose):
     """It can pair, remove and rename devices and has no password by default.
     With host networking and no host it listened on the whole LAN, beside a
