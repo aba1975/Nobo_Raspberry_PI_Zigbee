@@ -213,6 +213,7 @@ Opening the USB serial port resets the board, and a reset clears what it
 remembers, so the first fetch after one always redraws.
 
 Battery behaviour, battery life and the button wake have **not** been run, and
-neither has the production Pi. The lights (firmware 1.2.0) are tested on the
-Pi side only; that the LEDs show the right colour is for someone standing in
-front of them.
+neither has the production Pi. The lights (firmware 1.2.0) were checked by eye
+on the demo Pi, 5 October 2026: blinking green on USB with everything closed,
+and dark once USB was unplugged. Red and blue on the LEDs themselves have
+been sent but not watched.
