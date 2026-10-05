@@ -43,6 +43,14 @@ MAX_DISPLAYS = 10
 MAX_NAME_LENGTH = 40
 SEEN_WRITE_INTERVAL = 600.0
 
+# How often a display on battery wakes to ask, in minutes. Set per display on
+# the Pi and handed to the display in the X-Display-Interval header, so it can
+# be changed without touching the device. Every wake is a Wi-Fi join, which is
+# nearly all of what the battery goes on, so the choices are kept coarse.
+BATTERY_MINUTES_CHOICES = (2, 5, 10, 15, 30, 60)
+DEFAULT_BATTERY_MINUTES = 15
+POWER_SOURCES = ("usb", "battery")
+
 
 @dataclass
 class Display:
@@ -53,6 +61,8 @@ class Display:
     last_seen_at: Optional[float] = None
     battery: Optional[int] = None
     firmware: Optional[str] = None
+    battery_minutes: int = DEFAULT_BATTERY_MINUTES
+    power: Optional[str] = None
 
     def public(self) -> Dict[str, object]:
         """What the settings page may see. Never the hash."""
@@ -63,6 +73,8 @@ class Display:
             "last_seen_at": self.last_seen_at,
             "battery": self.battery,
             "firmware": self.firmware,
+            "battery_minutes": self.battery_minutes,
+            "power": self.power,
         }
 
 
@@ -86,6 +98,21 @@ def clean_battery(value: object) -> Optional[int]:
 def clean_firmware(value: object) -> Optional[str]:
     text = "".join(ch for ch in str(value or "") if ch.isalnum() or ch in ".-_+")
     return text[:32] or None
+
+
+def clean_power(value: object) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    return text if text in POWER_SOURCES else None
+
+
+def clean_battery_minutes(value: object) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        minutes = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return minutes if minutes in BATTERY_MINUTES_CHOICES else None
 
 
 class DisplayRegistry:
@@ -113,6 +140,9 @@ class DisplayRegistry:
                         last_seen_at=item.get("last_seen_at"),
                         battery=clean_battery(item.get("battery")),
                         firmware=clean_firmware(item.get("firmware")),
+                        battery_minutes=clean_battery_minutes(item.get("battery_minutes"))
+                        or DEFAULT_BATTERY_MINUTES,
+                        power=clean_power(item.get("power")),
                     )
                     if len(display.token_hash) == 64:
                         displays[display.display_id] = display
@@ -176,6 +206,19 @@ class DisplayRegistry:
             self._save_locked()
             return True
 
+    def set_battery_minutes(self, display_id: str, minutes: object) -> Dict[str, object]:
+        cleaned = clean_battery_minutes(minutes)
+        if cleaned is None:
+            choices = ", ".join(str(item) for item in BATTERY_MINUTES_CHOICES)
+            raise ValueError(f"Choose one of {choices} minutes.")
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                raise KeyError(display_id)
+            item.battery_minutes = cleaned
+            self._save_locked()
+            return item.public()
+
     # -- use ---------------------------------------------------------------
 
     def verify(self, token: Optional[str]) -> Optional[str]:
@@ -196,7 +239,7 @@ class DisplayRegistry:
 
     def seen(
         self, display_id: str, *, battery: object = None, firmware: object = None,
-        now: Optional[float] = None,
+        power: object = None, now: Optional[float] = None,
     ) -> None:
         when = time.time() if now is None else now
         with self._lock:
@@ -205,14 +248,19 @@ class DisplayRegistry:
                 return
             level = clean_battery(battery)
             version = clean_firmware(firmware)
-            changed = (level is not None and level != item.battery) or (
-                version is not None and version != item.firmware
+            source = clean_power(power)
+            changed = (
+                (level is not None and level != item.battery)
+                or (version is not None and version != item.firmware)
+                or (source is not None and source != item.power)
             )
             item.last_seen_at = when
             if level is not None:
                 item.battery = level
             if version is not None:
                 item.firmware = version
+            if source is not None:
+                item.power = source
             due = when - self._written_seen.get(display_id, 0.0) >= SEEN_WRITE_INTERVAL
             if changed or due:
                 try:
@@ -224,3 +272,8 @@ class DisplayRegistry:
         with self._lock:
             item = self._displays.get(display_id)
             return item.battery if item else None
+
+    def battery_minutes(self, display_id: str) -> int:
+        with self._lock:
+            item = self._displays.get(display_id)
+            return item.battery_minutes if item else DEFAULT_BATTERY_MINUTES

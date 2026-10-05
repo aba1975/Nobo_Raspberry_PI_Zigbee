@@ -6,9 +6,16 @@
 // change. What is decided here is the one thing the Pi cannot say: that the
 // display cannot reach the Pi, and so is no longer showing the truth.
 //
-// On USB power it stays awake and asks every `usb_seconds`. On battery it
-// sleeps between asks for `battery_minutes`, and any of the three buttons
-// wakes it to ask at once.
+// The panel is redrawn only when a door, a window or one of their warnings has
+// changed: the Pi's ETag is a fingerprint of the sensors, not of the picture,
+// so every other ask is answered 304 and the panel is left alone.
+//
+// On USB power it stays awake and asks with ?wait=, which the Pi holds open
+// until a sensor changes, so the panel follows a door within seconds. After a
+// failure it tries again in `usb_seconds`. On battery it sleeps between asks
+// for `battery_minutes`, which the Pi sends with every answer
+// (X-Display-Interval, set in Settings), and any of the three buttons wakes
+// it to ask at once.
 //
 // Nothing secret is compiled in. Wi-Fi, address, key and the certificate the
 // Pi's HTTPS is checked against arrive over USB from provision.py and are
@@ -26,13 +33,18 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.0.0"
+#define FIRMWARE_VERSION "1.1.0"
 
 namespace {
 
 constexpr uint32_t STALE_AFTER_SECONDS = 30 * 60;
 constexpr uint32_t WIFI_TIMEOUT_MS = 20000;
 constexpr uint32_t HTTP_TIMEOUT_MS = 20000;
+// On USB the Pi holds an ask open this long while nothing changes. Below the
+// Pi's own cap of 30 s, and the HTTP timeout is raised by it.
+constexpr uint32_t USB_WAIT_SECONDS = 25;
+constexpr uint32_t MIN_BATTERY_MINUTES = 2;
+constexpr uint32_t MAX_BATTERY_MINUTES = 240;
 constexpr size_t MAX_PICTURE_BYTES = 256 * 1024;
 constexpr int EMPTY_BATTERY_PERCENT = 5;
 constexpr uint32_t EMPTY_RECHECK_SECONDS = 60 * 60;
@@ -56,7 +68,7 @@ struct Config {
   String ca;
   String tz;
   uint32_t batteryMinutes = 15;
-  uint32_t usbSeconds = 60;
+  uint32_t usbSeconds = 30;
   int rotation = -1;
 
   bool complete() const {
@@ -100,7 +112,7 @@ void loadConfig() {
   config.ca = stored("ca", "");
   config.tz = stored("tz", DEFAULT_TZ);
   config.batteryMinutes = prefs.isKey("battery_min") ? prefs.getUInt("battery_min", 15) : 15;
-  config.usbSeconds = prefs.isKey("usb_sec") ? prefs.getUInt("usb_sec", 60) : 60;
+  config.usbSeconds = prefs.isKey("usb_sec") ? prefs.getUInt("usb_sec", 30) : 30;
   config.rotation = prefs.isKey("rotation") ? prefs.getInt("rotation", -1) : -1;
   prefs.end();
   setenv("TZ", config.tz.c_str(), 1);
@@ -247,27 +259,46 @@ void takeTime(const String &date) {
   settimeofday(&now, nullptr);
 }
 
-Outcome fetch() {
+// How often to wake on battery is the Pi's to say. Kept in NVS only when it
+// changes, so a wake that hears the same number writes nothing to flash.
+void takeInterval(const String &value) {
+  long minutes = value.toInt();
+  if (minutes < (long)MIN_BATTERY_MINUTES || minutes > (long)MAX_BATTERY_MINUTES) return;
+  if ((uint32_t)minutes == config.batteryMinutes) return;
+  config.batteryMinutes = (uint32_t)minutes;
+  prefs.begin("nobo", false);
+  prefs.putUInt("battery_min", config.batteryMinutes);
+  prefs.end();
+}
+
+// waitSeconds > 0 asks the Pi to hold the answer until a sensor changes.
+Outcome fetch(uint32_t waitSeconds) {
   if (!joinWifi()) return Outcome::Failed;
   WiFiClientSecure tls;
   tls.setCACert(config.ca.c_str());
   HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  bool waiting = waitSeconds > 0 && rtcEtag[0];
+  uint32_t timeout = HTTP_TIMEOUT_MS + (waiting ? waitSeconds * 1000 : 0);
+  http.setTimeout(timeout);
   http.setConnectTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(tls, config.url)) {
+  String url = config.url;
+  if (waiting) url += String(url.indexOf('?') < 0 ? "?" : "&") + "wait=" + String(waitSeconds);
+  if (!http.begin(tls, url)) {
     lastProblem = "Bad address";
     return Outcome::Failed;
   }
-  static const char *keep[] = {"ETag", "Date"};
-  http.collectHeaders(keep, 2);
+  static const char *keep[] = {"ETag", "Date", "X-Display-Interval"};
+  http.collectHeaders(keep, 3);
   http.addHeader("Authorization", "Bearer " + config.token);
   http.addHeader("X-Display-Firmware", FIRMWARE_VERSION);
+  http.addHeader("X-Display-Power", usbPower ? "usb" : "battery");
   int battery = batteryPercent();
   if (battery >= 0) http.addHeader("X-Display-Battery", String(battery));
   if (rtcEtag[0]) http.addHeader("If-None-Match", rtcEtag);
 
   int status = http.GET();
   if (http.hasHeader("Date")) takeTime(http.header("Date"));
+  if (http.hasHeader("X-Display-Interval")) takeInterval(http.header("X-Display-Interval"));
   if (status == 304) {
     http.end();
     return Outcome::Unchanged;
@@ -299,7 +330,7 @@ Outcome fetch() {
   WiFiClient *stream = http.getStreamPtr();
   size_t got = 0;
   uint32_t started = millis();
-  while (got < (size_t)length && millis() - started < HTTP_TIMEOUT_MS) {
+  while (got < (size_t)length && millis() - started < timeout) {
     size_t ready = stream->available();
     if (ready) {
       size_t want = (size_t)length - got;
@@ -332,9 +363,9 @@ Outcome fetch() {
 }
 
 // One ask, and what the panel should show after it.
-void refresh() {
-  if (!config.complete()) return;
-  Outcome outcome = fetch();
+Outcome refresh(uint32_t waitSeconds = 0) {
+  if (!config.complete()) return Outcome::Failed;
+  Outcome outcome = fetch(waitSeconds);
   time_t now = time(nullptr);
   if (outcome != Outcome::Failed) {
     rtcLastSuccess = now;
@@ -342,7 +373,7 @@ void refresh() {
     rtcProblemShown = false;
     lastProblem = "";
     Serial.printf("{\"fetched\":\"%s\"}\n", outcome == Outcome::Updated ? "updated" : "unchanged");
-    return;
+    return outcome;
   }
   JsonDocument doc;
   doc["fetched"] = "failed";
@@ -359,6 +390,7 @@ void refresh() {
     // Whatever the Pi says next must be drawn, even if it has not changed.
     rtcEtag[0] = '\0';
   }
+  return outcome;
 }
 
 // -- provisioning over USB -----------------------------------------------------------
@@ -539,8 +571,9 @@ void setup() {
   }
 
   if (!usbPower) {
-    // A moment to catch a provision.py that is waiting for the board.
-    listen(1500);
+    // A moment to catch a provision.py that is waiting for the board, but
+    // not on a timer wake: nothing is plugged in then, and every wake costs.
+    if (cause != ESP_SLEEP_WAKEUP_TIMER) listen(1500);
     refresh();
     sleepFor(config.batteryMinutes * 60);
   }
@@ -554,8 +587,14 @@ void loop() {
     nextFetchAt = millis();
   }
   if ((int32_t)(millis() - nextFetchAt) >= 0) {
-    nextFetchAt = millis() + config.usbSeconds * 1000;
-    refresh();
+    uint32_t asked = millis();
+    Outcome outcome = refresh(USB_WAIT_SECONDS);
+    // Ask again at once, so the next change is caught as it happens. Not
+    // after a failure, nor after a 304 that came back without waiting (a Pi
+    // that does not hold answers open), or it would be asked in a tight loop.
+    bool held = millis() - asked >= USB_WAIT_SECONDS * 1000 / 2;
+    bool again = outcome == Outcome::Updated || (outcome == Outcome::Unchanged && held);
+    nextFetchAt = millis() + (again ? 0 : config.usbSeconds * 1000);
   }
   if ((int32_t)(millis() - nextPowerCheckAt) >= 0) {
     nextPowerCheckAt = millis() + POWER_CHECK_MS;

@@ -203,6 +203,18 @@ def test_the_display_reports_its_battery_and_a_low_one_is_drawn(client, device):
     assert full.headers["etag"] != response.headers["etag"]
 
 
+def test_the_battery_redraws_once_when_it_goes_low_not_at_every_percent(client, device):
+    _, token = new_key(client)
+
+    def etag(level):
+        return device.get(
+            "/api/display/frame.png", headers={**bearer(token), "X-Display-Battery": str(level)},
+        ).headers["etag"]
+
+    assert etag(90) == etag(40)
+    assert etag(15) == etag(12) != etag(40)
+
+
 def test_nonsense_battery_and_firmware_headers_are_ignored(client, device):
     _, token = new_key(client)
     headers = {**bearer(token), "X-Display-Battery": "lots", "X-Display-Firmware": "x" * 500}
@@ -264,7 +276,8 @@ def test_all_closed_is_green_and_says_so():
 def test_open_is_yellow_and_left_open_is_red_and_listed_first():
     frame = display_render.build_frame(payload(open_contacts=[contact()]), now=NOW)
     assert frame.tone == "yellow" and frame.headline == "1 open"
-    assert frame.rows[0].colour == "yellow" and frame.rows[0].tag == "09:47"
+    # The weekday even today: the picture can stay up past midnight.
+    assert frame.rows[0].colour == "yellow" and frame.rows[0].tag == "Mon 09:47"
     frame = display_render.build_frame(payload(open_contacts=[
         contact(zone="Kitchen"), contact(zone="Woodshed", sensor="Bod", left_open=True),
     ]), now=NOW)
@@ -301,17 +314,23 @@ def test_without_sensors_the_display_says_so_rather_than_all_closed():
     assert frame.tone == "blue" and frame.headline != "All closed"
 
 
-def test_a_lost_hub_and_a_low_battery_are_noted():
-    frame = display_render.build_frame(payload(hub_connected=False), display_battery=10, now=NOW)
+def test_a_low_battery_is_noted_without_a_percentage_that_would_go_stale():
+    frame = display_render.build_frame(payload(), display_battery=10, now=NOW)
     text = " ".join(note for _, note in frame.notes)
-    assert "hub" in text and "10%" in text
+    assert "battery low" in text and "%" not in text
+    assert display_render.build_frame(payload(), display_battery=60, now=NOW).notes == []
+
+
+def test_the_hub_is_not_on_the_picture_because_it_is_not_redrawn_for_it():
+    frame = display_render.build_frame(payload(hub_connected=False), now=NOW)
+    assert frame.notes == [] and frame.tone == "green"
 
 
 def test_the_footer_has_the_outdoor_temperature_and_outlook():
     frame = display_render.build_frame(payload(
         outdoor={"temperature": -3.6}, weather_outlook={"tendency": "falling"},
     ), now=NOW)
-    assert "-4°" in frame.footer and "Weather turning" in frame.footer
+    assert "-4° at 10:00" in frame.footer and "Weather turning" in frame.footer
 
 
 def test_more_rows_than_fit_are_summed_up_not_dropped():
@@ -359,3 +378,213 @@ def test_display_calls_go_through_the_shared_client_and_names_are_escaped():
 
 def test_classic_has_no_display_surface():
     assert "/api/displays" not in _static("app.js")
+
+
+# -- redrawn only when a sensor changes ---------------------------------------
+
+
+def fingerprint(**fields):
+    return display_render.sensor_fingerprint(payload(**fields))
+
+
+def test_the_fingerprint_ignores_weather_temperatures_and_the_hub():
+    base = fingerprint()
+    assert fingerprint(outdoor={"temperature": -3.6}) == base
+    assert fingerprint(weather_outlook={"tendency": "storm"}) == base
+    assert fingerprint(hub_connected=False) == base
+    assert fingerprint(site="Elsewhere") == base
+    assert fingerprint(rooms=[{"name": "Kitchen", "actual_temperature": 21.5, "warnings": []}]) == base
+    assert fingerprint(rooms=[{"name": "Kitchen", "warnings": ["humid", "too_warm"]}]) == base
+
+
+def test_the_fingerprint_follows_every_sensor_change():
+    base = fingerprint()
+    changed = {
+        "open": fingerprint(open_contacts=[contact()]),
+        "left open": fingerprint(open_contacts=[contact(left_open=True)]),
+        "unavailable": fingerprint(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]),
+        "alarm": fingerprint(alarm={"left_open": True, "reason": "armed_away"}),
+        "frost": fingerprint(rooms=[{"name": "Loft", "warnings": ["frost"]}]),
+        "count": fingerprint(contact_count=5),
+        "disabled": fingerprint(sensors_enabled=False),
+    }
+    assert base not in changed.values()
+    assert len(set(changed.values())) == len(changed)
+    assert changed["open"] != changed["left open"]
+    # The order the rooms come in is not a change.
+    two = [contact(zone="A"), contact(zone="B")]
+    assert fingerprint(open_contacts=two) == fingerprint(open_contacts=list(reversed(two)))
+
+
+def test_a_new_outdoor_reading_does_not_redraw_the_panel(client, device, monkeypatch):
+    enable(client)
+    add_sensor(client, name="Bath window")
+    _, token = new_key(client)
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    original = server._display_payload
+
+    def warmer():
+        value = original()
+        value["outdoor"] = {"temperature": 31.0}
+        value["hub_connected"] = not value["hub_connected"]
+        return value
+
+    monkeypatch.setattr(server, "_display_payload", warmer)
+    again = device.get(
+        "/api/display/frame.png",
+        headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert again.status_code == 304
+
+
+def test_a_waiting_request_answers_as_soon_as_a_sensor_changes(client, device, monkeypatch):
+    enable(client)
+    add_sensor(client, name="Bath window")
+    _, token = new_key(client)
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    original = server._display_payload
+    calls = {"n": 0}
+
+    def opens_on_the_third_look():
+        calls["n"] += 1
+        value = original()
+        if calls["n"] >= 3:
+            value["open_contacts"] = [contact()]
+        return value
+
+    monkeypatch.setattr(server, "_display_payload", opens_on_the_third_look)
+    monkeypatch.setattr(server, "DISPLAY_WAIT_STEP_SECONDS", 0.01)
+    started = time.monotonic()
+    response = device.get(
+        "/api/display/frame.png?wait=30",
+        headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert response.status_code == 200 and response.content
+    assert response.headers["etag"] != first.headers["etag"]
+    assert calls["n"] == 3
+    assert time.monotonic() - started < 5
+
+
+def test_a_waiting_request_gives_up_with_304_when_nothing_changes(client, device, monkeypatch):
+    _, token = new_key(client)
+    etag = device.get("/api/display/frame.png", headers=bearer(token)).headers["etag"]
+    monkeypatch.setattr(server, "DISPLAY_WAIT_STEP_SECONDS", 0.05)
+    started = time.monotonic()
+    response = device.get(
+        "/api/display/frame.png?wait=1", headers={**bearer(token), "If-None-Match": etag},
+    )
+    elapsed = time.monotonic() - started
+    assert response.status_code == 304 and response.headers["etag"] == etag
+    assert 0.9 <= elapsed < 5
+
+
+def test_the_wait_is_capped_and_needs_an_etag(client, device, monkeypatch):
+    _, token = new_key(client)
+    # Without If-None-Match there is nothing to wait for a change from.
+    started = time.monotonic()
+    assert device.get("/api/display/frame.png?wait=30", headers=bearer(token)).status_code == 200
+    assert time.monotonic() - started < 5
+    etag = device.get("/api/display/frame.png", headers=bearer(token)).headers["etag"]
+    monkeypatch.setattr(server, "DISPLAY_MAX_WAIT_SECONDS", 0)
+    started = time.monotonic()
+    response = device.get(
+        "/api/display/frame.png?wait=99999", headers={**bearer(token), "If-None-Match": etag},
+    )
+    assert response.status_code == 304 and time.monotonic() - started < 5
+
+
+def test_an_older_strong_etag_from_the_first_firmware_still_matches(client, device):
+    _, token = new_key(client)
+    etag = device.get("/api/display/frame.png", headers=bearer(token)).headers["etag"]
+    assert etag.startswith('W/"')
+    response = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": etag[2:]},
+    )
+    assert response.status_code == 304
+
+
+# -- how often a display on battery asks ----------------------------------------
+
+
+def test_every_answer_tells_the_display_its_battery_interval(client, device):
+    display, token = new_key(client)
+    assert display["battery_minutes"] == display_tokens.DEFAULT_BATTERY_MINUTES
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    assert first.headers["x-display-interval"] == str(display_tokens.DEFAULT_BATTERY_MINUTES)
+    response = client.patch(f"/api/displays/{display['display_id']}", json={"battery_minutes": 5})
+    assert response.status_code == 200, response.text
+    assert response.json()["display"]["battery_minutes"] == 5
+    again = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert again.status_code == 304 and again.headers["x-display-interval"] == "5"
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.battery_minutes(display["display_id"]) == 5
+
+
+@pytest.mark.parametrize("value", [0, 1, 7, 61, 240, -5, "5", True, None])
+def test_only_the_offered_battery_intervals_are_accepted(client, value):
+    display, _ = new_key(client)
+    response = client.patch(f"/api/displays/{display['display_id']}", json={"battery_minutes": value})
+    if value == "5":
+        # Pydantic accepts a numeric string for an int; it is still a choice.
+        assert response.status_code == 200
+        return
+    assert response.status_code in (400, 422), value
+    listed = client.get("/api/displays").json()["displays"][0]
+    assert listed["battery_minutes"] == display_tokens.DEFAULT_BATTERY_MINUTES
+
+
+def test_changing_the_interval_is_for_admins_with_a_session(client, device, monkeypatch):
+    display, token = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    assert client.patch("/api/displays/nope", json={"battery_minutes": 5}).status_code == 404
+    # A display's own key cannot change how often it asks.
+    assert device.patch(path, json={"battery_minutes": 2}, headers=bearer(token)).status_code == 401
+    assert device.patch(path, json={"battery_minutes": 2}).status_code == 401
+    original = auth.load_users
+
+    def users():
+        data = dict(original())
+        data["admin"] = {**data["admin"], "role": "user"}
+        return data
+
+    monkeypatch.setattr(auth, "load_users", users)
+    assert client.patch(path, json={"battery_minutes": 2}).status_code == 403
+
+
+def test_a_damaged_interval_or_power_on_disk_falls_back_safely():
+    registry = display_tokens.DisplayRegistry()
+    display, _ = registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    raw["displays"][0]["battery_minutes"] = 3
+    raw["displays"][0]["power"] = "mains"
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    listed = reloaded.list()[0]
+    assert listed["battery_minutes"] == display_tokens.DEFAULT_BATTERY_MINUTES
+    assert listed["power"] is None
+
+
+def test_the_display_says_whether_it_is_on_usb_or_battery(client, device):
+    _, token = new_key(client)
+    device.get("/api/display/frame.png", headers={**bearer(token), "X-Display-Power": "usb"})
+    assert client.get("/api/displays").json()["displays"][0]["power"] == "usb"
+    device.get("/api/display/frame.png", headers={**bearer(token), "X-Display-Power": "battery"})
+    assert client.get("/api/displays").json()["displays"][0]["power"] == "battery"
+    device.get("/api/display/frame.png", headers={**bearer(token), "X-Display-Power": "nuclear"})
+    assert client.get("/api/displays").json()["displays"][0]["power"] == "battery"
+    on_disk = json.loads(display_tokens.DISPLAYS_FILE.read_text())["displays"][0]
+    assert on_disk["power"] == "battery"
+
+
+def test_settings_offers_exactly_the_intervals_the_server_accepts():
+    root = server.Path(server.__file__).resolve().parent / "static" / "ui"
+    cabin = (root / "cabin" / "cabin.js").read_text()
+    core = (root / "shared" / "core.js").read_text()
+    offered = "[" + ", ".join(str(item) for item in display_tokens.BATTERY_MINUTES_CHOICES) + "]"
+    assert f"const DISPLAY_BATTERY_MINUTES = {offered};" in cabin
+    assert "data-display-interval" in cabin and "Nobo.api.updateDisplay" in cabin
+    assert "updateDisplay:" in core and "method: 'PATCH'" in core

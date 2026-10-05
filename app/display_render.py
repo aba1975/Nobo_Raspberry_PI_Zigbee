@@ -10,14 +10,18 @@ here is what appears on the wall.
 
 Two rules shape the layout.
 
-*The picture carries no clock.* The ETag is a hash of the picture, and a
-Spectra 6 refresh takes the best part of twenty seconds and flashes, so
-anything that ticks — "open for 12 min", "updated 10:05" — would redraw the
-panel every minute for nothing. Times are absolute instead: "open since
-09:47". Saying that the picture is current is the device's job: when it
-cannot reach the Pi it replaces the picture with one saying so, because an
-e-paper panel keeps its last image for ever, even with a flat battery, and an
-old "All closed" must never pass for a current one.
+*The panel is redrawn only when a sensor changes.* A Spectra 6 refresh takes
+the best part of twenty seconds and flashes, so the ETag is not a hash of the
+picture but of ``sensor_fingerprint`` — the doors, windows and warnings the
+display exists to show. A new outdoor temperature or a hub reconnecting is
+drawn at the next sensor change, not on its own. Everything on the picture is
+therefore written to stay true while it waits: times are absolute and carry
+their weekday ("Mon 09:47", never "12 min ago" or a bare "09:47" that is wrong
+the next morning), and the outdoor reading says when it was read. Saying that
+the picture is current is the device's job: when it cannot reach the Pi it
+replaces the picture with one saying so, because an e-paper panel keeps its
+last image for ever, even with a flat battery, and an old "All closed" must
+never pass for a current one.
 
 *Doors and windows first.* The header is what can be read from across the
 room: red when something has been left open (or the alarm is on with
@@ -25,7 +29,9 @@ something open), yellow when something is open, blue when a sensor cannot be
 heard from, green when every one is closed.
 """
 
+import hashlib
 import io
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -105,8 +111,7 @@ def _since(value: Optional[str], now: datetime) -> str:
         when = datetime.fromisoformat(value).astimezone()
     except ValueError:
         return ""
-    if when.date() == now.date():
-        return when.strftime("%H:%M")
+    # The weekday even for today: the picture may stay up past midnight.
     if (now.date() - when.date()).days < 7:
         return when.strftime("%a %H:%M")
     return f"{when.day} {when.strftime('%b %H:%M')}"
@@ -124,11 +129,10 @@ def build_frame(
     now = now or datetime.now().astimezone()
     site = str(payload.get("site") or "")
     notes: List[Tuple[str, str]] = []
-    if not payload.get("hub_connected"):
-        notes.append(("red", "No contact with the Nobø hub"))
-    if display_battery is not None and display_battery <= LOW_DISPLAY_BATTERY:
-        notes.append(("red", f"Display battery low: {display_battery}%"))
-    footer = _footer(payload)
+    # No percentage: the note is redrawn when it starts, not as it falls.
+    if _battery_low(display_battery):
+        notes.append(("red", "Display battery low, charge it"))
+    footer = _footer(payload, now)
 
     if not payload.get("sensors_enabled"):
         return Frame(
@@ -197,12 +201,47 @@ def build_frame(
     )
 
 
-def _footer(payload: Dict[str, Any]) -> str:
+def _battery_low(display_battery: Optional[int]) -> bool:
+    return display_battery is not None and display_battery <= LOW_DISPLAY_BATTERY
+
+
+def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int] = None) -> str:
+    """A hash of what the display is for: doors, windows and their warnings.
+
+    It is the picture's ETag, so the panel is redrawn when — and only when —
+    this changes. Weather, room temperatures and the hub's connection are
+    deliberately left out. The display's own low battery is in, as a flag.
+    """
+    alarm = payload.get("alarm") or {}
+    state = {
+        "enabled": bool(payload.get("sensors_enabled")),
+        "count": int(payload.get("contact_count") or 0),
+        "open": sorted(
+            [str(item.get("zone")), str(item.get("sensor")), str(item.get("kind")),
+             str(item.get("since")), bool(item.get("left_open"))]
+            for item in payload.get("open_contacts") or []
+        ),
+        "unavailable": sorted(
+            [str(item.get("zone")), str(item.get("sensor"))]
+            for item in payload.get("unavailable_sensors") or []
+        ),
+        "alarm": [bool(alarm.get("left_open")), alarm.get("reason")],
+        "frost": sorted(
+            str(room.get("name")) for room in payload.get("rooms") or []
+            if "frost" in (room.get("warnings") or [])
+        ),
+        "battery_low": _battery_low(display_battery),
+    }
+    text = json.dumps(state, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def _footer(payload: Dict[str, Any], now: datetime) -> str:
     parts: List[str] = []
     outdoor = payload.get("outdoor") or {}
     if outdoor.get("temperature") is not None:
-        # Whole degrees: tenths would redraw the panel every few minutes.
-        parts.append(f"Outside {round(float(outdoor['temperature']))}°")
+        # Stamped, because it is redrawn only with a sensor change.
+        parts.append(f"Outside {round(float(outdoor['temperature']))}° at {now.strftime('%H:%M')}")
     outlook = payload.get("weather_outlook") or {}
     words = OUTLOOK_WORDS.get(outlook.get("tendency") or "")
     if words:

@@ -1843,6 +1843,10 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .sensor-row .sensor-copy small.is-alert { color: var(--amber); font-weight: 600; }
   /* A weather station module has no card around it, so its line stays. */
   .sensor-row.wx-module .sensor-copy small:not(.is-alert) { display: block; }
+  /* Nor has a wall display, which has no picture beside it either. */
+  .sensor-row.display-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .sensor-row.display-row .sensor-copy { grid-column: 1; }
+  .sensor-row.display-row .sensor-copy small:not(.is-alert) { display: block; }
 
   .climate-facts {
     grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
@@ -1871,6 +1875,11 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   gap: 1rem; align-items: start;
 }
 .display-row { grid-template-columns: minmax(0, 1fr) auto; }
+.display-power { display: block; }
+.display-interval {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-top: .45rem; font-size: .88rem; color: var(--ink-soft);
+}
 .display-preview { margin: 0; text-align: center; }
 .display-preview img {
   display: block; width: 160px; height: auto; aspect-ratio: 2 / 3;

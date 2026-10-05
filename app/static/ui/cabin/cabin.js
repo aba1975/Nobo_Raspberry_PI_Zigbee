@@ -6232,6 +6232,17 @@
     `, { icon: 'door' });
   }
 
+  // Must match BATTERY_MINUTES_CHOICES in display_tokens.py.
+  const DISPLAY_BATTERY_MINUTES = [2, 5, 10, 15, 30, 60];
+
+  function displayPowerText(display) {
+    if (display.power === 'usb') return 'On USB: redrawn as soon as a sensor changes';
+    if (display.power === 'battery') {
+      return `On battery: checks every ${display.battery_minutes} min, redraws only when a sensor has changed`;
+    }
+    return '';
+  }
+
   function displayRow(display) {
     const seen = display.last_seen_at
       ? `Last fetched ${Nobo.fmtAgo(new Date(display.last_seen_at * 1000).toISOString())}`
@@ -6240,11 +6251,20 @@
       display.battery == null ? '' : `${display.battery}% battery`,
       display.firmware ? `firmware ${display.firmware}` : '',
     ].filter(Boolean).join(' · ');
+    const power = displayPowerText(display);
+    const options = DISPLAY_BATTERY_MINUTES.map(minutes =>
+      `<option value="${minutes}"${minutes === display.battery_minutes ? ' selected' : ''}>Every ${minutes} min</option>`,
+    ).join('');
     return `
       <li class="sensor-row display-row">
         <span class="sensor-copy">
           <strong>${esc(display.name)}</strong>
           <small>${esc(seen)}${facts ? ` · ${esc(facts)}` : ''}</small>
+          ${power ? `<small class="display-power">${esc(power)}</small>` : ''}
+          <label class="display-interval"><span>On battery, check</span>
+            <select data-display-interval="${esc(display.display_id)}"
+              aria-label="How often ${esc(display.name)} checks on battery">${options}</select>
+          </label>
         </span>
         <span class="dev-actions">
           <button class="icon-btn act-remove" type="button" data-remove-display="${esc(display.display_id)}"
@@ -6270,6 +6290,17 @@
     box.innerHTML = count
       ? `<ul class="sensor-list">${state.displays.map(displayRow).join('')}</ul>`
       : '<p class="zd-sub">No display has been added.</p>';
+    box.querySelectorAll('[data-display-interval]').forEach(select => {
+      select.onchange = async () => {
+        try {
+          await Nobo.api.updateDisplay(select.dataset.displayInterval, {
+            battery_minutes: Number(select.value),
+          });
+          Nobo.toast('Saved. The display uses it from its next check');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+        wireDisplaySettings(root);
+      };
+    });
     box.querySelectorAll('[data-remove-display]').forEach(button => {
       const display = state.displays.find(item => item.display_id === button.dataset.removeDisplay);
       button.onclick = () => confirmSheet(`Remove ${display.name}?`,

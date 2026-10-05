@@ -21,11 +21,22 @@ That split is deliberate:
   device they would be C++, tested by looking at it.
 - **A change of layout is an ordinary update** (`scripts/update.sh`), not a
   firmware flash on a device screwed to a wall.
-- **The ETag is a hash of the picture**, and the picture carries no clock, so
-  the device asks with `If-None-Match` and is answered `304 Not Modified`
-  until something it shows has actually changed. A Spectra 6 refresh takes the
-  best part of twenty seconds and flashes the whole panel; it should happen
-  when a door opens, not every quarter of an hour.
+- **The panel is redrawn only when a sensor changes.** The ETag is not a hash
+  of the picture but `display_render.sensor_fingerprint`: which doors and
+  windows are open and since when, which are left open, which cannot be heard
+  from, the alarm's left-open warning, frost, the number of sensors, and
+  whether the display's own battery is low. The device asks with
+  `If-None-Match` and is answered `304 Not Modified` until one of those has
+  changed. A new outdoor temperature, an outlook, a room temperature or the
+  hub reconnecting is drawn with the next sensor change, never on its own. A
+  Spectra 6 refresh takes the best part of twenty seconds and flashes the
+  whole panel; it should happen when a door opens, not every quarter of an
+  hour.
+- **So nothing on the picture may go stale while it waits.** Times carry
+  their weekday ("Mon 09:47"), because a bare "09:47" is wrong the next
+  morning. The outdoor reading says when it was read ("Outside 4° at 10:05").
+  The low-battery note has no percentage. The hub's connection is not on the
+  picture at all: doors and windows do not depend on it.
 
 The palette in `display_render.py` is exactly M5GFX's `Panel_ED2208` palette,
 and the device draws in `epd_fastest`, which does no dithering, so every
@@ -70,10 +81,17 @@ Displays** (admins only, shown only with sensors on).
   `AuthMiddleware` accepts `Authorization: Bearer nd_…` only for those two
   paths, and `tests/test_display_frame.py` proves the rest answer 401.
 - **Remove** revokes it at once. At most ten displays.
-- The card shows when each display was last seen, its battery and its
-  firmware, which it reports in `X-Display-Battery` and `X-Display-Firmware`.
-  That is written to disk at most every ten minutes, so a display on USB
-  polling every minute does not wear the SD card.
+- The card shows when each display was last seen, its battery, its firmware
+  and whether it is on USB or battery, which it reports in
+  `X-Display-Battery`, `X-Display-Firmware` and `X-Display-Power`. A change
+  of battery, firmware or power is written at once; otherwise last-seen is
+  written at most every ten minutes, so a display on USB asking twice a
+  minute does not wear the SD card.
+- **How often it checks on battery** is chosen per display on the card: 2, 5,
+  10, 15 (the default), 30 or 60 minutes (`PATCH /api/displays/{id}` with
+  `{"battery_minutes": N}`, admins only). Every answer, `200` or `304`,
+  carries it in `X-Display-Interval`, and the device keeps it, so a change
+  reaches the display at its next check without touching the device.
 
 A signed-in browser can open the picture too, which is how the card shows a
 preview.
@@ -88,20 +106,36 @@ the firmware or this repository.
 
 ### On USB power
 
-It fetches every minute (`usb_seconds`) and redraws only on a change. The
-buttons fetch at once and always redraw.
+It asks with `?wait=25`, and the Pi holds the answer open — checking once a
+second — until a sensor changes or the 25 seconds are up (the Pi caps it at
+30). A change is answered at once, so the panel starts redrawing within a
+second or two of a door opening, and then asks again straight away. An
+unchanged `304` is followed by the next ask at once, so an idle display costs
+two requests a minute. After a failure it tries again in `usb_seconds` (30).
+A `304` that comes back without waiting — a Pi too old to hold answers — is
+also followed by `usb_seconds`, so it never asks in a tight loop. The buttons
+fetch at once and always redraw; during a held ask a press is noticed when
+the answer comes.
 
 ### On battery
 
-It wakes every 15 minutes (`battery_minutes`), joins Wi-Fi (remembering the
-access point and channel, which makes it quicker), asks for the picture, and
-goes back to deep sleep. A `304` costs a few seconds of radio and no refresh.
-Any of the three buttons wakes it and forces a redraw. Unplugging USB moves it
-to battery behaviour by itself.
+It wakes every `battery_minutes` (from the Pi, default 15), joins Wi-Fi
+(remembering the access point and channel, which makes it quicker), asks for
+the picture, and goes back to deep sleep. A `304` costs a few seconds of radio
+and no refresh. On a timer wake it goes straight to the ask; only a cold boot
+or a button listens 1.5 s for `provision.py` first. Any of the three buttons
+wakes it and forces a redraw. Unplugging USB moves it to battery behaviour by
+itself.
 
-This is a picture of the house **up to 15 minutes old**. It is not an alarm
-and cannot be one: a door opened a minute after it woke is shown at the next
-wake, or when a button is pressed. For a check on the way out, press a button.
+This is a picture of the house **up to `battery_minutes` old**. It is not an
+alarm and cannot be one: a door opened a minute after it woke is shown at the
+next wake, or when a button is pressed. For a check on the way out, press a
+button.
+
+Battery life, estimated rather than measured (1250 mAh, a wake with no change
+about 5–8 s, a redraw 20–35 s): roughly 5–7 weeks at 15 minutes, 2–3 weeks at
+5 minutes, about a week at 2 minutes. Nearly all of it is the Wi-Fi join, so
+it scales with the interval, not with how often a door opens.
 
 ### When it cannot reach the Pi
 

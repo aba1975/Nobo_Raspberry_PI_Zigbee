@@ -44,7 +44,6 @@ import alarm_automation
 import alarm_persistence
 import dataclasses
 import display_render
-import hashlib
 from display_tokens import DisplayRegistry
 from alarm_persistence import AlarmLedger, AlarmSettings
 from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, SimulatedAlarm
@@ -4916,33 +4915,74 @@ async def get_display(request: Request):
     return _display_payload()
 
 
+# A display on USB holds its request open this long, at most, waiting for a
+# sensor to change. Long enough that an idle display asks twice a minute, short
+# enough that no proxy in between times it out.
+DISPLAY_MAX_WAIT_SECONDS = 30
+DISPLAY_WAIT_STEP_SECONDS = 1.0
+
+
+def _display_etag(fingerprint: str) -> str:
+    # Weak: two pictures with one fingerprint can differ in their bytes (the
+    # outdoor temperature, say). That is the point — only a sensor counts.
+    return f'W/"{fingerprint}"'
+
+
+def _etag_matches(asked: Optional[str], etag: str) -> bool:
+    if not asked:
+        return False
+    bare = etag[2:]
+    return any(item.strip() in (etag, bare) for item in asked.split(","))
+
+
 @app.get("/api/display/frame.png")
-async def get_display_frame(request: Request):
+async def get_display_frame(request: Request, wait: int = 0):
     """The display summary drawn as a picture in the e-paper panel's six colours.
 
     Drawn here rather than on the device so that the layout, the wording and
     the Norwegian letters are all tested in Python, and can change without
-    reflashing anything. The ETag is a hash of the picture itself, and the
-    picture carries no clock, so a display asking with If-None-Match is told
-    304 until something it shows has actually changed. A Spectra 6 refresh
-    takes the best part of twenty seconds and flashes, so that matters.
+    reflashing anything. A Spectra 6 refresh takes the best part of twenty
+    seconds and flashes, so the ETag is a fingerprint of the sensors alone
+    (``display_render.sensor_fingerprint``): a display asking with
+    If-None-Match is told 304 until a door, a window or one of their warnings
+    has changed, whatever else has.
+
+    ``wait`` (seconds, at most ``DISPLAY_MAX_WAIT_SECONDS``) is for a display
+    on USB: with If-None-Match, the answer is held until the sensors change or
+    the time is up, so the panel follows a door within a second or two without
+    asking constantly. The left-open warning raised by a room's delay is a
+    change too, so it is caught as it happens.
+
+    Every answer carries X-Display-Interval, how many minutes a display on
+    battery sleeps between asks, set per display in Settings.
     """
     display_id = _display_from_request(request)
     battery = None
+    headers = {"Cache-Control": "no-cache"}
     if display_id:
         display_registry.seen(
             display_id,
             battery=request.headers.get("x-display-battery"),
             firmware=request.headers.get("x-display-firmware"),
+            power=request.headers.get("x-display-power"),
         )
         battery = display_registry.battery(display_id)
-    picture = display_render.render_png(_display_payload(), display_battery=battery)
-    etag = '"' + hashlib.sha256(picture).hexdigest()[:32] + '"'
-    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        headers["X-Display-Interval"] = str(display_registry.battery_minutes(display_id))
     asked = request.headers.get("if-none-match")
-    if asked and etag in [item.strip() for item in asked.split(",")]:
-        return Response(status_code=304, headers=headers)
-    return Response(content=picture, media_type="image/png", headers=headers)
+    wait = max(0, min(int(wait), DISPLAY_MAX_WAIT_SECONDS)) if asked else 0
+    deadline = time.monotonic() + wait
+    while True:
+        payload = _display_payload()
+        etag = _display_etag(display_render.sensor_fingerprint(payload, display_battery=battery))
+        if not _etag_matches(asked, etag):
+            break
+        if time.monotonic() >= deadline or await request.is_disconnected():
+            return Response(status_code=304, headers={**headers, "ETag": etag})
+        await asyncio.sleep(DISPLAY_WAIT_STEP_SECONDS)
+    picture = display_render.render_png(payload, display_battery=battery)
+    return Response(
+        content=picture, media_type="image/png", headers={**headers, "ETag": etag},
+    )
 
 
 @app.get("/api/displays")
@@ -4966,6 +5006,29 @@ async def create_display(request: Request, body: DisplayCreate):
         raise HTTPException(status_code=400, detail=str(exc))
     add_log_entry("sent", f"Display added: {display['name']} (by {session['username']})", source="settings")
     return {"display": display, "token": token}
+
+
+class DisplayUpdate(BaseModel):
+    battery_minutes: int
+
+
+@app.patch("/api/displays/{display_id}")
+async def update_display(request: Request, display_id: str, body: DisplayUpdate):
+    """How often a display on battery wakes. It learns the new value at its next ask."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    try:
+        display = display_registry.set_battery_minutes(display_id, body.battery_minutes)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such display")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    add_log_entry(
+        "sent",
+        f"Display {display['name']}: on battery every {display['battery_minutes']} min (by {session['username']})",
+        source="settings",
+    )
+    return {"display": display}
 
 
 @app.delete("/api/displays/{display_id}")

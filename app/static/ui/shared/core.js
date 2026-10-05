@@ -152,6 +152,8 @@ const Nobo = (() => {
     addDisplay:        (name) => req('/api/displays', {
                                   method: 'POST', body: JSON.stringify({ name }) }),
     removeDisplay:     (id)   => req(`/api/displays/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    updateDisplay:     (id, body) => req(`/api/displays/${encodeURIComponent(id)}`, {
+                                  method: 'PATCH', body: JSON.stringify(body) }),
     weatherSettings:    ()     => req('/api/weather/settings'),
     setWeatherSettings: (body) => req('/api/weather/settings', {
                                   method: 'PUT', body: JSON.stringify(body) }),

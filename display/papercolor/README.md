@@ -57,15 +57,15 @@ python provision.py --port … --keep-key --battery-minutes 30   # change one th
 
 | Option | Default | |
 | --- | --- | --- |
-| `--battery-minutes` | 15 | Minutes between wakes on battery (2–240) |
-| `--usb-seconds` | 60 | Seconds between fetches on USB power (15–3600) |
+| `--battery-minutes` | 15 | Minutes between wakes on battery (2–240), until the Pi says otherwise: Settings → Wall Displays sets it per display, and the Pi's value wins from the next check |
+| `--usb-seconds` | 30 | On USB the display holds an ask open at the Pi and redraws as soon as a sensor changes; this is only how long it waits after a failure (15–3600) |
 | `--rotation` | -1 | -1 keeps the panel portrait; 0–3 force a rotation |
 | `--tz` | `CET-1CEST,M3.5.0,M10.5.0/3` | POSIX time zone for "last updated" |
 
 Opening the serial port resets the board; `provision.py` repeats its command
 until the display answers, which can take ten seconds or so while it boots
-and draws. On battery it listens for 1.5 seconds after each wake, so press a
-button just before running it, or plug it into USB.
+and draws. On battery it listens for 1.5 seconds only after a button wake or
+a cold boot, so plug it into USB.
 
 ## Moving it to another house
 
