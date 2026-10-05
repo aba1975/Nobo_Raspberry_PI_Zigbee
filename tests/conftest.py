@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import auth
 import config_persistence
+import display_tokens
 import sensor_persistence
 import alarm_persistence
 import sensor_verisure
@@ -227,6 +228,11 @@ def redirect_persistence(tmp_path, monkeypatch):
         monkeypatch.setattr(server_module, "sensor_precedence", sensor_verisure.Precedence(
             counted=[], standing_by={}, stood_in_for={},
         ))
+    # Display keys: none, and nowhere real to write one.
+    monkeypatch.setattr(display_tokens, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(display_tokens, "DISPLAYS_FILE", tmp_path / "displays.json")
+    if server_module is not None and hasattr(server_module, "display_registry"):
+        monkeypatch.setattr(server_module, "display_registry", display_tokens.DisplayRegistry())
     if server_module is not None and hasattr(server_module, "pressure_history"):
         from pressure_outlook import PressureHistory
 

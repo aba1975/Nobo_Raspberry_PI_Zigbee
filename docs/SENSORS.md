@@ -1174,11 +1174,12 @@ a headline `status` (`ok`, `open`, `warning` or `unknown`), the open contacts,
 unavailable sensors, and per room its mode, set temperature, **actual
 temperature**, its source, humidity and warnings (`left_open`, `too_warm`,
 `too_cold`, `humid`, `frost`). Set point and measurement are separate fields,
-so a display cannot run them together. It is behind the same session as the
-rest of the API; a display that cannot hold a session belongs behind
-`NOBO_ALLOW_ANON_API` on a trusted network. With sensors switched off it is
-the heating alone. **Only the endpoint exists** — no display firmware is in
-this repository, and none has been run against it.
+so a display cannot run them together. It opens with a session or with a
+**display key** from Settings → Wall Displays, which opens this and
+`/api/display/frame.png` — the same summary drawn as a six-colour e-paper
+picture — and nothing else. With sensors switched off it is the heating
+alone. The display, its key and its firmware are in
+[DISPLAY.md](DISPLAY.md).
 
 ### In the demo
 

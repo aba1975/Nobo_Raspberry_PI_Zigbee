@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install build dependencies for bcrypt (needed on ARM64)
+# Install build dependencies for bcrypt (needed on ARM64), and the font the
+# wall display's picture is drawn in (app/display_render.py)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libffi-dev && \
+    apt-get install -y --no-install-recommends gcc libffi-dev fonts-dejavu-core && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

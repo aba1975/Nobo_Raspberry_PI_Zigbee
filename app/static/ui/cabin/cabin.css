@@ -1864,3 +1864,22 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 
 /* Which alerts the alarm's own sensors can raise, beside each one. */
 .notify-note { display: block; margin-top: .2rem; font-style: normal; color: var(--pine); }
+
+/* Wall displays: the list beside a small copy of what the panel shows. */
+.display-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem; align-items: start;
+}
+.display-row { grid-template-columns: minmax(0, 1fr) auto; }
+.display-preview { margin: 0; text-align: center; }
+.display-preview img {
+  display: block; width: 160px; height: auto; aspect-ratio: 2 / 3;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  image-rendering: pixelated; background: #fff;
+}
+.display-preview figcaption { margin-top: .3rem; font-size: .75rem; color: var(--ink-soft); }
+.display-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+@media (max-width: 560px) {
+  .display-layout { grid-template-columns: 1fr; }
+  .display-preview img { margin: 0 auto; }
+}

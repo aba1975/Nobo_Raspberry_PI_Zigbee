@@ -148,6 +148,13 @@ hub reached the hardware; everything else proves a message reached the hub.
   tokens are in `data/netatmo/` (0600 in 0700), excluded from backups and
   deleted when the integration is turned off. `tests/conftest.py` makes every
   test unable to reach Netatmo
+- `app/display_tokens.py`, `app/display_render.py` and `display/papercolor/` —
+  the wall display. `docs/DISPLAY.md` is the design. **The Pi draws the
+  picture** (`/api/display/frame.png`, six inks, ETag = hash of the PNG, so
+  it carries no clock) and the firmware only shows it. A display key
+  (`nd_…`, SHA-256 only in `data/displays.json`) opens exactly
+  `DISPLAY_TOKEN_PATHS` for GET and nothing else; keep it that way. Wi-Fi,
+  key and CA reach the device only through `provision.py`, never the repo
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
 - `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both

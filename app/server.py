@@ -43,6 +43,9 @@ import weather_persistence
 import alarm_automation
 import alarm_persistence
 import dataclasses
+import display_render
+import hashlib
+from display_tokens import DisplayRegistry
 from alarm_persistence import AlarmLedger, AlarmSettings
 from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, SimulatedAlarm
 from alarm_verisure import VerisureAlarm, VerisureError
@@ -1004,6 +1007,7 @@ async def lifespan(app: FastAPI):
     # importing the module do not pick up whatever is in the real data dir.
     notifier.log_hook = add_log_entry
     refresh_notifier_identity()
+    display_registry.load()
 
     try:
         await connect_to_hub()
@@ -1102,6 +1106,18 @@ if ALLOW_ANON_API:
         "Only do this on a trusted network."
     )
 
+# A wall display's key opens these, for reading, and nothing else. See
+# display_tokens.py for why a display has a key rather than a session.
+DISPLAY_TOKEN_PATHS = frozenset({"/api/display", "/api/display/frame.png"})
+display_registry = DisplayRegistry()
+
+
+def _display_key(request: Request) -> Optional[str]:
+    header = request.headers.get("authorization", "")
+    if header[:7].lower() != "bearer ":
+        return None
+    return header[7:].strip()
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Require a valid session for every request except a small public allow-list.
@@ -1120,6 +1136,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if path in PUBLIC_PATHS or path in PUBLIC_ASSET_PATHS:
+            return await call_next(request)
+
+        key = _display_key(request)
+        if key is not None:
+            # A key is only ever good for reading the display. Presented
+            # anywhere else it is refused outright rather than ignored, so a
+            # display misconfigured to call the wrong address finds out.
+            display_id = (
+                display_registry.verify(key)
+                if path in DISPLAY_TOKEN_PATHS and request.method in ("GET", "HEAD") else None
+            )
+            if display_id is None:
+                return JSONResponse({"detail": "Display key not accepted"}, status_code=401)
+            request.state.display_id = display_id
             return await call_next(request)
 
         if ALLOW_ANON_API and (path.startswith("/api/") or path == "/ws"):
@@ -4740,12 +4770,14 @@ def _display_payload() -> Dict[str, Any]:
     unavailable: List[Dict[str, Any]] = []
     left_open = 0
     climate_warnings = 0
+    contact_count = 0
     for zone in get_zones_data():
         climate = zone.get("climate") or {}
         summary = zone.get("sensor_summary") or {}
         warnings: List[str] = []
         if enabled:
-            if summary.get("warning_raised"):
+            raised = bool(summary.get("warning_raised"))
+            if raised:
                 warnings.append("left_open")
                 left_open += 1
             if climate.get("condition"):
@@ -4755,13 +4787,23 @@ def _display_payload() -> Dict[str, Any]:
             if climate.get("frost"):
                 warnings.append("frost")
             climate_warnings += len([item for item in warnings if item != "left_open"])
-            for sensor in zone.get("sensors") or []:
+            # A Verisure sensor standing by behind a Zigbee one is the same
+            # door, so only the ones the rules count are listed.
+            contacts = [item for item in zone.get("sensors") or [] if item.get("counts", True)]
+            contact_count += len(contacts)
+            for sensor in contacts:
                 if sensor["available"] and sensor["state"] == "open":
                     open_contacts.append({
                         "zone": zone["name"], "sensor": sensor["name"],
                         "kind": sensor["kind"], "since": sensor["changed_at"],
+                        # The room's warning is raised once its delay has run,
+                        # so every contact still open in it has been left open.
+                        "left_open": raised,
                     })
-            for sensor in (zone.get("sensors") or []) + (zone.get("climate_sensors") or []):
+            climate_sensors = [
+                item for item in zone.get("climate_sensors") or [] if item.get("counts", True)
+            ]
+            for sensor in contacts + climate_sensors:
                 if not sensor["available"]:
                     unavailable.append({"zone": zone["name"], "sensor": sensor["name"]})
         # What the room is running, worked out as both interfaces do: its own
@@ -4784,7 +4826,8 @@ def _display_payload() -> Dict[str, Any]:
             "open": int(summary.get("open_count") or 0) if enabled else 0,
             "warnings": warnings,
         })
-    if left_open or climate_warnings:
+    alarm = _display_alarm() if enabled else None
+    if left_open or climate_warnings or (alarm and alarm["left_open"]):
         status = "warning"
     elif open_contacts:
         status = "open"
@@ -4799,8 +4842,11 @@ def _display_payload() -> Dict[str, Any]:
         "global_override_mode": _global_override_mode() if connected else None,
         "sensors_enabled": enabled,
         "status": status,
+        "contact_count": contact_count,
         "open_contacts": open_contacts,
         "unavailable_sensors": unavailable,
+        # Null unless the alarm integration is on.
+        "alarm": alarm,
         # The house's pressure tendency: "steady", "falling", ... or null
         # when no barometer has three hours behind it yet. The weather
         # station's, when there is one, otherwise the room barometers'.
@@ -4833,15 +4879,103 @@ def _display_outlook(outlook: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
     return {"tendency": outlook["tendency"], "change_3h": outlook["change_3h"]}
 
 
+def _display_alarm() -> Optional[Dict[str, Any]]:
+    """The alarm's "left open while leaving" warning, as a display shows it."""
+    if not alarm_settings.enabled:
+        return None
+    known, why = _alarm_leaving()
+    raised = bool(alarm_ledger.left_open_raised)
+    headline = None
+    if raised and why is not None:
+        headline = ALARM_LEAVING_WORDS[why.reason][1].format(lock=why.lock_name or "The door")
+    return {
+        "known": known,
+        "left_open": raised,
+        "reason": why.reason if raised and why is not None else None,
+        "lock_name": why.lock_name if raised and why is not None else None,
+        "headline": headline,
+        "at_home": bool(why and why.reason in ALARM_LEAVING_AT_HOME),
+    }
+
+
+def _display_from_request(request: Request) -> Optional[str]:
+    """The display a request came from, if it used a display key."""
+    return getattr(request.state, "display_id", None)
+
+
 @app.get("/api/display")
-async def get_display():
+async def get_display(request: Request):
     """A compact summary for a wall display such as an e-ink panel.
 
-    Behind the same session as the rest of the API. A display that cannot hold
-    a session belongs behind NOBO_ALLOW_ANON_API on a trusted network, which is
-    the existing, documented way to open the API to headless clients.
+    Opened by a session or by a display key from Settings → Displays. A key
+    opens this and the display picture and nothing else.
     """
+    display_id = _display_from_request(request)
+    if display_id:
+        display_registry.seen(display_id)
     return _display_payload()
+
+
+@app.get("/api/display/frame.png")
+async def get_display_frame(request: Request):
+    """The display summary drawn as a picture in the e-paper panel's six colours.
+
+    Drawn here rather than on the device so that the layout, the wording and
+    the Norwegian letters are all tested in Python, and can change without
+    reflashing anything. The ETag is a hash of the picture itself, and the
+    picture carries no clock, so a display asking with If-None-Match is told
+    304 until something it shows has actually changed. A Spectra 6 refresh
+    takes the best part of twenty seconds and flashes, so that matters.
+    """
+    display_id = _display_from_request(request)
+    battery = None
+    if display_id:
+        display_registry.seen(
+            display_id,
+            battery=request.headers.get("x-display-battery"),
+            firmware=request.headers.get("x-display-firmware"),
+        )
+        battery = display_registry.battery(display_id)
+    picture = display_render.render_png(_display_payload(), display_battery=battery)
+    etag = '"' + hashlib.sha256(picture).hexdigest()[:32] + '"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    asked = request.headers.get("if-none-match")
+    if asked and etag in [item.strip() for item in asked.split(",")]:
+        return Response(status_code=304, headers=headers)
+    return Response(content=picture, media_type="image/png", headers=headers)
+
+
+@app.get("/api/displays")
+async def list_displays(request: Request):
+    _require_admin(_get_session_or_401(request))
+    return {"displays": display_registry.list()}
+
+
+class DisplayCreate(BaseModel):
+    name: str
+
+
+@app.post("/api/displays")
+async def create_display(request: Request, body: DisplayCreate):
+    """Add a wall display. Its key is in this answer and nowhere else, ever."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    try:
+        display, token = display_registry.create(body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    add_log_entry("sent", f"Display added: {display['name']} (by {session['username']})", source="settings")
+    return {"display": display, "token": token}
+
+
+@app.delete("/api/displays/{display_id}")
+async def revoke_display(request: Request, display_id: str):
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    if not display_registry.revoke(display_id):
+        raise HTTPException(status_code=404, detail="No such display")
+    add_log_entry("sent", f"Display key revoked (by {session['username']})", source="settings")
+    return {"ok": True}
 
 
 @app.get("/api/hub/config")

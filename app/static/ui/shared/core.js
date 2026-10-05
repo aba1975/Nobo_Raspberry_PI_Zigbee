@@ -146,6 +146,12 @@ const Nobo = (() => {
     /* The weather station. Admin only, except the readings, which come with
        the status. The Netatmo app's secret goes to the server once, over
        HTTPS, and is never sent back. */
+    /* Wall displays. Admin only. A display's key is in the answer to
+       addDisplay and nowhere else, ever. */
+    displays:          ()     => req('/api/displays').then(r => r.displays || []),
+    addDisplay:        (name) => req('/api/displays', {
+                                  method: 'POST', body: JSON.stringify({ name }) }),
+    removeDisplay:     (id)   => req(`/api/displays/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     weatherSettings:    ()     => req('/api/weather/settings'),
     setWeatherSettings: (body) => req('/api/weather/settings', {
                                   method: 'PUT', body: JSON.stringify(body) }),

@@ -12,3 +12,5 @@ aiomqtt>=2.0.0
 # nothing loads it unless somebody signs in. Pinned: the API it speaks is
 # unofficial, and a new release is worth reading before it is trusted.
 vsure==2.10.1
+# Draws the wall display's picture (app/display_render.py).
+Pillow>=10.1

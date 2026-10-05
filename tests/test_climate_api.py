@@ -347,7 +347,7 @@ def test_the_display_reports_an_open_window_and_an_actual_temperature(client):
     # Other tests rename demo zones, so take the name from the payload.
     assert body["open_contacts"] == [{
         "zone": bath["name"], "sensor": "Bath window", "kind": "window",
-        "since": body["open_contacts"][0]["since"],
+        "since": body["open_contacts"][0]["since"], "left_open": False,
     }]
     # The set point and the measurement are separate fields, never one number.
     zone = next(z for z in client.get("/api/zones").json()["zones"] if z["zone_id"] == "1")

@@ -6204,6 +6204,139 @@
       </div>`;
   }
 
+  /* Wall displays: an e-paper panel by the door that shows what is open.
+     Only with sensors on, since open doors and windows are all it shows. The
+     list is fetched when the card is drawn, not with every refresh. */
+  function renderDisplaySettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.sensorSettings || !state.sensorSettings.enabled) return '';
+    const count = (state.displays || []).length;
+    return settingsSection('displays', 'Wall Displays',
+      count ? `<b>${count}</b> ${count === 1 ? 'display' : 'displays'}` : 'None', `
+      <p class="zd-sub">A colour e-paper screen, such as the M5Stack PaperColor,
+        showing which doors and windows are open. It is given its own key, which
+        lets it fetch this picture and nothing else — it cannot change the
+        heating or open any other page.</p>
+      <div class="display-layout">
+        <div id="displayBox"><p class="zd-sub">Loading…</p></div>
+        <figure class="display-preview">
+          <img src="/api/display/frame.png" alt="What a wall display shows now"
+            width="200" height="300" loading="lazy">
+          <figcaption>What a display shows now</figcaption>
+        </figure>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn btn-add" type="button" data-act="add-display">Add a display</button>
+      </div>
+      <small class="field-hint">How to set up the device is in
+        <code>display/papercolor/README.md</code>.</small>
+    `, { icon: 'door' });
+  }
+
+  function displayRow(display) {
+    const seen = display.last_seen_at
+      ? `Last fetched ${Nobo.fmtAgo(new Date(display.last_seen_at * 1000).toISOString())}`
+      : 'Has not fetched anything yet';
+    const facts = [
+      display.battery == null ? '' : `${display.battery}% battery`,
+      display.firmware ? `firmware ${display.firmware}` : '',
+    ].filter(Boolean).join(' · ');
+    return `
+      <li class="sensor-row display-row">
+        <span class="sensor-copy">
+          <strong>${esc(display.name)}</strong>
+          <small>${esc(seen)}${facts ? ` · ${esc(facts)}` : ''}</small>
+        </span>
+        <span class="dev-actions">
+          <button class="icon-btn act-remove" type="button" data-remove-display="${esc(display.display_id)}"
+            title="Remove this display" aria-label="Remove ${esc(display.name)}">${Nobo.icon('remove')}</button>
+        </span>
+      </li>`;
+  }
+
+  async function wireDisplaySettings(root) {
+    const box = root.querySelector('#displayBox');
+    if (!box) return;
+    const add = root.querySelector('[data-act="add-display"]');
+    if (add) add.onclick = addDisplaySheet;
+    try {
+      state.displays = await Nobo.api.displays();
+    } catch (e) {
+      box.innerHTML = `<p class="zd-sub">${esc(e.message)}</p>`;
+      return;
+    }
+    const state_ = root.querySelector('[data-section="displays"] .sec-state');
+    const count = state.displays.length;
+    if (state_) state_.innerHTML = count ? `<b>${count}</b> ${count === 1 ? 'display' : 'displays'}` : 'None';
+    box.innerHTML = count
+      ? `<ul class="sensor-list">${state.displays.map(displayRow).join('')}</ul>`
+      : '<p class="zd-sub">No display has been added.</p>';
+    box.querySelectorAll('[data-remove-display]').forEach(button => {
+      const display = state.displays.find(item => item.display_id === button.dataset.removeDisplay);
+      button.onclick = () => confirmSheet(`Remove ${display.name}?`,
+        'Its key stops working at once. It shows its last picture until it next tries, then says it cannot reach this system.',
+        'Remove', async () => {
+          try {
+            await Nobo.api.removeDisplay(display.display_id);
+            Nobo.toast('Display removed');
+          } catch (e) { Nobo.toast(e.message, 'error'); }
+          wireDisplaySettings(root);
+        }, true);
+    });
+  }
+
+  function addDisplaySheet() {
+    openSheet('Add a display', `
+      <label class="field"><span>Name</span>
+        <input id="displayName" type="text" maxlength="40" placeholder="Hall" autocomplete="off">
+        <small>Where it hangs, so you can tell displays apart.</small>
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" data-act="cancel" type="button">Cancel</button>
+        <button class="btn btn-primary" data-act="ok" type="button">Add</button>
+      </div>`, body => {
+      body.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      body.querySelector('[data-act="ok"]').onclick = async () => {
+        const name = body.querySelector('#displayName').value.trim();
+        if (!name) { Nobo.toast('Give the display a name', 'error'); return; }
+        let created;
+        try { created = await Nobo.api.addDisplay(name); } catch (e) { Nobo.toast(e.message, 'error'); return; }
+        showDisplayKey(created);
+        const root = $('#viewSettings');
+        if (root) wireDisplaySettings(root);
+      };
+    });
+  }
+
+  function showDisplayKey(created) {
+    openSheet(`Key for ${created.display.name}`, `
+      <p class="zd-sub">Give this key to the display when you set it up. It is
+        shown <b>once</b>: this system keeps only a fingerprint of it, so if it
+        is lost, remove the display and add it again.</p>
+      <label class="field"><span>Display key</span>
+        <input id="displayKey" class="display-key" type="text" readonly
+          value="${esc(created.token)}" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" data-act="copy" type="button">Copy</button>
+        <button class="btn btn-primary" data-act="done" type="button">Done</button>
+      </div>`, body => {
+      const field = body.querySelector('#displayKey');
+      field.onfocus = () => field.select();
+      body.querySelector('[data-act="copy"]').onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(field.value);
+          Nobo.toast('Key copied');
+        } catch (_) {
+          // Clipboard needs HTTPS or localhost; selecting it is the fallback.
+          field.focus();
+          field.select();
+          Nobo.toast('Select the key and copy it', 'error');
+        }
+      };
+      body.querySelector('[data-act="done"]').onclick = closeSheet;
+    });
+  }
+
   function renderWeatherSettingsCard(isAdmin) {
     if (!isAdmin || !state.me || !state.weatherSettings) return '';
     const settings = state.weatherSettings;
@@ -7329,6 +7462,8 @@
 
       ${renderWeatherSettingsCard(isAdmin)}
 
+      ${renderDisplaySettingsCard(isAdmin)}
+
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
         <div class="section-head">
@@ -7452,6 +7587,7 @@
     wireSensorSettings(root);
     wireAlarmSettings(root);
     wireWeatherSettings(root);
+    wireDisplaySettings(root);
     wireZoneGroups(root);
   }
 
