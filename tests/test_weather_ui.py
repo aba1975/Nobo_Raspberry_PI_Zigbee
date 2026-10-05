@@ -171,7 +171,7 @@ def _settings_card(settings, protocol="https:"):
         "const WEATHER_PROVIDER_LABELS", "function weatherAccountBlock",
         "function weatherStatusBlock", "function weatherDemoControls",
         "function renderWeatherSettingsCard",
-        "function settingsSection", "function segControl", "function settingRow",
+        "function settingsSection", "function secIntro", "function segControl", "function settingRow",
     ))
     return _node(script)
 

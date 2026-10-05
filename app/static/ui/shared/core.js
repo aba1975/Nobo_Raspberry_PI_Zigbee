@@ -331,6 +331,17 @@ const Nobo = (() => {
              '<path d="m8.9 12.1 2.2 2.2 4-4.2"/>',
     info:    '<circle cx="12" cy="12" r="8.8"/><path d="M12 11.2v5.4"/>' +
              '<circle cx="12" cy="7.8" r=".95" fill="currentColor" stroke="none"/>',
+    /* A wall display: a portrait panel, which is how the PaperColor hangs. */
+    screen:  '<rect x="5.4" y="2.8" width="13.2" height="18.4" rx="2"/>' +
+             '<path d="M8.4 7.4h7.2M8.4 10.6h7.2M8.4 13.8h4.4"/>',
+    /* Mains through a cable, as opposed to the battery beside it. */
+    plug:    '<path d="M8.6 3.4v4.4M15.4 3.4v4.4"/>' +
+             '<path d="M6.4 7.8h11.2v3.4a5.6 5.6 0 0 1-11.2 0z"/><path d="M12 16.8v3.8"/>',
+    battery: '<rect x="2.8" y="7.4" width="16.4" height="9.2" rx="2"/>' +
+             '<path d="M21.2 10.6v2.8"/><path d="M5.8 10.4v3.2M8.8 10.4v3.2"/>',
+    /* Leaves this app: a page somewhere else. */
+    external: '<path d="M13.6 4.4h6v6"/><path d="M19.6 4.4 11 13"/>' +
+              '<path d="M17.2 13.8v4.4a1.6 1.6 0 0 1-1.6 1.6H5.8a1.6 1.6 0 0 1-1.6-1.6V8.4a1.6 1.6 0 0 1 1.6-1.6h4.4"/>',
   };
 
   /** An inline SVG for `name`, sized in ems so it follows the button's text. */

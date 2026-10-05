@@ -5829,7 +5829,9 @@
     return settingsSection('sensors', 'Door and Window Sensor Configuration',
       !settings.enabled ? '<b>Off</b>'
         : `<b>${settings.simulated ? 'Demo' : 'Zigbee'}</b> · ${sensors.length} paired${alarmNote}`, `
-        <p class="zd-sub">Optional door, window and room temperature monitoring.</p>
+        ${secIntro(`Optional. Door and window contacts and room thermometers: a
+        warning when something is left open, and, if you choose, a room turned
+        down to Eco until it is shut.`)}
         ${onOff}
         ${sourceRow}
         ${sourceError}
@@ -6239,28 +6241,35 @@
     const count = (state.displays || []).length;
     return settingsSection('displays', 'Wall Displays',
       count ? `<b>${count}</b> ${count === 1 ? 'display' : 'displays'}` : 'None', `
-      <p class="zd-sub">A colour e-paper screen, such as the M5Stack PaperColor,
-        showing which doors and windows are open. It is given its own key, which
-        lets it fetch this picture and nothing else — it cannot change the
-        heating or open any other page.</p>
+      ${secIntro(`A colour e-paper screen, such as the M5Stack PaperColor, showing
+        which doors and windows are open. Each display has its own key, which
+        fetches this picture and nothing else: it cannot change the heating or
+        open any other page.`)}
       <div class="display-layout">
-        <div id="displayBox"><p class="zd-sub">Loading…</p></div>
+        <div>
+          <div id="displayBox"><p class="zd-sub">Loading…</p></div>
+          <div class="sheet-actions">
+            <button class="btn btn-add" type="button" data-act="add-display">Add a display</button>
+          </div>
+        </div>
         <figure class="display-preview">
           <img src="/api/display/frame.png" alt="What a wall display shows now"
             width="200" height="300" loading="lazy">
-          <figcaption>What a display shows now</figcaption>
+          <figcaption>Showing now</figcaption>
         </figure>
       </div>
-      <div class="sheet-actions">
-        <button class="btn btn-add" type="button" data-act="add-display">Add a display</button>
+      <div class="light-legend">
+        <h4 class="notify-head">The lights, on USB power</h4>
+        <ul>
+          <li><span class="led led-green" aria-hidden="true"></span><span><b>Steady green</b> \u2014 everything is closed</span></li>
+          <li><span class="led led-red led-blink" aria-hidden="true"></span><span><b>Blinking red</b> \u2014 something is open</span></li>
+          <li><span class="led led-blue led-blink" aria-hidden="true"></span><span><b>Blinking blue</b> \u2014 a sensor cannot be heard from</span></li>
+        </ul>
+        <small class="field-hint">On battery the lights stay off, to save power.</small>
       </div>
-      <small class="field-hint">On USB power its lights show the house at a
-        glance: steady green when everything is closed, blinking red when
-        something is open, blinking blue when a sensor cannot be heard from.
-        On battery they stay off.</small>
-      <small class="field-hint">How to set up the device is in
-        <code>display/papercolor/README.md</code>.</small>
-    `, { icon: 'door' });
+      <a class="setup-link" href="https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee/blob/main/display/papercolor/README.md"
+        target="_blank" rel="noopener noreferrer">${Nobo.icon('external', '1.05em')}How to set up a display</a>
+    `, { icon: 'screen' });
   }
 
   // Must match BATTERY_MINUTES_CHOICES in display_tokens.py.
@@ -6268,14 +6277,11 @@
   // Must match LIGHT_LEVELS in display_tokens.py.
   const DISPLAY_LIGHT_LEVELS = [['dim', 'Dim'], ['medium', 'Medium'], ['bright', 'Bright']];
 
+  /* When it redraws, in the words of the power it is on. */
   function displayPowerText(display) {
-    if (display.power === 'usb') {
-      return display.light === false
-        ? 'On USB: redrawn as soon as a sensor changes'
-        : 'On USB: redrawn as soon as a sensor changes, lights on';
-    }
+    if (display.power === 'usb') return 'Redraws as soon as a sensor changes.';
     if (display.power === 'battery') {
-      return `On battery: checks every ${display.battery_minutes} min, redraws only when a sensor has changed`;
+      return `Wakes every ${display.battery_minutes} min and redraws only if a sensor has changed.`;
     }
     return '';
   }
@@ -6284,10 +6290,17 @@
     const seen = display.last_seen_at
       ? `Last fetched ${Nobo.fmtAgo(new Date(display.last_seen_at * 1000).toISOString())}`
       : 'Has not fetched anything yet';
-    const facts = [
-      display.battery == null ? '' : `${display.battery}% battery`,
-      display.firmware ? `firmware ${display.firmware}` : '',
-    ].filter(Boolean).join(' · ');
+    const chips = [];
+    if (display.power === 'usb') {
+      chips.push(`<span class="chip is-good">${Nobo.icon('plug')}USB power</span>`);
+    } else if (display.power === 'battery') {
+      chips.push(`<span class="chip">${Nobo.icon('battery')}On battery</span>`);
+    }
+    if (display.battery != null) {
+      const low = display.battery <= 20;
+      chips.push(`<span class="chip${low ? ' is-low' : ''}">${Nobo.icon('battery')}${esc(display.battery)}%</span>`);
+    }
+    if (display.firmware) chips.push(`<span class="chip">Firmware ${esc(display.firmware)}</span>`);
     const power = displayPowerText(display);
     const lightNow = display.light === false ? 'off' : display.light_level;
     const lightOptions = [...DISPLAY_LIGHT_LEVELS, ['off', 'Off']].map(([value, label]) =>
@@ -6297,24 +6310,26 @@
       `<option value="${minutes}"${minutes === display.battery_minutes ? ' selected' : ''}>Every ${minutes} min</option>`,
     ).join('');
     return `
-      <li class="sensor-row display-row">
-        <span class="sensor-copy">
-          <strong>${esc(display.name)}</strong>
-          <small>${esc(seen)}${facts ? ` · ${esc(facts)}` : ''}</small>
-          ${power ? `<small class="display-power">${esc(power)}</small>` : ''}
-          <label class="display-interval"><span>On battery, check</span>
-            <select data-display-interval="${esc(display.display_id)}"
-              aria-label="How often ${esc(display.name)} checks on battery">${options}</select>
-          </label>
-          <label class="display-interval"><span>On USB, lights</span>
-            <select data-display-light="${esc(display.display_id)}"
-              aria-label="How brightly ${esc(display.name)} shows its lights on USB">${lightOptions}</select>
-          </label>
-        </span>
-        <span class="dev-actions">
+      <li class="display-card">
+        <div class="display-head">
+          <span class="display-mark" aria-hidden="true">${Nobo.icon('screen')}</span>
+          <span class="display-title">
+            <strong>${esc(display.name)}</strong>
+            <small>${esc(seen)}</small>
+          </span>
           <button class="icon-btn act-remove" type="button" data-remove-display="${esc(display.display_id)}"
             title="Remove this display" aria-label="Remove ${esc(display.name)}">${Nobo.icon('remove')}</button>
-        </span>
+        </div>
+        ${chips.length ? `<div class="display-chips">${chips.join('')}</div>` : ''}
+        ${power ? `<small class="field-hint">${esc(power)}</small>` : ''}
+        <div class="display-settings">
+          ${settingRow('Battery check', 'How often it wakes to look, on battery.',
+            `<select data-display-interval="${esc(display.display_id)}"
+              aria-label="How often ${esc(display.name)} checks on battery">${options}</select>`)}
+          ${settingRow('Lights', 'Brightness on USB power.',
+            `<select data-display-light="${esc(display.display_id)}"
+              aria-label="How brightly ${esc(display.name)} shows its lights on USB">${lightOptions}</select>`)}
+        </div>
       </li>`;
   }
 
@@ -6333,8 +6348,8 @@
     const count = state.displays.length;
     if (state_) state_.innerHTML = count ? `<b>${count}</b> ${count === 1 ? 'display' : 'displays'}` : 'None';
     box.innerHTML = count
-      ? `<ul class="sensor-list">${state.displays.map(displayRow).join('')}</ul>`
-      : '<p class="zd-sub">No display has been added.</p>';
+      ? `<ul class="display-list">${state.displays.map(displayRow).join('')}</ul>`
+      : '<p class="zd-sub">No display has been added yet.</p>';
     box.querySelectorAll('[data-display-interval]').forEach(select => {
       select.onchange = async () => {
         try {
@@ -6476,14 +6491,14 @@
           station that cannot be read.</small>
         </label>
         <h4 class="notify-head">Room thermometers</h4>
-        <p class="zd-sub">Add an indoor module to a room from the room's sensors, as
+        <p class="note">Add an indoor module to a room from the room's sensors, as
           \u201cFrom the weather station\u201d. A Zigbee thermometer in the same room is
           believed first, and a Verisure smoke detector after the module.</p>
         ${noSensors}`;
 
     return settingsSection('weather', 'Weather Station', summary, `
-      <p class="zd-sub">Optional. Reads your weather station. It only ever reads,
-      and the heating does not depend on it.</p>
+      ${secIntro(`Optional. Reads your weather station. It only ever reads,
+      and the heating does not depend on it.`)}
       ${onOff}
       ${body}
     `, { icon: 'wx-clear', alert: notConnected && !!netatmo.app_configured });
@@ -6675,10 +6690,10 @@
         ${alarmOption('away_when_armed_home', 'Away when it is armed at home too',
           'Usually off: armed at home means somebody is in.', settings)}
         ${alarmLockHeatingRows(settings)}
-        <small class="field-hint">If the house is already on Away when the alarm
-        goes on — chosen by hand, with or without a return date — it is left
+        <div class="note">If the house is already on Away when the alarm
+        goes on \u2014 chosen by hand, with or without a return date \u2014 it is left
         exactly as it is, and disarming does not lift it. An Away set by the
-        alarm has no return date: it lasts until the alarm is turned off.</small>
+        alarm has no return date: it lasts until the alarm is turned off.</div>
         <h4 class="notify-head">Warnings</h4>
         ${alarmOption('warn_when_armed_away', 'Warn if something is open when it is armed away', '', settings)}
         ${alarmOption('warn_when_armed_home', 'Warn if something is open when it is armed at home', '', settings)}
@@ -6688,13 +6703,13 @@
           'For the last one to bed. Not urgent, and it respects quiet hours.', settings)}
         ${noSensors}
         ${alarmLockSidesBlock(settings, alarm)}
-        <small class="field-hint">An email about it is under Alerts. The warning
-        waits five minutes, the same as for Away, so shutting a window on the way
-        out is not an alarm.</small>`;
+        <div class="note">The warning waits five minutes, the same as for Away,
+        so shutting a window on the way out is not an alarm. An email about it is
+        under Alerts.</div>`;
 
     return settingsSection('alarm', 'Alarm System', summary, `
-      <p class="zd-sub">Optional. Reads your alarm and uses what it says. It only
-      ever reads: nothing here can arm, disarm or unlock anything.</p>
+      ${secIntro(`Optional. Reads your alarm and uses what it says. It only
+      ever reads: nothing here can arm, disarm or unlock anything.`)}
       ${onOff}
       ${body}
     `, { icon: 'shield', alert: signedOut && !!(settings.verisure || {}).email });
@@ -7082,8 +7097,8 @@
       : '';
     if (!state.zones.length) {
       return settingsSection('rooms', 'Rooms and Groups', '<b>no rooms yet</b>', `
-        <p class="zd-sub">A room is what the hub heats as one: its heaters share a
-        mode and a schedule. A room with no heater can still watch a door.</p>
+        ${secIntro(`A room is what the hub heats as one: its heaters share a
+        mode and a schedule. A room with no heater can still watch a door.`)}
         ${addRoom}`, { icon: 'rooms' });
     }
     const names = knownGroupNames();
@@ -7093,10 +7108,10 @@
 
     return settingsSection('rooms', 'Rooms and Groups',
       `${state.zones.length} rooms · ${names.length ? `<b>${names.length}</b> ${names.length === 1 ? 'group' : 'groups'}` : '<b>no groups</b>'}`, `
-        <p class="zd-sub">Rooms in the same group are shown together on the front page, once
+        ${secIntro(`Rooms in the same group are shown together on the front page, once
         there are enough of them to be worth it, in the order listed here. Rooms in no group
-        come last, under "Other". Everything here is this app's own — the hub
-        does not know about groups.</p>
+        come last, under \u201cOther\u201d. Groups are this app\u2019s own \u2014 the hub
+        does not know about them.`)}
 
         ${addRoom}
 
@@ -7366,6 +7381,12 @@
       </details>`;
   }
 
+  /** What a topic is for, set apart from the controls that follow it.
+   *  `html` is trusted markup written in this file, never user data. */
+  function secIntro(html) {
+    return `<div class="sec-intro">${Nobo.icon('info')}<p>${html}</p></div>`;
+  }
+
   /** One of a few, as a segmented control.
    *
    *  The single answer to "which of these is it?", so that the same question
@@ -7473,9 +7494,9 @@
     $('#viewSettings').innerHTML = `
       ${settingsSection('place', 'My Home',
         `<b>${esc(site.name || 'Cabin')}</b>`, `
-        <p class="zd-sub">Used across the app and on the sign-in page. A nickname,
-        a street address, whatever you call it — "The Lodge", "Lakeside",
-        "Main Street 12".</p>
+        ${secIntro(`What this place is called, across the app and on the sign-in
+        page. A nickname, a street address, whatever you call it \u2014
+        \u201cThe Lodge\u201d, \u201cLakeside\u201d, \u201cMain Street 12\u201d.`)}
         <label class="field">
           <span>Name</span>
           <input type="text" id="stSiteName" value="${esc(site.name || '')}"
@@ -7488,9 +7509,9 @@
                  ${site.show_on_login === false ? '' : 'checked'} ${isAdmin ? '' : 'disabled'}>
           <span class="exc-name">Show it on the sign-in page</span>
         </label>
-        <small class="field-hint">The sign-in page is shown to anyone who can reach
+        <div class="note note-warn">The sign-in page is shown to anyone who can reach
         this Pi, before any password. Fine for a nickname; turn this off if the name
-        is your address and the network is shared.</small>
+        is your address and the network is shared.</div>
 
         <label class="field" style="margin-top:1rem">
           <span>Date format</span>
@@ -7499,15 +7520,12 @@
               <option value="${esc(tag)}" ${(site.locale || '') === tag ? 'selected' : ''}>${esc(label)}</option>
             `).join('')}
           </select>
-          <small class="field-hint">Decides how dates are written and in what
-          language the days of the week appear. Set on the system rather than per
-          browser, so every device in the house shows the same thing.
-          Example: <strong id="stDateSample">${esc(Nobo.fmtWhen(new Date().toISOString()))}</strong></small>
+          <small class="field-hint">Example: <strong id="stDateSample">${esc(Nobo.fmtWhen(new Date().toISOString()))}</strong>.
+          How dates and weekdays are written, the same on every device in the house.</small>
         </label>
-        <small class="field-hint">The clock is always 24-hour and temperatures are
-        always Celsius. Neither is a preference: the hub's own schedules are
-        "HHMM" and its specification states temperatures are in Celsius, so there
-        is nothing else to choose.</small>
+        <div class="note">The clock is always 24-hour and temperatures always
+        Celsius. Neither is a preference: the hub keeps its schedules as
+        \u201cHHMM\u201d and its specification states Celsius.</div>
 
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-site"
@@ -7518,8 +7536,9 @@
 
       ${settingsSection('hub', 'Nobø Eco Hub Configuration',
         hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
-        <p class="zd-sub">Demo invents a house so you can look around straight away, and nothing
-        it does can reach a real heater.</p>
+        ${secIntro(`Where the rooms, heaters and schedules come from. Demo invents a
+        house so you can look around straight away, and nothing it does can reach
+        a real heater.`)}
         ${settingRow('Heaters', 'Rooms, temperatures and schedules',
           segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
             hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
@@ -7538,7 +7557,7 @@
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-hub">Save hub connection</button>
         </div>
-        <div class="note">Changing between demo mode and a real hub signs you out, so the app
+        <div class="note note-warn">Changing between demo mode and a real hub signs you out, so the app
         reloads cleanly against the new source.</div>
       `, { icon: 'hub' })}
 
@@ -7554,47 +7573,44 @@
 
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
-        <div class="section-head">
+        ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
+        one; open it here to see and edit its week.`)}
+        ${renderScheduleSettings()}
+        <div class="sheet-actions">
           <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
         </div>
-        <p class="zd-sub">Schedules can be shared by several rooms. Open one here to
-        see and edit the week it contains.</p>
-        ${renderScheduleSettings()}
       `, { icon: 'normal' })}
 
       ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
-        <p class="zd-sub">${AWAY_EXPLAINER()} Pick the rooms that should hold their
+        ${secIntro(`${AWAY_EXPLAINER()} Pick the rooms that should hold their
         Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
-        goes Away — a bathroom with pipes, a workshop, a wine store.</p>
+        goes Away \u2014 a bathroom with pipes, a workshop, a wine store.`)}
         <div id="awayExc" class="exc-list">
           <p class="zd-sub">Loading rooms…</p>
         </div>
         <div class="sheet-actions">
           <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
         </div>
-        <small class="field-hint">This applies both when you press Away and when a
-        planned away period starts while nobody is looking at the app.</small>
+        <div class="note">This applies both when you press Away and when a
+        planned away period starts while nobody is looking at the app.</div>
       `, { icon: 'frost' })}
 
       ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
-        <p class="zd-sub">Optional email alerts. The Nobø hub reports very little
-        about individual heaters, so this can tell you when the hub itself goes
-        away and when settings are changed from another app — but it cannot see a
-        cold room, a heater without power, or a thermostat switched off at the wall.
-        Everything here is off unless you turn it on.</p>
+        ${secIntro(`Optional email when something needs attention: a door left
+        open, the hub going away, settings changed from another app. Nothing is
+        sent unless you turn it on.`)}
 
-        <div class="switch">
-          <div class="switch-text">
-            <strong>Send alerts</strong>
-            <span>Off until a mail server and a recipient are set below.</span>
-          </div>
-          <button class="btn" type="button" data-act="toggle-notify"
-            aria-pressed="false" ${isAdmin ? '' : 'disabled'}>Off</button>
-        </div>
+        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
+          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
+            { label: 'Send alerts', disabled: !isAdmin }))}
 
         <div id="notifyBox" class="notify-box">
           <p class="zd-sub">Loading…</p>
         </div>
+
+        <div class="note">The Nobø hub reports very little about individual
+        heaters. It cannot see a cold room, a heater without power, or a
+        thermostat switched off at the wall \u2014 so neither can these alerts.</div>
 
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       `, { icon: 'bell' })}
@@ -7603,32 +7619,36 @@
         me && me.using_default_password
           ? 'Default password'
           : `<b>${esc((me && (me.username || me.name)) || 'Signed in')}</b>`, `
-        <div class="user-row">
-          <div><strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong></div>
+        <div class="account-card">
+          <span class="account-mark" aria-hidden="true">${Nobo.icon('person')}</span>
+          <span class="account-who">
+            <small>Signed in as</small>
+            <strong id="stUser">${esc((me && (me.username || me.name)) || 'Signed in')}</strong>
+          </span>
+        </div>
+        <div class="sheet-actions">
           <button class="btn" type="button" data-act="change-password">Change password</button>
           <button class="btn" type="button" data-act="signout">Sign out</button>
         </div>
-        <div class="sheet-actions">
-          <button class="btn" type="button" data-act="open-users">Manage users</button>
-        </div>
-        <small class="field-hint">User management opens the classic interface, which
-        still has the full user administration screen.</small>
+        ${settingRow('Other users', 'Adding and removing users opens the classic interface, which has the full screen for it.',
+          '<button class="btn" type="button" data-act="open-users">Manage users</button>')}
       `, { icon: 'person', alert: !!(me && me.using_default_password) })}
 
       ${settingsSection('diagnostics', 'Diagnostics', '', `
-        <p class="zd-sub">A record of every change made through this app, everything
-        the away schedule did on its own, and the state of the connection to the hub.
-        Worth opening when something has not behaved.</p>
+        ${secIntro(`A record of every change made through this app, everything the
+        away schedule did on its own, and the state of the connection to the hub.
+        Worth opening when something has not behaved.`)}
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="open-log">Open the activity log</button>
         </div>
       `, { icon: 'pulse' })}
 
       ${settingsSection('about', 'About', 'Cabin', `
-        <p class="zd-sub">This is the Cabin interface. The previous one is still
-        installed and is always reachable at <a href="/classic">/classic</a> — nothing
-        was removed. To make it the default again, set <code>NOBO_UI=classic</code> in
-        the server's <code>.env</code> file and restart.</p>
+        ${secIntro(`This is the Cabin interface. The previous one is still
+        installed and always reachable at <a href="/classic">/classic</a> \u2014 nothing
+        was removed.`)}
+        <div class="note">To make the classic interface the default again, set
+        <code>NOBO_UI=classic</code> in the server\u2019s <code>.env</code> file and restart.</div>
       `, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
@@ -7669,8 +7689,12 @@
       };
     }
     loadAwayExceptions();
-    const notifyToggle = root.querySelector('[data-act="toggle-notify"]');
-    if (notifyToggle) notifyToggle.onclick = () => toggleNotifications();
+    root.querySelectorAll('[data-seg="notify-enabled"]').forEach(button => {
+      button.onclick = () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        toggleNotifications();
+      };
+    });
     loadNotifications(isAdmin);
     wireSensorSettings(root);
     wireAlarmSettings(root);
@@ -7821,11 +7845,13 @@
     if (!box || !n) return;
     const dis = isAdmin ? '' : 'disabled';
 
-    const toggle = $('[data-act="toggle-notify"]');
-    if (toggle) {
-      toggle.textContent = n.enabled ? 'On' : 'Off';
-      toggle.setAttribute('aria-pressed', String(!!n.enabled));
-    }
+    /* On while the form is open to be filled in, too: that is the moment
+       of turning them on, and the note below the switch says nothing is sent
+       until Save. */
+    const showOn = !!n.enabled || !!state.notifyExpanded;
+    document.querySelectorAll('[data-seg="notify-enabled"]').forEach(button => {
+      button.setAttribute('aria-pressed', String((button.dataset.value === 'on') === showOn));
+    });
     /* Written here rather than in renderSettings, because the configuration
        arrives after the page does. */
     const summary = $('#notifyState');
@@ -7846,9 +7872,7 @@
     // configuration that could not deliver - so pressing the switch reveals the
     // form even though nothing is saved yet.
     if (!n.enabled && !state.notifyExpanded) {
-      box.innerHTML = `
-        <p class="zd-sub">Turn <strong>Send alerts</strong> on to choose what to be
-        told about and where to send it.</p>`;
+      box.innerHTML = '';
       return;
     }
 
@@ -8032,6 +8056,12 @@
     if (n.enabled) {
       state.notifyExpanded = false;
       saveNotifications(false);
+      return;
+    }
+    if (state.notifyExpanded) {
+      // Off before anything was saved: nothing to switch off, just close the form.
+      state.notifyExpanded = false;
+      renderNotifications(true);
       return;
     }
     // Reveal the form rather than trying to save straight away, which would

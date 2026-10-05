@@ -496,6 +496,26 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .sec-body > .zd-sub:first-child,
 .sec-body > .section-head:first-child { margin-top: .8rem; }
 
+/* Three kinds of words in Settings, and each must look like what it is.
+   Before, the topic's introduction, a field's hint, a privacy caveat and a
+   footnote were all the same small grey type, and the introduction ran
+   straight into the first control.
+
+   - .sec-intro  what the topic is for: a quiet panel, first, with room after.
+   - .field-hint a line about the control above it, close to it.
+   - .note       something to know: a tinted callout with its own mark,
+                 blue to explain, amber to caution, green to reassure. */
+.sec-intro {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .6rem; align-items: start;
+  margin: .9rem 0 .7rem; padding: .7rem .85rem;
+  background: var(--paper); border-radius: var(--radius-sm);
+  color: var(--ink-soft); font-size: .88rem; line-height: 1.45;
+}
+.sec-intro > .icon { color: var(--pine); margin-top: .08rem; }
+.sec-intro p { margin: 0; }
+.sec-intro p + p { margin-top: .4rem; }
+.sec-intro a { color: var(--pine); }
+
 /* One of a few, everywhere. The same question used to get a toggle in one
    place and a button opening a sheet in another.
 
@@ -531,15 +551,22 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   text-transform: none; letter-spacing: normal; color: var(--ink);
 }
 .opt-label small {
-  display: block; font-size: .78rem; color: var(--ink-faint);
-  text-transform: none; letter-spacing: normal; font-weight: 400;
+  display: block; font-size: .8rem; color: var(--ink-soft); line-height: 1.4;
+  text-transform: none; letter-spacing: normal; font-weight: 400; margin-top: .1rem;
 }
+.opt-row select { flex: none; max-width: 55%; }
 
 @media (max-width: 30rem) {
   /* A three-way control plus its label does not fit a narrow phone on one
-     line, and squeezing it makes 38px targets narrower than a thumb. */
+     line, and squeezing it makes 38px targets narrower than a thumb. The
+     label keeps a readable width; when the control will not fit beside it,
+     the control moves under it rather than squeezing it into a column one
+     word wide. */
   .opt-row { flex-wrap: wrap; }
-  .opt-row .choice { margin-left: auto; }
+  .opt-row .opt-label { flex: 1 1 6rem; }
+  .opt-row .choice, .opt-row select { margin-left: auto; }
+  /* Three choices need the width: give the words their own line above them. */
+  .opt-row:has(.choice-btn:nth-child(3)) .opt-label { flex-basis: 100%; }
 }
 
 .zone {
@@ -1443,7 +1470,15 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .alarm-locks li { font-size: .88rem; }
 .alarm-locks li span { color: var(--ink-soft); }
 .alarm-account { margin-top: .75rem; }
-.alarm-demo { margin-top: .75rem; }
+/* The demo alarm's and station's own controls stand in for the real thing,
+   so they are framed apart from the settings: dashed, as a stand-in. */
+.alarm-demo {
+  margin-top: .75rem; padding: .15rem .85rem .7rem;
+  border: 1px dashed color-mix(in srgb, var(--ink-faint) 60%, transparent);
+  border-radius: var(--radius-sm);
+}
+.alarm-demo > .zd-sub:first-child { margin: .6rem 0 .2rem; font-size: .85rem; font-weight: 600; color: var(--ink-soft); }
+.alarm-demo .field:last-child { margin-bottom: 0; }
 .sensor-unassigned-list { list-style: none; margin: .55rem 0 0; padding: 0; display: grid; gap: .35rem; }
 .sensor-unassigned-list li { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
 .sensor-unassigned-list li > span:first-child { display: flex; align-items: center; gap: .45rem; min-width: 0; }
@@ -1467,7 +1502,18 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border: 1px solid var(--rule); border-radius: 11px;
   background: var(--paper); color: var(--ink);
 }
-.field-hint { display: block; margin-top: .3rem; font-size: .77rem; color: var(--ink-faint); }
+/* Safari draws a native select at its own height and ignores the padding,
+   which is why every list in Settings came out a thin grey strip beside
+   44px fields. Drawn here instead, with the same chevron everywhere. */
+.card select, .sec select, .field select, .week-row select, .week-tools select {
+  -webkit-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236B655C' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9.5l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right .65rem center; background-size: 1rem;
+  padding-right: 2.1rem; min-height: 44px; line-height: 1.25;
+}
+.field-hint, .field > small {
+  display: block; margin-top: .3rem; font-size: .8rem; line-height: 1.4; color: var(--ink-soft);
+}
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .field-row[hidden] { display: none; }
 
@@ -1491,19 +1537,47 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 .switch-text span { font-size: .8rem; color: var(--ink-soft); }
 
 .note {
+  --note-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.8'/%3E%3Cpath d='M12 11.2v5.4'/%3E%3Ccircle cx='12' cy='7.8' r='.95' fill='black' stroke='none'/%3E%3C/svg%3E");
+  position: relative;
   border-left: 3px solid var(--frost); background: var(--frost-wash);
-  padding: .7rem .9rem; border-radius: 0 10px 10px 0;
-  font-size: .84rem; color: var(--ink-soft); margin: .8rem 0;
+  padding: .7rem .9rem .7rem 2.35rem; border-radius: 0 10px 10px 0;
+  font-size: .84rem; line-height: 1.45; color: var(--ink-soft); margin: .8rem 0;
 }
-.note-warn { border-left-color: var(--amber); background: var(--amber-wash); }
+/* The mark is drawn by CSS rather than written into each note, so the forty
+   notes across the app cannot disagree about which one means what. */
+.note::before {
+  content: ''; position: absolute; left: .8rem; top: .78rem;
+  width: 1.05rem; height: 1.05rem; background: var(--frost);
+  -webkit-mask: var(--note-mark) center / contain no-repeat;
+  mask: var(--note-mark) center / contain no-repeat;
+}
+.note > strong:first-child { color: var(--ink); }
+.note a { color: inherit; font-weight: 600; }
+.note-warn {
+  --note-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4.2 2.9 19.8h18.2z'/%3E%3Cpath d='M12 9.6v4.4'/%3E%3Ccircle cx='12' cy='17' r='.9' fill='black' stroke='none'/%3E%3C/svg%3E");
+  border-left-color: var(--amber); background: var(--amber-wash);
+}
+.note-warn::before { background: var(--amber); }
 /* A settled, good state rather than a caution. Used where the absence of a
    warning is itself worth saying — a mesh that has repeaters in it. */
 .note-ok {
+  --note-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.8'/%3E%3Cpath d='M8 12.3l2.7 2.7 5.3-5.6'/%3E%3C/svg%3E");
   border-left-color: var(--pine);
   background: color-mix(in srgb, var(--pine) 8%, var(--card));
 }
+.note-ok::before { background: var(--pine); }
 
 .user-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+/* Who is signed in, said once and plainly, with what they can do below it. */
+.account-card { display: flex; align-items: center; gap: .75rem; margin: .9rem 0 .2rem; }
+.account-mark {
+  display: inline-grid; place-items: center; width: 2.6rem; height: 2.6rem; flex: none;
+  border-radius: 50%; background: var(--pine-wash); color: var(--pine);
+}
+.account-who small { display: block; font-size: .78rem; color: var(--ink-soft); }
+.account-who strong { display: block; font-size: 1.02rem; }
+.account-card + .sheet-actions { margin-top: .8rem; }
+.account-card ~ .opt-row { margin-top: 1rem; border-top: 1px solid var(--rule); }
 .user-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem;
   padding: .65rem .8rem; border: 1px solid var(--rule); border-radius: var(--radius-sm); }
 .schedule-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .55rem; }
@@ -1843,10 +1917,6 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .sensor-row .sensor-copy small.is-alert { color: var(--amber); font-weight: 600; }
   /* A weather station module has no card around it, so its line stays. */
   .sensor-row.wx-module .sensor-copy small:not(.is-alert) { display: block; }
-  /* Nor has a wall display, which has no picture beside it either. */
-  .sensor-row.display-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .sensor-row.display-row .sensor-copy { grid-column: 1; }
-  .sensor-row.display-row .sensor-copy small:not(.is-alert) { display: block; }
 
   .climate-facts {
     grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
@@ -1869,17 +1939,37 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* Which alerts the alarm's own sensors can raise, beside each one. */
 .notify-note { display: block; margin-top: .2rem; font-style: normal; color: var(--pine); }
 
-/* Wall displays: the list beside a small copy of what the panel shows. */
+/* Wall displays: one card per display beside a small copy of what the panel
+   shows. A card rather than a row, because each display has two settings of
+   its own, and in a row they were squeezed between its name and its bin. */
 .display-layout {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   gap: 1rem; align-items: start;
 }
-.display-row { grid-template-columns: minmax(0, 1fr) auto; }
-.display-power { display: block; }
-.display-interval {
-  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
-  margin-top: .45rem; font-size: .88rem; color: var(--ink-soft);
+.display-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
+.display-card {
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  background: var(--card); padding: .75rem .85rem .35rem;
 }
+.display-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
+.display-mark {
+  display: inline-grid; place-items: center; width: 2.3rem; height: 2.3rem;
+  border-radius: 10px; background: var(--pine-wash); color: var(--pine);
+}
+.display-title { min-width: 0; }
+.display-title strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.display-title small { display: block; font-size: .8rem; color: var(--ink-soft); }
+.display-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .6rem 0 .2rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .2rem .55rem; border-radius: 999px; font-size: .76rem;
+  background: var(--paper); border: 1px solid var(--rule); color: var(--ink-soft);
+}
+.chip .icon { width: 1em; height: 1em; }
+.chip.is-good { background: var(--pine-wash); border-color: transparent; color: var(--pine); }
+.chip.is-low { background: var(--amber-wash); border-color: transparent; color: #8a4f0f; }
+.display-settings { margin-top: .2rem; }
+.display-settings .opt-row:first-child { border-top: 1px solid var(--rule); }
 .display-preview { margin: 0; text-align: center; }
 .display-preview img {
   display: block; width: 160px; height: auto; aspect-ratio: 2 / 3;
@@ -1888,7 +1978,36 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .display-preview figcaption { margin-top: .3rem; font-size: .75rem; color: var(--ink-soft); }
 .display-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+
+/* What the lights mean, with the light itself rather than its name. */
+.light-legend {
+  margin: .9rem 0 .2rem; padding: .7rem .85rem;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+}
+.light-legend .notify-head { margin-top: 0; }
+.light-legend ul { list-style: none; margin: .45rem 0 .3rem; padding: 0; display: grid; gap: .4rem; }
+.light-legend li { display: flex; align-items: center; gap: .6rem; font-size: .88rem; }
+.light-legend li b { font-weight: 620; }
+.led {
+  flex: none; width: .8rem; height: .8rem; border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+  background: currentColor;
+}
+.led-green { color: #2f9e5b; }
+.led-red { color: var(--danger); }
+.led-blue { color: #3b7fd9; }
+.led-blink { animation: led-blink 3s steps(1, end) infinite; }
+@keyframes led-blink { 0% { opacity: 1; } 23% { opacity: .15; } }
+@media (prefers-reduced-motion: reduce) { .led-blink { animation: none; } }
+.setup-link {
+  display: inline-flex; align-items: center; gap: .4rem; margin-top: .5rem;
+  color: var(--pine); font-weight: 600; font-size: .88rem;
+}
+
 @media (max-width: 560px) {
   .display-layout { grid-template-columns: 1fr; }
-  .display-preview img { margin: 0 auto; }
+  /* On a phone the picture comes first and smaller: it is the answer to
+     "what will this look like", which is asked before any setting. */
+  .display-preview { order: -1; }
+  .display-preview img { margin: 0 auto; width: 120px; }
 }

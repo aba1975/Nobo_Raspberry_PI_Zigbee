@@ -242,7 +242,7 @@ def _settings_card(settings, protocol="https:"):
         "function alarmStatusBlock", "function alarmOption",
         "function alarmDemoControls", "function alarmLockHeatingRows",
         "function alarmLockSidesBlock", "function renderAlarmSettingsCard",
-        "function settingsSection", "function segControl", "function settingRow",
+        "function settingsSection", "function secIntro", "function segControl", "function settingRow",
     ))
     return _node(script)
 
