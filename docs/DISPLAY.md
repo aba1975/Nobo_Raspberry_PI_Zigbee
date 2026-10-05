@@ -132,7 +132,16 @@ needs to say when it last succeeded.
 
 ## What is verified
 
-On the demo Pi with the device on USB: provisioning, the first draw, a
-redraw when a simulated door opens, `304` on unchanged polls, and the stale
-screen when the Pi is unreachable. Battery behaviour, battery life and the
-button wake have **not** been measured on a wall.
+On the demo Pi, 5 October 2026, with the device on USB and demo Wi-Fi:
+provisioning over serial; the first fetch over HTTPS against Caddy's internal
+CA; the key recorded as seen, with battery and firmware; `304` on unchanged
+polls; a redraw when a simulated door opened and again when it closed; and a
+failed fetch with nothing succeeded since power-on taking the "Not up to
+date" path. That the panel then looked right was not confirmed by anyone
+standing in front of it.
+
+Opening the USB serial port resets the board, and a reset clears what it
+remembers, so the first fetch after one always redraws.
+
+Battery behaviour, battery life and the button wake have **not** been run, and
+neither has the production Pi.

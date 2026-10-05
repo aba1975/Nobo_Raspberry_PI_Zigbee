@@ -85,17 +85,23 @@ enum class Outcome { Updated, Unchanged, Failed };
 
 // -- configuration -------------------------------------------------------------
 
+// Asking NVS for a key it does not have logs an error on every boot; ask first.
+String stored(const char *key, const char *fallback) {
+  return prefs.isKey(key) ? prefs.getString(key, fallback) : String(fallback);
+}
+
 void loadConfig() {
-  prefs.begin("nobo", true);
-  config.ssid = prefs.getString("ssid", "");
-  config.password = prefs.getString("password", "");
-  config.url = prefs.getString("url", "");
-  config.token = prefs.getString("token", "");
-  config.ca = prefs.getString("ca", "");
-  config.tz = prefs.getString("tz", DEFAULT_TZ);
-  config.batteryMinutes = prefs.getUInt("battery_min", 15);
-  config.usbSeconds = prefs.getUInt("usb_sec", 60);
-  config.rotation = prefs.getInt("rotation", -1);
+  // Read-write so a blank device's namespace exists rather than failing to open.
+  prefs.begin("nobo", false);
+  config.ssid = stored("ssid", "");
+  config.password = stored("password", "");
+  config.url = stored("url", "");
+  config.token = stored("token", "");
+  config.ca = stored("ca", "");
+  config.tz = stored("tz", DEFAULT_TZ);
+  config.batteryMinutes = prefs.isKey("battery_min") ? prefs.getUInt("battery_min", 15) : 15;
+  config.usbSeconds = prefs.isKey("usb_sec") ? prefs.getUInt("usb_sec", 60) : 60;
+  config.rotation = prefs.isKey("rotation") ? prefs.getInt("rotation", -1) : -1;
   prefs.end();
   setenv("TZ", config.tz.c_str(), 1);
   tzset();
