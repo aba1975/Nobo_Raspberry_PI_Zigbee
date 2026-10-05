@@ -35,6 +35,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <driver/rtc_io.h>
+#include <esp32-hal-rmt.h>
 #include <esp_sleep.h>
 #include <sys/time.h>
 #include <time.h>
@@ -59,8 +60,13 @@ constexpr int USB_VBUS_MV = 4000;
 constexpr uint32_t POWER_CHECK_MS = 2000;
 // How long a board that has not been set up listens on USB before sleeping.
 constexpr uint32_t SETUP_LISTEN_MS = 10 * 60 * 1000;
-// The lights: a short glow every few seconds, not a beacon.
-constexpr uint8_t LIGHT_BRIGHTNESS = 64;
+// The lights: a short glow every few seconds, not a beacon. Two WS2812s on
+// GPIO 21, powered by the PMIC's LDO, which M5.begin() turns on. Driven here
+// rather than through M5.Led: on this Arduino core (2.x, ESP-IDF 4.4)
+// M5Unified's LED bus is an empty stub that accepts colours and sends none.
+constexpr int LIGHT_PIN = 21;
+constexpr int LIGHT_COUNT = 2;
+constexpr uint8_t LIGHT_LEVEL = 48;
 constexpr uint32_t LIGHT_ON_MS = 700;
 constexpr uint32_t LIGHT_PERIOD_MS = 3000;
 // Anything ever set by the Pi's Date header is after this.
@@ -109,6 +115,7 @@ enum class Light : uint8_t { Off, Green, Red, Blue };
 // Written by the loop, read by the light task; a byte is written whole.
 volatile Light light = Light::Off;
 TaskHandle_t lightTask = nullptr;
+rmt_obj_t *lightBus = nullptr;
 
 // -- configuration -------------------------------------------------------------
 
@@ -304,44 +311,57 @@ void takeLight(const String &value) {
   else light = Light::Off;
 }
 
+// Every LED the same colour, WS2812 timing at 100 ns ticks, green first.
+void showLight(uint8_t r, uint8_t g, uint8_t b) {
+  if (!lightBus) return;
+  rmt_data_t bits[24 * LIGHT_COUNT];
+  const uint8_t bytes[3] = {g, r, b};
+  int i = 0;
+  for (int led = 0; led < LIGHT_COUNT; led++) {
+    for (uint8_t value : bytes) {
+      for (int bit = 7; bit >= 0; bit--) {
+        bool one = value & (1 << bit);
+        bits[i].level0 = 1;
+        bits[i].duration0 = one ? 8 : 4;
+        bits[i].level1 = 0;
+        bits[i].duration1 = one ? 4 : 8;
+        i++;
+      }
+    }
+  }
+  rmtWriteBlocking(lightBus, bits, i);
+}
+
 void lightLoop(void *) {
   for (;;) {
     Light now = light;
     if (now == Light::Off) {
-      M5.Led.setAllColor(0, 0, 0);
-      M5.Led.display();
+      showLight(0, 0, 0);
       vTaskDelay(pdMS_TO_TICKS(200));
       continue;
     }
-    uint8_t r = now == Light::Red ? 255 : 0;
-    uint8_t g = now == Light::Green ? 255 : 0;
-    uint8_t b = now == Light::Blue ? 255 : 0;
-    M5.Led.setAllColor(r, g, b);
-    M5.Led.display();
+    showLight(now == Light::Red ? LIGHT_LEVEL : 0, now == Light::Green ? LIGHT_LEVEL : 0,
+              now == Light::Blue ? LIGHT_LEVEL : 0);
     vTaskDelay(pdMS_TO_TICKS(LIGHT_ON_MS));
-    M5.Led.setAllColor(0, 0, 0);
-    M5.Led.display();
+    showLight(0, 0, 0);
     vTaskDelay(pdMS_TO_TICKS(LIGHT_PERIOD_MS - LIGHT_ON_MS));
   }
 }
 
 // Its own task, so the lights keep blinking through an ask the Pi holds open.
 void startLights() {
-  if (lightTask || !M5.Led.isEnabled()) return;
-  M5.Led.setBrightness(LIGHT_BRIGHTNESS);
-  xTaskCreatePinnedToCore(lightLoop, "lights", 3072, nullptr, 1, &lightTask, 0);
+  if (lightTask) return;
+  if (!lightBus) lightBus = rmtInit(LIGHT_PIN, RMT_TX_MODE, RMT_MEM_64);
+  if (!lightBus) return;
+  rmtSetTick(lightBus, 100);
+  xTaskCreatePinnedToCore(lightLoop, "lights", 4096, nullptr, 1, &lightTask, 0);
 }
 
 // The LEDs keep their colour without the processor, so they are put out
 // before it sleeps or they would glow until the battery is flat.
 void lightsOut() {
-  if (lightTask) {
-    vTaskSuspend(lightTask);
-  }
-  if (M5.Led.isEnabled()) {
-    M5.Led.setAllColor(0, 0, 0);
-    M5.Led.display();
-  }
+  if (lightTask) vTaskSuspend(lightTask);
+  showLight(0, 0, 0);
 }
 
 // waitSeconds > 0 asks the Pi to hold the answer until a sensor changes.
@@ -488,6 +508,7 @@ void status() {
   doc["battery"] = batteryPercent();
   doc["vbus_mv"] = M5.Power.getVBUSVoltage();
   doc["light"] = lightName(light);
+  doc["lights_running"] = lightTask != nullptr;
   doc["wifi"] = WiFi.status() == WL_CONNECTED;
   doc["width"] = M5.Display.width();
   doc["height"] = M5.Display.height();
@@ -549,6 +570,10 @@ void handleLine(const String &line) {
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
     Serial.println("{\"ok\":true}");
+  } else if (!strcmp(cmd, "light")) {
+    // For checking the LEDs by eye; the Pi's next answer replaces it.
+    takeLight(String(in["color"] | "off"));
+    Serial.printf("{\"ok\":true,\"light\":\"%s\"}\n", lightName(light));
   } else if (!strcmp(cmd, "forget")) {
     forget();
   } else {

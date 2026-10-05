@@ -123,7 +123,7 @@ the answer comes.
 ### Its lights, on USB power
 
 The PaperColor has two RGB LEDs. On USB they blink slowly — a 0.7 s glow every
-3 s, at a quarter of full brightness — in the colour the Pi sends with every
+3 s, at about a fifth of full brightness — in the colour the Pi sends with every
 answer, `200` or `304`, in `X-Display-Light`
 (`display_render.status_light`):
 
@@ -140,6 +140,12 @@ somebody walk out without looking. Every input to the light is also in the
 ETag fingerprint, so a held ask ends the moment the light should change. A
 Settings change does not move the ETag and arrives with the next answer,
 within 25 seconds.
+
+The firmware drives the two WS2812s on GPIO 21 itself, through the Arduino
+core's RMT API. `M5.Led` cannot be used: on the Arduino core this project
+builds with (2.x, ESP-IDF 4.4) M5Unified's LED bus is a stub that accepts
+colours and sends nothing, which is how firmware 1.2.0's first build had
+dark LEDs while reporting the right colour.
 
 **On battery the lights are never on.** The board sleeps between asks, and the
 LEDs hold their colour without the processor, so they are put out before
