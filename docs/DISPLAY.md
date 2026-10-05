@@ -214,6 +214,6 @@ remembers, so the first fetch after one always redraws.
 
 Battery behaviour, battery life and the button wake have **not** been run, and
 neither has the production Pi. The lights (firmware 1.2.0) were checked by eye
-on the demo Pi, 5 October 2026: blinking green on USB with everything closed,
-and dark once USB was unplugged. Red and blue on the LEDs themselves have
-been sent but not watched.
+on the demo Pi, 5 October 2026: green with everything closed, red with a
+window open, blue with a sensor made unavailable, and dark once USB was
+unplugged. Blue for a display that cannot reach the Pi has not been watched.
