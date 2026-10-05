@@ -588,3 +588,118 @@ def test_settings_offers_exactly_the_intervals_the_server_accepts():
     assert f"const DISPLAY_BATTERY_MINUTES = {offered};" in cabin
     assert "data-display-interval" in cabin and "Nobo.api.updateDisplay" in cabin
     assert "updateDisplay:" in core and "method: 'PATCH'" in core
+
+
+# -- the lights, on USB power ---------------------------------------------------
+
+
+def light(**fields):
+    return display_render.status_light(payload(**fields))
+
+
+def test_the_light_is_the_headline_from_afar():
+    assert light() == "green"
+    assert light(open_contacts=[contact()]) == "red"
+    assert light(open_contacts=[contact(left_open=True)]) == "red"
+    assert light(alarm={"left_open": True, "reason": "armed_away"}) == "red"
+    assert light(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]) == "blue"
+    # Open outranks unheard-from: something is known to be open.
+    assert light(
+        open_contacts=[contact()], unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}],
+    ) == "red"
+    assert light(contact_count=0) == "off"
+    assert light(sensors_enabled=False, open_contacts=[contact()]) == "off"
+    assert set(display_render.LIGHTS) == {"green", "red", "blue", "off"}
+
+
+def test_the_light_never_changes_without_the_etag_changing():
+    """A waiting display only hears of what moves the fingerprint."""
+    cases = [
+        {}, {"open_contacts": [contact()]},
+        {"alarm": {"left_open": True, "reason": "armed_away"}},
+        {"unavailable_sensors": [{"zone": "Loft", "sensor": "Hatch"}]},
+        {"contact_count": 0}, {"sensors_enabled": False},
+    ]
+    seen = {}
+    for fields in cases:
+        seen.setdefault(fingerprint(**fields), set()).add(light(**fields))
+    assert all(len(lights) == 1 for lights in seen.values())
+
+
+def test_the_light_rides_on_every_answer_and_follows_the_sensors(client, device):
+    enable(client)
+    sensor = add_sensor(client, name="Bath window")
+    display, token = new_key(client)
+    assert display["light"] is True
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    assert first.headers["x-display-light"] == "green"
+    same = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert same.status_code == 304 and same.headers["x-display-light"] == "green"
+    simulate(client, sensor["sensor_id"], state="open")
+    opened = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert opened.status_code == 200 and opened.headers["x-display-light"] == "red"
+
+
+def test_the_light_can_be_turned_off_per_display_and_stays_off(client, device):
+    enable(client)
+    sensor = add_sensor(client, name="Bath window")
+    simulate(client, sensor["sensor_id"], state="open")
+    display, token = new_key(client)
+    other, other_token = new_key(client, "Kitchen")
+    path = f"/api/displays/{display['display_id']}"
+    response = client.patch(path, json={"light": False})
+    assert response.status_code == 200, response.text
+    assert response.json()["display"]["light"] is False
+    assert device.get("/api/display/frame.png", headers=bearer(token)).headers["x-display-light"] == "off"
+    assert device.get("/api/display/frame.png", headers=bearer(other_token)).headers["x-display-light"] == "red"
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.light(display["display_id"]) is False
+    assert reloaded.light(other["display_id"]) is True
+    assert client.patch(path, json={"light": True}).json()["display"]["light"] is True
+
+
+@pytest.mark.parametrize("body", [{}, {"light": "yes"}, {"light": 1}, {"light": None}])
+def test_a_light_change_must_be_a_real_boolean(client, body):
+    display, _ = new_key(client)
+    response = client.patch(f"/api/displays/{display['display_id']}", json=body)
+    assert response.status_code in (400, 422), body
+    assert client.get("/api/displays").json()["displays"][0]["light"] is True
+
+
+def test_the_light_is_for_admins_with_a_session(client, device, monkeypatch):
+    display, token = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    assert client.patch("/api/displays/nope", json={"light": False}).status_code == 404
+    assert device.patch(path, json={"light": False}, headers=bearer(token)).status_code == 401
+    original = auth.load_users
+
+    def users():
+        data = dict(original())
+        data["admin"] = {**data["admin"], "role": "user"}
+        return data
+
+    monkeypatch.setattr(auth, "load_users", users)
+    assert client.patch(path, json={"light": False}).status_code == 403
+
+
+def test_a_display_saved_before_the_lights_existed_has_them_on():
+    registry = display_tokens.DisplayRegistry()
+    display, _ = registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    del raw["displays"][0]["light"]
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.list()[0]["light"] is True
+
+
+def test_settings_offers_the_light_switch():
+    root = server.Path(server.__file__).resolve().parent / "static" / "ui"
+    cabin = (root / "cabin" / "cabin.js").read_text()
+    assert "data-display-light" in cabin
+    assert "{ light: select.value === 'on' }" in cabin

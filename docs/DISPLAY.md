@@ -92,6 +92,9 @@ Displays** (admins only, shown only with sensors on).
   `{"battery_minutes": N}`, admins only). Every answer, `200` or `304`,
   carries it in `X-Display-Interval`, and the device keeps it, so a change
   reaches the display at its next check without touching the device.
+- **Its lights on USB** can be turned off per display on the same card
+  (`PATCH /api/displays/{id}` with `{"light": false}`, admins only; a real
+  JSON boolean, nothing else). They are on by default.
 
 A signed-in browser can open the picture too, which is how the card shows a
 preview.
@@ -116,6 +119,32 @@ A `304` that comes back without waiting — a Pi too old to hold answers — is
 also followed by `usb_seconds`, so it never asks in a tight loop. The buttons
 fetch at once and always redraw; during a held ask a press is noticed when
 the answer comes.
+
+### Its lights, on USB power
+
+The PaperColor has two RGB LEDs. On USB they blink slowly — a 0.7 s glow every
+3 s, at a quarter of full brightness — in the colour the Pi sends with every
+answer, `200` or `304`, in `X-Display-Light`
+(`display_render.status_light`):
+
+| Light | When |
+| --- | --- |
+| green | every door and window is closed, and every sensor is heard from |
+| red | any door or window is open, or the alarm is on with one open — left open or not yet |
+| blue | nothing is open, but a sensor cannot be heard from; or this display has not reached the Pi for 30 minutes (when it draws **Not up to date**) |
+| off | sensors turned off, no door or window sensor assigned, the light turned off in Settings, or a Pi too old to send the header |
+
+The colour is the Pi's, as the picture is: the firmware never guesses one.
+Green is only ever shown when it is known, because green is what lets
+somebody walk out without looking. Every input to the light is also in the
+ETag fingerprint, so a held ask ends the moment the light should change. A
+Settings change does not move the ETag and arrives with the next answer,
+within 25 seconds.
+
+**On battery the lights are never on.** The board sleeps between asks, and the
+LEDs hold their colour without the processor, so they are put out before
+every sleep. A display unplugged in the middle of a held ask blinks until
+that ask ends, at most about 45 seconds, then goes dark.
 
 ### On battery
 
@@ -178,4 +207,6 @@ Opening the USB serial port resets the board, and a reset clears what it
 remembers, so the first fetch after one always redraws.
 
 Battery behaviour, battery life and the button wake have **not** been run, and
-neither has the production Pi.
+neither has the production Pi. The lights (firmware 1.2.0) are tested on the
+Pi side only; that the LEDs show the right colour is for someone standing in
+front of them.

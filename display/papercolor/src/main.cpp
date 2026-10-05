@@ -17,6 +17,12 @@
 // (X-Display-Interval, set in Settings), and any of the three buttons wakes
 // it to ask at once.
 //
+// On USB its two lights blink slowly what the Pi says in X-Display-Light:
+// green when every door and window is closed, red when any is open, blue when
+// a sensor cannot be heard from, or when this display can no longer reach the
+// Pi. Never on battery: the board sleeps between asks, and the lights are put
+// out before it does.
+//
 // Nothing secret is compiled in. Wi-Fi, address, key and the certificate the
 // Pi's HTTPS is checked against arrive over USB from provision.py and are
 // kept in NVS.
@@ -33,7 +39,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.1.0"
+#define FIRMWARE_VERSION "1.2.0"
 
 namespace {
 
@@ -53,6 +59,10 @@ constexpr int USB_VBUS_MV = 4000;
 constexpr uint32_t POWER_CHECK_MS = 2000;
 // How long a board that has not been set up listens on USB before sleeping.
 constexpr uint32_t SETUP_LISTEN_MS = 10 * 60 * 1000;
+// The lights: a short glow every few seconds, not a beacon.
+constexpr uint8_t LIGHT_BRIGHTNESS = 64;
+constexpr uint32_t LIGHT_ON_MS = 700;
+constexpr uint32_t LIGHT_PERIOD_MS = 3000;
 // Anything ever set by the Pi's Date header is after this.
 constexpr time_t CLOCK_SET = 1700000000;
 
@@ -94,6 +104,11 @@ uint32_t nextPowerCheckAt = 0;
 bool usbPower = false;
 
 enum class Outcome { Updated, Unchanged, Failed };
+
+enum class Light : uint8_t { Off, Green, Red, Blue };
+// Written by the loop, read by the light task; a byte is written whole.
+volatile Light light = Light::Off;
+TaskHandle_t lightTask = nullptr;
 
 // -- configuration -------------------------------------------------------------
 
@@ -271,6 +286,64 @@ void takeInterval(const String &value) {
   prefs.end();
 }
 
+const char *lightName(Light value) {
+  switch (value) {
+    case Light::Green: return "green";
+    case Light::Red: return "red";
+    case Light::Blue: return "blue";
+    default: return "off";
+  }
+}
+
+// A Pi too old to send the header, or anything not understood, is dark: a
+// light is only ever the Pi's word, never a guess here.
+void takeLight(const String &value) {
+  if (value == "green") light = Light::Green;
+  else if (value == "red") light = Light::Red;
+  else if (value == "blue") light = Light::Blue;
+  else light = Light::Off;
+}
+
+void lightLoop(void *) {
+  for (;;) {
+    Light now = light;
+    if (now == Light::Off) {
+      M5.Led.setAllColor(0, 0, 0);
+      M5.Led.display();
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+    uint8_t r = now == Light::Red ? 255 : 0;
+    uint8_t g = now == Light::Green ? 255 : 0;
+    uint8_t b = now == Light::Blue ? 255 : 0;
+    M5.Led.setAllColor(r, g, b);
+    M5.Led.display();
+    vTaskDelay(pdMS_TO_TICKS(LIGHT_ON_MS));
+    M5.Led.setAllColor(0, 0, 0);
+    M5.Led.display();
+    vTaskDelay(pdMS_TO_TICKS(LIGHT_PERIOD_MS - LIGHT_ON_MS));
+  }
+}
+
+// Its own task, so the lights keep blinking through an ask the Pi holds open.
+void startLights() {
+  if (lightTask || !M5.Led.isEnabled()) return;
+  M5.Led.setBrightness(LIGHT_BRIGHTNESS);
+  xTaskCreatePinnedToCore(lightLoop, "lights", 3072, nullptr, 1, &lightTask, 0);
+}
+
+// The LEDs keep their colour without the processor, so they are put out
+// before it sleeps or they would glow until the battery is flat.
+void lightsOut() {
+  if (lightTask) {
+    vTaskSuspend(lightTask);
+  }
+  if (M5.Led.isEnabled()) {
+    M5.Led.setAllColor(0, 0, 0);
+    M5.Led.display();
+  }
+}
+
 // waitSeconds > 0 asks the Pi to hold the answer until a sensor changes.
 Outcome fetch(uint32_t waitSeconds) {
   if (!joinWifi()) return Outcome::Failed;
@@ -287,8 +360,8 @@ Outcome fetch(uint32_t waitSeconds) {
     lastProblem = "Bad address";
     return Outcome::Failed;
   }
-  static const char *keep[] = {"ETag", "Date", "X-Display-Interval"};
-  http.collectHeaders(keep, 3);
+  static const char *keep[] = {"ETag", "Date", "X-Display-Interval", "X-Display-Light"};
+  http.collectHeaders(keep, 4);
   http.addHeader("Authorization", "Bearer " + config.token);
   http.addHeader("X-Display-Firmware", FIRMWARE_VERSION);
   http.addHeader("X-Display-Power", usbPower ? "usb" : "battery");
@@ -299,6 +372,7 @@ Outcome fetch(uint32_t waitSeconds) {
   int status = http.GET();
   if (http.hasHeader("Date")) takeTime(http.header("Date"));
   if (http.hasHeader("X-Display-Interval")) takeInterval(http.header("X-Display-Interval"));
+  if (status == 200 || status == 304) takeLight(http.header("X-Display-Light"));
   if (status == 304) {
     http.end();
     return Outcome::Unchanged;
@@ -384,6 +458,7 @@ Outcome refresh(uint32_t waitSeconds = 0) {
   // any failure when nothing has been shown since the power came on.
   bool longGone = !rtcEverSucceeded ||
                   (rtcLastSuccess >= CLOCK_SET && now - rtcLastSuccess >= (time_t)STALE_AFTER_SECONDS);
+  if (longGone) light = usbPower ? Light::Blue : Light::Off;
   if (longGone && !rtcProblemShown) {
     drawProblem();
     rtcProblemShown = true;
@@ -412,6 +487,7 @@ void status() {
   doc["usb_seconds"] = config.usbSeconds;
   doc["battery"] = batteryPercent();
   doc["vbus_mv"] = M5.Power.getVBUSVoltage();
+  doc["light"] = lightName(light);
   doc["wifi"] = WiFi.status() == WL_CONNECTED;
   doc["width"] = M5.Display.width();
   doc["height"] = M5.Display.height();
@@ -496,6 +572,7 @@ void pollSerial() {
 // -- sleep ---------------------------------------------------------------------------
 
 [[noreturn]] void sleepFor(uint32_t seconds) {
+  lightsOut();
   Serial.flush();
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -577,6 +654,7 @@ void setup() {
     refresh();
     sleepFor(config.batteryMinutes * 60);
   }
+  startLights();
   nextFetchAt = millis();
 }
 

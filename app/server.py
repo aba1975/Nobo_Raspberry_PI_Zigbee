@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 import copy
 import pynobo
 import auth
@@ -4954,7 +4954,10 @@ async def get_display_frame(request: Request, wait: int = 0):
     change too, so it is caught as it happens.
 
     Every answer carries X-Display-Interval, how many minutes a display on
-    battery sleeps between asks, set per display in Settings.
+    battery sleeps between asks, set per display in Settings, and
+    X-Display-Light, what its lights blink while it is on USB power
+    (``display_render.status_light``, or ``off`` where Settings turned them
+    off). Both are on a 304 too, so they reach a display that is not redrawn.
     """
     display_id = _display_from_request(request)
     battery = None
@@ -4974,6 +4977,11 @@ async def get_display_frame(request: Request, wait: int = 0):
     while True:
         payload = _display_payload()
         etag = _display_etag(display_render.sensor_fingerprint(payload, display_battery=battery))
+        if display_id:
+            headers["X-Display-Light"] = (
+                display_render.status_light(payload)
+                if display_registry.light(display_id) else "off"
+            )
         if not _etag_matches(asked, etag):
             break
         if time.monotonic() >= deadline or await request.is_disconnected():
@@ -5009,25 +5017,37 @@ async def create_display(request: Request, body: DisplayCreate):
 
 
 class DisplayUpdate(BaseModel):
-    battery_minutes: int
+    battery_minutes: Optional[int] = None
+    light: Optional[StrictBool] = None
 
 
 @app.patch("/api/displays/{display_id}")
 async def update_display(request: Request, display_id: str, body: DisplayUpdate):
-    """How often a display on battery wakes. It learns the new value at its next ask."""
+    """How often a display on battery wakes, and whether its lights blink on
+    USB. It learns either at its next ask."""
     session = _get_session_or_401(request)
     _require_admin(session)
+    if body.battery_minutes is None and body.light is None:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
     try:
-        display = display_registry.set_battery_minutes(display_id, body.battery_minutes)
+        if body.battery_minutes is not None:
+            display = display_registry.set_battery_minutes(display_id, body.battery_minutes)
+            add_log_entry(
+                "sent",
+                f"Display {display['name']}: on battery every {display['battery_minutes']} min (by {session['username']})",
+                source="settings",
+            )
+        if body.light is not None:
+            display = display_registry.set_light(display_id, body.light)
+            add_log_entry(
+                "sent",
+                f"Display {display['name']}: lights {'on' if display['light'] else 'off'} on USB (by {session['username']})",
+                source="settings",
+            )
     except KeyError:
         raise HTTPException(status_code=404, detail="No such display")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    add_log_entry(
-        "sent",
-        f"Display {display['name']}: on battery every {display['battery_minutes']} min (by {session['username']})",
-        source="settings",
-    )
     return {"display": display}
 
 

@@ -6263,7 +6263,11 @@
   const DISPLAY_BATTERY_MINUTES = [2, 5, 10, 15, 30, 60];
 
   function displayPowerText(display) {
-    if (display.power === 'usb') return 'On USB: redrawn as soon as a sensor changes';
+    if (display.power === 'usb') {
+      return display.light === false
+        ? 'On USB: redrawn as soon as a sensor changes'
+        : 'On USB: redrawn as soon as a sensor changes, lights blinking';
+    }
     if (display.power === 'battery') {
       return `On battery: checks every ${display.battery_minutes} min, redraws only when a sensor has changed`;
     }
@@ -6291,6 +6295,13 @@
           <label class="display-interval"><span>On battery, check</span>
             <select data-display-interval="${esc(display.display_id)}"
               aria-label="How often ${esc(display.name)} checks on battery">${options}</select>
+          </label>
+          <label class="display-interval"><span>On USB, lights</span>
+            <select data-display-light="${esc(display.display_id)}"
+              aria-label="Whether ${esc(display.name)} blinks its lights on USB">
+              <option value="on"${display.light !== false ? ' selected' : ''}>Green closed, red open</option>
+              <option value="off"${display.light === false ? ' selected' : ''}>Off</option>
+            </select>
           </label>
         </span>
         <span class="dev-actions">
@@ -6323,6 +6334,15 @@
           await Nobo.api.updateDisplay(select.dataset.displayInterval, {
             battery_minutes: Number(select.value),
           });
+          Nobo.toast('Saved. The display uses it from its next check');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+        wireDisplaySettings(root);
+      };
+    });
+    box.querySelectorAll('[data-display-light]').forEach(select => {
+      select.onchange = async () => {
+        try {
+          await Nobo.api.updateDisplay(select.dataset.displayLight, { light: select.value === 'on' });
           Nobo.toast('Saved. The display uses it from its next check');
         } catch (e) { Nobo.toast(e.message, 'error'); }
         wireDisplaySettings(root);

@@ -63,6 +63,9 @@ class Display:
     firmware: Optional[str] = None
     battery_minutes: int = DEFAULT_BATTERY_MINUTES
     power: Optional[str] = None
+    # Whether its lights blink the house's state while it is on USB power.
+    # On battery they are always off: the board is asleep between asks.
+    light: bool = True
 
     def public(self) -> Dict[str, object]:
         """What the settings page may see. Never the hash."""
@@ -75,6 +78,7 @@ class Display:
             "firmware": self.firmware,
             "battery_minutes": self.battery_minutes,
             "power": self.power,
+            "light": self.light,
         }
 
 
@@ -143,6 +147,7 @@ class DisplayRegistry:
                         battery_minutes=clean_battery_minutes(item.get("battery_minutes"))
                         or DEFAULT_BATTERY_MINUTES,
                         power=clean_power(item.get("power")),
+                        light=item.get("light") is not False,
                     )
                     if len(display.token_hash) == 64:
                         displays[display.display_id] = display
@@ -219,6 +224,15 @@ class DisplayRegistry:
             self._save_locked()
             return item.public()
 
+    def set_light(self, display_id: str, on: bool) -> Dict[str, object]:
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                raise KeyError(display_id)
+            item.light = bool(on)
+            self._save_locked()
+            return item.public()
+
     # -- use ---------------------------------------------------------------
 
     def verify(self, token: Optional[str]) -> Optional[str]:
@@ -277,3 +291,8 @@ class DisplayRegistry:
         with self._lock:
             item = self._displays.get(display_id)
             return item.battery_minutes if item else DEFAULT_BATTERY_MINUTES
+
+    def light(self, display_id: str) -> bool:
+        with self._lock:
+            item = self._displays.get(display_id)
+            return item.light if item else True

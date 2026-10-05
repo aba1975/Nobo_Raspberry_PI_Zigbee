@@ -201,6 +201,33 @@ def build_frame(
     )
 
 
+# The colours the display's own lights may blink, when it is on USB power.
+LIGHTS = ("green", "red", "blue", "off")
+
+
+def status_light(payload: Dict[str, Any]) -> str:
+    """What the display's lights say, in one word: the headline, from afar.
+
+    Red when anything is open, whether or not it has been left open yet;
+    green only when every door and window is closed *and* heard from, because
+    a green light is what lets somebody walk out without looking; blue, as on
+    the panel, when a sensor cannot be heard from; off when there is nothing
+    to watch. Built from the same fields as ``sensor_fingerprint``, so a
+    change of light is always a change of ETag and a waiting display hears it
+    at once.
+    """
+    if not payload.get("sensors_enabled"):
+        return "off"
+    alarm = payload.get("alarm") or {}
+    if payload.get("open_contacts") or alarm.get("left_open"):
+        return "red"
+    if payload.get("unavailable_sensors"):
+        return "blue"
+    if not int(payload.get("contact_count") or 0):
+        return "off"
+    return "green"
+
+
 def _battery_low(display_battery: Optional[int]) -> bool:
     return display_battery is not None and display_battery <= LOW_DISPLAY_BATTERY
 
