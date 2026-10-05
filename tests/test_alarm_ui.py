@@ -238,7 +238,8 @@ def _settings_card(settings, protocol="https:"):
         "const ARM_LABELS", "const ALARM_PROVIDER_LABELS",
         "function alarmLockWords", "const LOCK_METHOD_LABELS", "function lockMethodLabel",
         "const ALARM_OWNED_WORDS", "function alarmTransportSecure",
-        "function alarmAccountBlock", "function alarmStatusBlock", "function alarmOption",
+        "function alarmAccountBlock", "function countWords", "function alarmDevicesFound",
+        "function alarmStatusBlock", "function alarmOption",
         "function alarmDemoControls", "function alarmLockHeatingRows",
         "function alarmLockSidesBlock", "function renderAlarmSettingsCard",
         "function settingsSection", "function segControl", "function settingRow",
@@ -294,6 +295,53 @@ def test_signed_in_shows_the_masked_account_and_no_sign_in_button():
     assert 'data-act="alarm-signin"' not in markup
     assert "Armed away" in markup
     assert "The heating is on Away because of the alarm or the lock." in markup
+
+
+TWO_INSTALLATIONS = [{"giid": "41706193125", "alias": "Morellveien"},
+                     {"giid": "64118849758", "alias": "Storslåvegen"}]
+
+
+@needs_node
+def test_with_none_chosen_the_installation_list_does_not_look_chosen():
+    """Found on the demo Pi: the list showed the first installation, so it
+    looked connected, and nothing was saved because nothing was changed."""
+    markup = _settings_card({**BASE, "verisure": {
+        "signed_in": True, "email": "a***@example.no", "installation": None, "giid": None,
+        "installations": TWO_INSTALLATIONS, "awaiting_code": False,
+    }, "status": {"connection": "not_configured",
+                  "message": "Choose which Verisure installation to use."}})
+    select = markup[markup.index('id="alarmInstallation"'):markup.index("</select>")]
+    assert '<option value="" selected disabled>Choose an installation' in select
+    assert select.count("selected") == 1
+    assert "Until one is chosen, the alarm" in markup
+
+
+@needs_node
+def test_the_chosen_installation_is_matched_by_id():
+    markup = _settings_card({**BASE, "verisure": {
+        "signed_in": True, "email": "a***@example.no", "installation": "Storslåvegen",
+        "giid": "64118849758", "installations": TWO_INSTALLATIONS, "awaiting_code": False,
+    }, "status": {"connection": "ok", "arm_state": "disarmed", "locks": [],
+                  "device_counts": {"contact": 7, "climate": 1}}})
+    select = markup[markup.index('id="alarmInstallation"'):markup.index("</select>")]
+    assert "Choose an installation" not in select
+    chosen = select[select.index('value="64118849758"'):]
+    assert "selected" in chosen[:chosen.index(">")]
+    morell = select[select.index('value="41706193125"'):]
+    assert "selected" not in morell[:morell.index(">")]
+    assert "Until one is chosen" not in markup
+    assert "Found 7 door and window sensors and 1 temperature sensor." in markup
+
+
+@needs_node
+def test_an_installation_with_nothing_to_offer_says_so():
+    markup = _settings_card({**BASE, "verisure": {
+        "signed_in": True, "email": "a***@example.no", "installation": "Mostugu", "giid": "1",
+        "installations": [{"giid": "1", "alias": "Mostugu"}], "awaiting_code": False,
+    }, "status": {"connection": "ok", "arm_state": "disarmed", "locks": [],
+                  "device_counts": {"contact": 0, "climate": 0}}})
+    assert "No door, window or temperature sensors found." in markup
+    assert 'id="alarmInstallation"' not in markup
 
 
 @needs_node

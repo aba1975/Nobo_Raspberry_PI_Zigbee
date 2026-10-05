@@ -363,7 +363,7 @@ class VerisureAlarm:
         pending = self._pending is not None and self._pending[1] > self._clock()
         if stored is None:
             return {
-                "signed_in": False, "email": None, "installation": None,
+                "signed_in": False, "email": None, "installation": None, "giid": None,
                 "installations": [], "awaiting_code": pending,
             }
         chosen = next(
@@ -374,6 +374,10 @@ class VerisureAlarm:
             "signed_in": bool(stored["cookies"]),
             "email": mask_email(stored["email"]),
             "installation": chosen["alias"] if chosen else None,
+            # Matched by id in Settings: two installations can share an alias,
+            # and with none chosen a drop-down showing the first one looked
+            # chosen when it was not. Found on the demo Pi.
+            "giid": chosen["giid"] if chosen else None,
             "installations": [
                 {"giid": item["giid"], "alias": item["alias"] or "Unnamed"}
                 for item in stored["installations"]

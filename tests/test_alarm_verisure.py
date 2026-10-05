@@ -254,7 +254,10 @@ def test_signing_in_again_remembers_which_installation(account, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "INSTALLATIONS", TWO_INSTALLATIONS)
     _sign_in(account)
     assert json.loads(_stored_text())["giid"] is None, "two houses: the user chooses"
+    assert account.public_state()["giid"] is None
     account.choose_installation("222")
+    assert account.public_state()["giid"] == "222"
+    assert account.public_state()["installation"] == "Cabin"
     # Verisure ends the sign-in; the file keeps the choice, without cookies.
     stored = json.loads(_stored_text())
     alarm_persistence.save_session({**stored, "cookies": {}, "trust_token": None})
@@ -300,6 +303,7 @@ def test_what_settings_shows_hides_the_address(account):
     assert shown["signed_in"] is True
     assert shown["email"] == "a***@example.com"
     assert shown["installation"] == "Mostugu"
+    assert shown["giid"] == "111"
     assert "trust" not in json.dumps(shown).lower()
     assert "refresh" not in json.dumps(shown)
 

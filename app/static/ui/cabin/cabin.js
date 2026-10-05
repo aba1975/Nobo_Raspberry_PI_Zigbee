@@ -5940,13 +5940,21 @@
         could be read on the way. Open it with https:// to sign in.</span></div>`;
     if (account.signed_in) {
       const choices = account.installations || [];
+      /* With none chosen, a list starting at the first installation looked
+         chosen, and nothing was saved because nothing changed. So until one
+         is picked, the list says so and is the first thing asked for. */
+      const unchosen = !account.giid;
       const picker = choices.length > 1 ? `
         <label class="field"><span>Installation</span>
           <select id="alarmInstallation">
+            ${unchosen ? '<option value="" selected disabled>Choose an installation…</option>' : ''}
             ${choices.map(item => `<option value="${esc(item.giid)}"
-              ${item.alias === account.installation ? 'selected' : ''}>${esc(item.alias)}</option>`).join('')}
+              ${item.giid === account.giid ? 'selected' : ''}>${esc(item.alias)}</option>`).join('')}
           </select>
-        </label>` : '';
+        </label>
+        ${unchosen ? `<div class="note note-warn"><strong>Choose an installation</strong>
+          <span>This account has ${choices.length}. Until one is chosen, the alarm,
+          its locks and its sensors are not read.</span></div>` : ''}` : '';
       return `
         <div class="alarm-account">
           <div class="user-row">
@@ -5974,6 +5982,23 @@
       the sign-in Verisure hands back, in a file only this system can read.</small>`;
   }
 
+  function countWords(count, one, many) {
+    return `${count} ${count === 1 ? one : many}`;
+  }
+
+  /* What connecting found, so "Add from Verisure" is not the first place
+     anyone learns the list is empty. */
+  function alarmDevicesFound(alarm) {
+    const counts = alarm.device_counts || {};
+    const contacts = counts.contact || 0;
+    const climate = counts.climate || 0;
+    if (!contacts && !climate) return 'No door, window or temperature sensors found.';
+    const parts = [];
+    if (contacts) parts.push(countWords(contacts, 'door or window sensor', 'door and window sensors'));
+    if (climate) parts.push(countWords(climate, 'temperature sensor', 'temperature sensors'));
+    return `Found ${parts.join(' and ')}.`;
+  }
+
   function alarmStatusBlock(alarm) {
     if (!alarm) return '';
     if (alarm.connection !== 'ok') {
@@ -5983,10 +6008,12 @@
     }
     const locks = (alarm.locks || []).map(lock =>
       `<li><strong>${esc(lock.name)}</strong> <span>${esc(alarmLockWords(lock))}</span></li>`).join('');
+    const found = alarmDevicesFound(alarm);
     return `
       <div class="sensor-settings-summary alarm-status">
         <strong>${esc(ARM_LABELS[alarm.arm_state] || alarm.arm_state || 'Unknown')}</strong>
         ${locks ? `<ul class="alarm-locks">${locks}</ul>` : ''}
+        ${found ? `<span class="alarm-found">${esc(found)}</span>` : ''}
         ${alarm.owned_mode && ALARM_OWNED_WORDS[alarm.owned_mode]
           ? `<span>${esc(ALARM_OWNED_WORDS[alarm.owned_mode])}</span>` : ''}
       </div>`;

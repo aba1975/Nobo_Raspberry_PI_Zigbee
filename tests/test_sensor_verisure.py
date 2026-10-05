@@ -107,6 +107,13 @@ def test_the_list_is_what_the_alarm_reported(client):
     assert woodshed["label"] == "DEMO 0004"
 
 
+def test_settings_say_how_many_devices_the_alarm_reported(client):
+    alarm_on(client)
+    status = client.get("/api/alarm/settings").json()["status"]
+    assert status["device_counts"] == {"contact": 4, "climate": 2}, status
+    assert status["device_count"] == 6
+
+
 # -- a monitoring-only outbuilding -----------------------------------------
 
 

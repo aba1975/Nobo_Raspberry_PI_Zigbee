@@ -111,9 +111,14 @@ fewer requests, polling backs off: 5, 15, 30 and then 60 minutes.
 3. **Sign in to Verisure** — the email and password you use in the Verisure app.
 4. Verisure sends a code by text message or email. Type it in.
 5. If the account has more than one installation, choose which one. Signing
-   in again later keeps that choice.
+   in again later keeps that choice. Until one is chosen the list reads
+   **Choose an installation…** and nothing is read: no alarm, no lock, and
+   nothing under **Add from Verisure**. (The list used to start on the first
+   installation, which looked chosen but was never saved. Found on the demo
+   Pi in October 2026.)
 
-Settings then shows the alarm's state and the lock, and the System status line
+Settings then shows the alarm's state and the lock, how many door and window
+sensors and temperature sensors the alarm reported, and the System status line
 has an **Alarm** row.
 
 **You may have to do this again one day.** The password is not stored, so when

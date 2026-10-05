@@ -7698,6 +7698,11 @@ def _alarm_public() -> Optional[Dict[str, Any]]:
         # Alarm devices the alarm reported, for the demo controls and for
         # knowing whether "Add from Verisure" has anything to offer.
         "device_count": len(reading.devices) if reading else 0,
+        # The same, by kind, so Settings can say what connecting found.
+        "device_counts": {
+            kind: sum(1 for device in (reading.devices if reading else ()) if device.kind == kind)
+            for kind in ("contact", "climate")
+        },
         "read_at": (
             datetime.fromtimestamp(reading.read_at, timezone.utc).isoformat() if reading else None
         ),
