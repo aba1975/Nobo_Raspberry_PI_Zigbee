@@ -62,9 +62,10 @@ python provision.py --port … --keep-key --battery-minutes 30   # change one th
 | `--rotation` | -1 | -1 keeps the panel portrait; 0–3 force a rotation |
 | `--tz` | `CET-1CEST,M3.5.0,M10.5.0/3` | POSIX time zone for "last updated" |
 
-On USB its two LEDs blink slowly green when every door and window is closed,
-red when any is open and blue when it cannot tell; on battery they are always
-off. Settings → Wall Displays can turn them off per display. See
+On USB its two LEDs are steady green when every door and window is closed,
+and blink red when any is open and blue when it cannot tell; on battery they
+are always off. Settings → Wall Displays sets them Dim, Medium, Bright or Off
+per display. See
 [`docs/DISPLAY.md`](../../docs/DISPLAY.md#its-lights-on-usb-power).
 
 Opening the serial port resets the board; `provision.py` repeats its command

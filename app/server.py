@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, StrictStr
 import copy
 import pynobo
 import auth
@@ -44,7 +44,7 @@ import alarm_automation
 import alarm_persistence
 import dataclasses
 import display_render
-from display_tokens import DisplayRegistry
+from display_tokens import LIGHT_LEVELS, DisplayRegistry
 from alarm_persistence import AlarmLedger, AlarmSettings
 from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, SimulatedAlarm
 from alarm_verisure import VerisureAlarm, VerisureError
@@ -4955,9 +4955,10 @@ async def get_display_frame(request: Request, wait: int = 0):
 
     Every answer carries X-Display-Interval, how many minutes a display on
     battery sleeps between asks, set per display in Settings, and
-    X-Display-Light, what its lights blink while it is on USB power
+    X-Display-Light, what its lights show while it is on USB power
     (``display_render.status_light``, or ``off`` where Settings turned them
-    off). Both are on a 304 too, so they reach a display that is not redrawn.
+    off), with X-Display-Light-Level, how bright, of 255. All are on a 304 too,
+    so they reach a display that is not redrawn.
     """
     display_id = _display_from_request(request)
     battery = None
@@ -4971,6 +4972,7 @@ async def get_display_frame(request: Request, wait: int = 0):
         )
         battery = display_registry.battery(display_id)
         headers["X-Display-Interval"] = str(display_registry.battery_minutes(display_id))
+        headers["X-Display-Light-Level"] = str(display_registry.light_level(display_id))
     asked = request.headers.get("if-none-match")
     wait = max(0, min(int(wait), DISPLAY_MAX_WAIT_SECONDS)) if asked else 0
     deadline = time.monotonic() + wait
@@ -5019,16 +5021,20 @@ async def create_display(request: Request, body: DisplayCreate):
 class DisplayUpdate(BaseModel):
     battery_minutes: Optional[int] = None
     light: Optional[StrictBool] = None
+    light_level: Optional[StrictStr] = None
 
 
 @app.patch("/api/displays/{display_id}")
 async def update_display(request: Request, display_id: str, body: DisplayUpdate):
-    """How often a display on battery wakes, and whether its lights blink on
-    USB. It learns either at its next ask."""
+    """How often a display on battery wakes, and whether and how brightly its
+    lights show on USB. It learns each at its next ask."""
     session = _get_session_or_401(request)
     _require_admin(session)
-    if body.battery_minutes is None and body.light is None:
+    if body.battery_minutes is None and body.light is None and body.light_level is None:
         raise HTTPException(status_code=400, detail="Nothing to change.")
+    # Checked before anything is saved, so a bad level changes nothing.
+    if body.light_level is not None and body.light_level not in LIGHT_LEVELS:
+        raise HTTPException(status_code=400, detail=f"Choose one of {', '.join(LIGHT_LEVELS)}.")
     try:
         if body.battery_minutes is not None:
             display = display_registry.set_battery_minutes(display_id, body.battery_minutes)
@@ -5042,6 +5048,13 @@ async def update_display(request: Request, display_id: str, body: DisplayUpdate)
             add_log_entry(
                 "sent",
                 f"Display {display['name']}: lights {'on' if display['light'] else 'off'} on USB (by {session['username']})",
+                source="settings",
+            )
+        if body.light_level is not None:
+            display = display_registry.set_light_level(display_id, body.light_level)
+            add_log_entry(
+                "sent",
+                f"Display {display['name']}: lights {display['light_level']} (by {session['username']})",
                 source="settings",
             )
     except KeyError:

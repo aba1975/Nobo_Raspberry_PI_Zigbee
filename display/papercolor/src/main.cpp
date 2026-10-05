@@ -17,11 +17,12 @@
 // (X-Display-Interval, set in Settings), and any of the three buttons wakes
 // it to ask at once.
 //
-// On USB its two lights blink slowly what the Pi says in X-Display-Light:
-// green when every door and window is closed, red when any is open, blue when
-// a sensor cannot be heard from, or when this display can no longer reach the
-// Pi. Never on battery: the board sleeps between asks, and the lights are put
-// out before it does.
+// On USB its two lights show what the Pi says in X-Display-Light: steady green
+// when every door and window is closed, blinking red when any is open,
+// blinking blue when a sensor cannot be heard from, or when this display can
+// no longer reach the Pi. How bright is the Pi's too (X-Display-Light-Level,
+// set in Settings). Never on battery: the board sleeps between asks, and the
+// lights are put out before it does.
 //
 // Nothing secret is compiled in. Wi-Fi, address, key and the certificate the
 // Pi's HTTPS is checked against arrive over USB from provision.py and are
@@ -40,7 +41,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.3.0"
 
 namespace {
 
@@ -60,13 +61,16 @@ constexpr int USB_VBUS_MV = 4000;
 constexpr uint32_t POWER_CHECK_MS = 2000;
 // How long a board that has not been set up listens on USB before sleeping.
 constexpr uint32_t SETUP_LISTEN_MS = 10 * 60 * 1000;
-// The lights: a short glow every few seconds, not a beacon. Two WS2812s on
+// The lights: green held, red and blue a short glow every few seconds, not a
+// beacon. Two WS2812s on
 // GPIO 21, powered by the PMIC's LDO, which M5.begin() turns on. Driven here
 // rather than through M5.Led: on this Arduino core (2.x, ESP-IDF 4.4)
 // M5Unified's LED bus is an empty stub that accepts colours and sends none.
 constexpr int LIGHT_PIN = 21;
 constexpr int LIGHT_COUNT = 2;
-constexpr uint8_t LIGHT_LEVEL = 48;
+// Until the Pi says otherwise, and for a Pi too old to say.
+constexpr uint8_t DEFAULT_LIGHT_LEVEL = 18;
+constexpr uint32_t LIGHT_STEP_MS = 100;
 constexpr uint32_t LIGHT_ON_MS = 700;
 constexpr uint32_t LIGHT_PERIOD_MS = 3000;
 // Anything ever set by the Pi's Date header is after this.
@@ -114,6 +118,7 @@ enum class Outcome { Updated, Unchanged, Failed };
 enum class Light : uint8_t { Off, Green, Red, Blue };
 // Written by the loop, read by the light task; a byte is written whole.
 volatile Light light = Light::Off;
+volatile uint8_t lightLevel = DEFAULT_LIGHT_LEVEL;
 TaskHandle_t lightTask = nullptr;
 rmt_obj_t *lightBus = nullptr;
 
@@ -311,6 +316,12 @@ void takeLight(const String &value) {
   else light = Light::Off;
 }
 
+// Anything that is not a level from 1 to 255 leaves the last one in place.
+void takeLightLevel(const String &value) {
+  long level = value.toInt();
+  if (level >= 1 && level <= 255) lightLevel = (uint8_t)level;
+}
+
 // Every LED the same colour, WS2812 timing at 100 ns ticks, green first.
 void showLight(uint8_t r, uint8_t g, uint8_t b) {
   if (!lightBus) return;
@@ -332,19 +343,36 @@ void showLight(uint8_t r, uint8_t g, uint8_t b) {
   rmtWriteBlocking(lightBus, bits, i);
 }
 
+// Waits in short steps and gives up as soon as the colour or the level
+// changes, so a door opened shows at once, not at the end of a blink.
+bool holdLight(uint32_t ms, Light was, uint8_t level) {
+  for (uint32_t waited = 0; waited < ms; waited += LIGHT_STEP_MS) {
+    vTaskDelay(pdMS_TO_TICKS(LIGHT_STEP_MS));
+    if (light != was || lightLevel != level) return false;
+  }
+  return true;
+}
+
+// Green is held: all is well, and a steady light is calmer to live with.
+// Red and blue blink, because they ask for something to be done.
 void lightLoop(void *) {
   for (;;) {
     Light now = light;
+    uint8_t level = lightLevel;
     if (now == Light::Off) {
       showLight(0, 0, 0);
-      vTaskDelay(pdMS_TO_TICKS(200));
+      holdLight(LIGHT_PERIOD_MS, now, level);
       continue;
     }
-    showLight(now == Light::Red ? LIGHT_LEVEL : 0, now == Light::Green ? LIGHT_LEVEL : 0,
-              now == Light::Blue ? LIGHT_LEVEL : 0);
-    vTaskDelay(pdMS_TO_TICKS(LIGHT_ON_MS));
+    showLight(now == Light::Red ? level : 0, now == Light::Green ? level : 0,
+              now == Light::Blue ? level : 0);
+    if (now == Light::Green) {
+      holdLight(LIGHT_PERIOD_MS, now, level);
+      continue;
+    }
+    if (!holdLight(LIGHT_ON_MS, now, level)) continue;
     showLight(0, 0, 0);
-    vTaskDelay(pdMS_TO_TICKS(LIGHT_PERIOD_MS - LIGHT_ON_MS));
+    holdLight(LIGHT_PERIOD_MS - LIGHT_ON_MS, now, level);
   }
 }
 
@@ -380,8 +408,9 @@ Outcome fetch(uint32_t waitSeconds) {
     lastProblem = "Bad address";
     return Outcome::Failed;
   }
-  static const char *keep[] = {"ETag", "Date", "X-Display-Interval", "X-Display-Light"};
-  http.collectHeaders(keep, 4);
+  static const char *keep[] = {"ETag", "Date", "X-Display-Interval", "X-Display-Light",
+                               "X-Display-Light-Level"};
+  http.collectHeaders(keep, 5);
   http.addHeader("Authorization", "Bearer " + config.token);
   http.addHeader("X-Display-Firmware", FIRMWARE_VERSION);
   http.addHeader("X-Display-Power", usbPower ? "usb" : "battery");
@@ -392,7 +421,10 @@ Outcome fetch(uint32_t waitSeconds) {
   int status = http.GET();
   if (http.hasHeader("Date")) takeTime(http.header("Date"));
   if (http.hasHeader("X-Display-Interval")) takeInterval(http.header("X-Display-Interval"));
-  if (status == 200 || status == 304) takeLight(http.header("X-Display-Light"));
+  if (status == 200 || status == 304) {
+    takeLightLevel(http.header("X-Display-Light-Level"));
+    takeLight(http.header("X-Display-Light"));
+  }
   if (status == 304) {
     http.end();
     return Outcome::Unchanged;
@@ -508,6 +540,7 @@ void status() {
   doc["battery"] = batteryPercent();
   doc["vbus_mv"] = M5.Power.getVBUSVoltage();
   doc["light"] = lightName(light);
+  doc["light_level"] = lightLevel;
   doc["lights_running"] = lightTask != nullptr;
   doc["wifi"] = WiFi.status() == WL_CONNECTED;
   doc["width"] = M5.Display.width();
@@ -572,8 +605,10 @@ void handleLine(const String &line) {
     Serial.println("{\"ok\":true}");
   } else if (!strcmp(cmd, "light")) {
     // For checking the LEDs by eye; the Pi's next answer replaces it.
+    if (in["level"].is<int>()) takeLightLevel(String(in["level"].as<int>()));
     takeLight(String(in["color"] | "off"));
-    Serial.printf("{\"ok\":true,\"light\":\"%s\"}\n", lightName(light));
+    Serial.printf("{\"ok\":true,\"light\":\"%s\",\"level\":%u}\n", lightName(light),
+                  (unsigned)lightLevel);
   } else if (!strcmp(cmd, "forget")) {
     forget();
   } else {

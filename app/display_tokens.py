@@ -51,6 +51,12 @@ BATTERY_MINUTES_CHOICES = (2, 5, 10, 15, 30, 60)
 DEFAULT_BATTERY_MINUTES = 15
 POWER_SOURCES = ("usb", "battery")
 
+# How bright the lights are, as the WS2812 drive level (of 255) sent in
+# X-Display-Light-Level, so it can be tuned here without reflashing. The LEDs
+# are far brighter than the scale suggests: 48 was too bright in a dark hall.
+LIGHT_LEVELS = {"dim": 6, "medium": 18, "bright": 48}
+DEFAULT_LIGHT_LEVEL = "dim"
+
 
 @dataclass
 class Display:
@@ -66,6 +72,7 @@ class Display:
     # Whether its lights blink the house's state while it is on USB power.
     # On battery they are always off: the board is asleep between asks.
     light: bool = True
+    light_level: str = DEFAULT_LIGHT_LEVEL
 
     def public(self) -> Dict[str, object]:
         """What the settings page may see. Never the hash."""
@@ -79,6 +86,7 @@ class Display:
             "battery_minutes": self.battery_minutes,
             "power": self.power,
             "light": self.light,
+            "light_level": self.light_level,
         }
 
 
@@ -107,6 +115,10 @@ def clean_firmware(value: object) -> Optional[str]:
 def clean_power(value: object) -> Optional[str]:
     text = str(value or "").strip().lower()
     return text if text in POWER_SOURCES else None
+
+
+def clean_light_level(value: object) -> Optional[str]:
+    return value if isinstance(value, str) and value in LIGHT_LEVELS else None
 
 
 def clean_battery_minutes(value: object) -> Optional[int]:
@@ -148,6 +160,8 @@ class DisplayRegistry:
                         or DEFAULT_BATTERY_MINUTES,
                         power=clean_power(item.get("power")),
                         light=item.get("light") is not False,
+                        light_level=clean_light_level(item.get("light_level"))
+                        or DEFAULT_LIGHT_LEVEL,
                     )
                     if len(display.token_hash) == 64:
                         displays[display.display_id] = display
@@ -233,6 +247,18 @@ class DisplayRegistry:
             self._save_locked()
             return item.public()
 
+    def set_light_level(self, display_id: str, level: object) -> Dict[str, object]:
+        cleaned = clean_light_level(level)
+        if cleaned is None:
+            raise ValueError(f"Choose one of {', '.join(LIGHT_LEVELS)}.")
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                raise KeyError(display_id)
+            item.light_level = cleaned
+            self._save_locked()
+            return item.public()
+
     # -- use ---------------------------------------------------------------
 
     def verify(self, token: Optional[str]) -> Optional[str]:
@@ -296,3 +322,9 @@ class DisplayRegistry:
         with self._lock:
             item = self._displays.get(display_id)
             return item.light if item else True
+
+    def light_level(self, display_id: str) -> int:
+        """The drive level its lights are lit at, of 255."""
+        with self._lock:
+            item = self._displays.get(display_id)
+            return LIGHT_LEVELS[item.light_level if item else DEFAULT_LIGHT_LEVEL]

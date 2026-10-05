@@ -702,4 +702,90 @@ def test_settings_offers_the_light_switch():
     root = server.Path(server.__file__).resolve().parent / "static" / "ui"
     cabin = (root / "cabin" / "cabin.js").read_text()
     assert "data-display-light" in cabin
-    assert "{ light: select.value === 'on' }" in cabin
+    assert "{ light: false }" in cabin
+    assert "{ light: true, light_level: select.value }" in cabin
+
+
+def test_settings_offers_exactly_the_light_levels_the_server_accepts():
+    root = server.Path(server.__file__).resolve().parent / "static" / "ui"
+    cabin = (root / "cabin" / "cabin.js").read_text()
+    offered = ", ".join(f"['{key}', '{key.capitalize()}']" for key in display_tokens.LIGHT_LEVELS)
+    assert f"const DISPLAY_LIGHT_LEVELS = [{offered}];" in cabin
+
+
+# -- how bright -------------------------------------------------------------------
+
+
+def test_the_light_level_rides_on_every_answer_and_starts_dim(client, device):
+    enable(client)
+    add_sensor(client, name="Bath window")
+    display, token = new_key(client)
+    assert display["light_level"] == "dim"
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    assert first.headers["x-display-light-level"] == str(display_tokens.LIGHT_LEVELS["dim"])
+    same = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert same.status_code == 304
+    assert same.headers["x-display-light-level"] == str(display_tokens.LIGHT_LEVELS["dim"])
+
+
+def test_the_dim_level_is_dimmer_than_the_old_fixed_one():
+    levels = display_tokens.LIGHT_LEVELS
+    assert levels["dim"] < levels["medium"] < levels["bright"] <= 48
+    assert all(1 <= level <= 255 for level in levels.values())
+
+
+def test_the_light_level_is_set_per_display_and_survives_a_restart(client, device):
+    display, token = new_key(client)
+    other, other_token = new_key(client, "Kitchen")
+    path = f"/api/displays/{display['display_id']}"
+    response = client.patch(path, json={"light_level": "bright"})
+    assert response.status_code == 200, response.text
+    assert response.json()["display"]["light_level"] == "bright"
+    assert response.json()["display"]["light"] is True
+    bright = str(display_tokens.LIGHT_LEVELS["bright"])
+    dim = str(display_tokens.LIGHT_LEVELS["dim"])
+    assert device.get("/api/display/frame.png", headers=bearer(token)).headers["x-display-light-level"] == bright
+    assert device.get("/api/display/frame.png", headers=bearer(other_token)).headers["x-display-light-level"] == dim
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.light_level(display["display_id"]) == display_tokens.LIGHT_LEVELS["bright"]
+    assert reloaded.light_level(other["display_id"]) == display_tokens.LIGHT_LEVELS["dim"]
+
+
+def test_settings_turns_the_lights_on_and_sets_the_level_in_one_change(client):
+    display, _ = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    assert client.patch(path, json={"light": False}).status_code == 200
+    changed = client.patch(path, json={"light": True, "light_level": "medium"}).json()["display"]
+    assert changed["light"] is True and changed["light_level"] == "medium"
+
+
+@pytest.mark.parametrize("level", ["blinding", "", "Dim", 6, True, None])
+def test_a_bad_light_level_changes_nothing(client, level):
+    display, _ = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    response = client.patch(path, json={"light_level": level, "battery_minutes": 60})
+    if level is None:
+        # Only the interval was sent.
+        assert response.status_code == 200
+        return
+    assert response.status_code in (400, 422), level
+    saved = client.get("/api/displays").json()["displays"][0]
+    assert saved["light_level"] == "dim" and saved["battery_minutes"] == display["battery_minutes"]
+
+
+def test_a_display_saved_before_the_level_existed_is_dim():
+    registry = display_tokens.DisplayRegistry()
+    registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    del raw["displays"][0]["light_level"]
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.list()[0]["light_level"] == "dim"
+    raw["displays"][0]["light_level"] = "nonsense"
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded.load()
+    assert reloaded.list()[0]["light_level"] == "dim"

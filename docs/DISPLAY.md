@@ -92,9 +92,11 @@ Displays** (admins only, shown only with sensors on).
   `{"battery_minutes": N}`, admins only). Every answer, `200` or `304`,
   carries it in `X-Display-Interval`, and the device keeps it, so a change
   reaches the display at its next check without touching the device.
-- **Its lights on USB** can be turned off per display on the same card
-  (`PATCH /api/displays/{id}` with `{"light": false}`, admins only; a real
-  JSON boolean, nothing else). They are on by default.
+- **Its lights on USB** are set per display on the same card: Dim (the
+  default), Medium, Bright or Off. That is `PATCH /api/displays/{id}` with
+  `{"light_level": "dim" | "medium" | "bright"}` and `{"light": false}` or
+  `true`, admins only; `light` is a real JSON boolean, and a level that is
+  not one of the three changes nothing, not even the rest of the request.
 
 A signed-in browser can open the picture too, which is how the card shows a
 preview.
@@ -122,10 +124,19 @@ the answer comes.
 
 ### Its lights, on USB power
 
-The PaperColor has two RGB LEDs. On USB they blink slowly — a 0.7 s glow every
-3 s, at about a fifth of full brightness — in the colour the Pi sends with every
-answer, `200` or `304`, in `X-Display-Light`
-(`display_render.status_light`):
+The PaperColor has two RGB LEDs. On USB they show the colour the Pi sends with
+every answer, `200` or `304`, in `X-Display-Light`
+(`display_render.status_light`). Green is held steady: all is well, and a
+steady light is calmer to live with. Red and blue blink slowly — a 0.7 s glow
+every 3 s — because they ask for something to be done. A change of colour shows
+within a tenth of a second of the answer, not at the end of a blink.
+
+How bright is the Pi's too, in `X-Display-Light-Level`, a WS2812 drive level
+of 255 (`LIGHT_LEVELS` in `display_tokens.py`): dim 6, medium 18, bright 48.
+The LEDs are far brighter than the scale suggests — 48, the only level before
+firmware 1.3.0, was too bright in a dark hall — so it is set on the Pi, where
+it can be tuned without reflashing. A Pi too old to send the header leaves the
+firmware at 18.
 
 | Light | When |
 | --- | --- |
@@ -145,11 +156,13 @@ The firmware drives the two WS2812s on GPIO 21 itself, through the Arduino
 core's RMT API. `M5.Led` cannot be used: on the Arduino core this project
 builds with (2.x, ESP-IDF 4.4) M5Unified's LED bus is a stub that accepts
 colours and sends nothing, which is how firmware 1.2.0's first build had
-dark LEDs while reporting the right colour.
+dark LEDs while reporting the right colour. The serial command
+`{"cmd":"light","color":"red","level":6}` sets both by hand, for checking by
+eye, until the Pi's next answer.
 
 **On battery the lights are never on.** The board sleeps between asks, and the
 LEDs hold their colour without the processor, so they are put out before
-every sleep. A display unplugged in the middle of a held ask blinks until
+every sleep. A display unplugged in the middle of a held ask stays lit until
 that ask ends, at most about 45 seconds, then goes dark.
 
 ### On battery
@@ -217,3 +230,5 @@ neither has the production Pi. The lights (firmware 1.2.0) were checked by eye
 on the demo Pi, 5 October 2026: green with everything closed, red with a
 window open, blue with a sensor made unavailable, and dark once USB was
 unplugged. Blue for a display that cannot reach the Pi has not been watched.
+Firmware 1.3.0 (steady green, set brightness) was flashed the same evening and
+reported green, level 18, lights running, over serial.

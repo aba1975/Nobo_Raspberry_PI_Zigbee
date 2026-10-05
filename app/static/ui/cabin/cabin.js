@@ -6254,6 +6254,10 @@
       <div class="sheet-actions">
         <button class="btn btn-add" type="button" data-act="add-display">Add a display</button>
       </div>
+      <small class="field-hint">On USB power its lights show the house at a
+        glance: steady green when everything is closed, blinking red when
+        something is open, blinking blue when a sensor cannot be heard from.
+        On battery they stay off.</small>
       <small class="field-hint">How to set up the device is in
         <code>display/papercolor/README.md</code>.</small>
     `, { icon: 'door' });
@@ -6261,12 +6265,14 @@
 
   // Must match BATTERY_MINUTES_CHOICES in display_tokens.py.
   const DISPLAY_BATTERY_MINUTES = [2, 5, 10, 15, 30, 60];
+  // Must match LIGHT_LEVELS in display_tokens.py.
+  const DISPLAY_LIGHT_LEVELS = [['dim', 'Dim'], ['medium', 'Medium'], ['bright', 'Bright']];
 
   function displayPowerText(display) {
     if (display.power === 'usb') {
       return display.light === false
         ? 'On USB: redrawn as soon as a sensor changes'
-        : 'On USB: redrawn as soon as a sensor changes, lights blinking';
+        : 'On USB: redrawn as soon as a sensor changes, lights on';
     }
     if (display.power === 'battery') {
       return `On battery: checks every ${display.battery_minutes} min, redraws only when a sensor has changed`;
@@ -6283,6 +6289,10 @@
       display.firmware ? `firmware ${display.firmware}` : '',
     ].filter(Boolean).join(' · ');
     const power = displayPowerText(display);
+    const lightNow = display.light === false ? 'off' : display.light_level;
+    const lightOptions = [...DISPLAY_LIGHT_LEVELS, ['off', 'Off']].map(([value, label]) =>
+      `<option value="${value}"${value === lightNow ? ' selected' : ''}>${label}</option>`,
+    ).join('');
     const options = DISPLAY_BATTERY_MINUTES.map(minutes =>
       `<option value="${minutes}"${minutes === display.battery_minutes ? ' selected' : ''}>Every ${minutes} min</option>`,
     ).join('');
@@ -6298,10 +6308,7 @@
           </label>
           <label class="display-interval"><span>On USB, lights</span>
             <select data-display-light="${esc(display.display_id)}"
-              aria-label="Whether ${esc(display.name)} blinks its lights on USB">
-              <option value="on"${display.light !== false ? ' selected' : ''}>Green closed, red open</option>
-              <option value="off"${display.light === false ? ' selected' : ''}>Off</option>
-            </select>
+              aria-label="How brightly ${esc(display.name)} shows its lights on USB">${lightOptions}</select>
           </label>
         </span>
         <span class="dev-actions">
@@ -6342,7 +6349,10 @@
     box.querySelectorAll('[data-display-light]').forEach(select => {
       select.onchange = async () => {
         try {
-          await Nobo.api.updateDisplay(select.dataset.displayLight, { light: select.value === 'on' });
+          const body = select.value === 'off'
+            ? { light: false }
+            : { light: true, light_level: select.value };
+          await Nobo.api.updateDisplay(select.dataset.displayLight, body);
           Nobo.toast('Saved. The display uses it from its next check');
         } catch (e) { Nobo.toast(e.message, 'error'); }
         wireDisplaySettings(root);
