@@ -200,7 +200,8 @@ services:
       # radio - and no network is formed until somebody fills it in. Its
       # defaults also say mqtt://localhost, which can resolve to ::1 while
       # Mosquitto listens on 127.0.0.1 only, and leave availability off, so a
-      # sensor with a flat battery would never be reported unavailable.
+      # sensor with a flat battery would never be reported unavailable. The
+      # diagnostics frontend described above is off in those defaults too.
       #
       # Each value is what the copied file already says, so on an existing
       # installation these change nothing.
@@ -209,6 +210,7 @@ services:
       - ZIGBEE2MQTT_CONFIG_SERIAL_PORT=/dev/ttyUSB0
       - ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER=zstack
       - ZIGBEE2MQTT_CONFIG_AVAILABILITY_ENABLED=true
+      - ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED=true
 
 volumes:
   nobo-data:

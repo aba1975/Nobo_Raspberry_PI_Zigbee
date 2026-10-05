@@ -557,6 +557,13 @@ class TestAnEmptyVolumeFormsANetwork:
     def test_a_silent_sensor_can_be_reported_unavailable(self, compose):
         assert "ZIGBEE2MQTT_CONFIG_AVAILABILITY_ENABLED=true" in self._env(compose)
 
+    def test_the_diagnostics_frontend_exists_but_only_on_loopback(self, compose):
+        """Off in the minimal defaults, which the comment beside it says can be
+        reached over an SSH tunnel. Seen on the first empty-volume start."""
+        env = self._env(compose)
+        assert "ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED=true" in env
+        assert "ZIGBEE2MQTT_CONFIG_FRONTEND_HOST=127.0.0.1" in env
+
 
 def test_the_zigbee_frontend_answers_the_pi_only(compose):
     """It can pair, remove and rename devices and has no password by default.
