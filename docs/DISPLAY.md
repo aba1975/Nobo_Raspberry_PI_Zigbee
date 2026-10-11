@@ -122,6 +122,21 @@ also followed by `usb_seconds`, so it never asks in a tight loop. The buttons
 fetch at once and always redraw; during a held ask a press is noticed when
 the answer comes.
 
+On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
+1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
+every ask: it opened the connection and closed it 25 ms later without sending
+a byte of TLS (seen with `tcpdump` on the Pi), and told the panel "No answer".
+That is the TLS client failing to set up before it starts, which is what an
+exhausted or fragmented heap looks like; the certificate chain still verified
+against the root it holds. Since 1.3.1 it takes a **fresh start** — a deep
+sleep of one second, which leaves RAM and Wi-Fi clean while the panel, the
+clock, the ETag and the last success survive in the panel and RTC memory —
+after three failed asks in a row (at most once an hour, so a Pi that is
+simply down is not met with a restart every minute and a half), and once a
+day after an answer. A failure now names the TLS layer's own reason rather
+than "connection refused", and `status` over serial reports `uptime_s`,
+`free_heap`, `largest_block` and `last_fresh_start`.
+
 ### Its lights, on USB power
 
 The PaperColor has two RGB LEDs. On USB they show the colour the Pi sends with
@@ -232,3 +247,7 @@ window open, blue with a sensor made unavailable, and dark once USB was
 unplugged. Blue for a display that cannot reach the Pi has not been watched.
 Firmware 1.3.0 (steady green, set brightness) was flashed the same evening and
 reported green, level 18, lights running, over serial.
+
+1.3.0 then ran on USB from 5 to 10 October 2026 before failing as described
+under "On USB power". That the 1.3.1 fresh start cures it is reasoned from the
+symptom, not proven: the heap was not measured before it failed.

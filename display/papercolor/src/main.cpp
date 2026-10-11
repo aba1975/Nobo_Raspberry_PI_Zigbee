@@ -24,6 +24,14 @@
 // set in Settings). Never on battery: the board sleeps between asks, and the
 // lights are put out before it does.
 //
+// On USB it never sleeps, so nothing would otherwise ever start it afresh:
+// firmware 1.3.0 ran five days on the demo Pi and then failed every ask
+// without sending a byte of TLS, which is what an exhausted or fragmented heap
+// looks like. So it takes a one-second deep sleep - a clean heap and Wi-Fi,
+// while the panel, the clock and what it remembers in RTC memory survive -
+// after three failures in a row (at most once an hour), and once a day after
+// an answer.
+//
 // Nothing secret is compiled in. Wi-Fi, address, key and the certificate the
 // Pi's HTTPS is checked against arrive over USB from provision.py and are
 // kept in NVS.
@@ -36,12 +44,13 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <driver/rtc_io.h>
+#include <esp_heap_caps.h>
 #include <esp32-hal-rmt.h>
 #include <esp_sleep.h>
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "1.3.1"
 
 namespace {
 
@@ -73,6 +82,14 @@ constexpr uint8_t DEFAULT_LIGHT_LEVEL = 18;
 constexpr uint32_t LIGHT_STEP_MS = 100;
 constexpr uint32_t LIGHT_ON_MS = 700;
 constexpr uint32_t LIGHT_PERIOD_MS = 3000;
+// A fresh start on USB: after this many failed asks in a row, but not more
+// often than the gap, so a Pi that is simply down is not answered with a
+// restart every minute and a half; and once a day regardless.
+constexpr uint32_t FRESH_START_AFTER_FAILURES = 3;
+constexpr time_t FRESH_START_GAP_SECONDS = 60 * 60;
+constexpr uint32_t USB_FRESH_START_MS = 24UL * 60 * 60 * 1000;
+// Wide enough for the notice screen's line.
+constexpr size_t PROBLEM_CHARS = 40;
 // Anything ever set by the Pi's Date header is after this.
 constexpr time_t CLOCK_SET = 1700000000;
 
@@ -104,6 +121,8 @@ RTC_DATA_ATTR bool rtcProblemShown = false;
 RTC_DATA_ATTR bool rtcEmptyShown = false;
 RTC_DATA_ATTR uint8_t rtcBssid[6] = {0};
 RTC_DATA_ATTR int32_t rtcChannel = 0;
+RTC_DATA_ATTR bool rtcFreshStarted = false;
+RTC_DATA_ATTR time_t rtcLastFreshStart = 0;
 
 Config config;
 Preferences prefs;
@@ -111,6 +130,7 @@ String serialLine;
 String lastProblem;
 uint32_t nextFetchAt = 0;
 uint32_t nextPowerCheckAt = 0;
+uint32_t failuresInARow = 0;
 bool usbPower = false;
 
 enum class Outcome { Updated, Unchanged, Failed };
@@ -433,7 +453,14 @@ Outcome fetch(uint32_t waitSeconds) {
     if (status == 401) {
       lastProblem = "The display key was refused";
     } else if (status < 0) {
-      lastProblem = "No answer: " + HTTPClient::errorToString(status);
+      // "Connection refused" is all HTTPClient knows; the TLS layer knows why.
+      char reason[96] = "";
+      if (tls.lastError(reason, sizeof(reason)) != 0 && reason[0]) {
+        lastProblem = "TLS: " + String(reason);
+      } else {
+        lastProblem = "No answer: " + HTTPClient::errorToString(status);
+      }
+      if (lastProblem.length() > PROBLEM_CHARS) lastProblem = lastProblem.substring(0, PROBLEM_CHARS);
     } else {
       lastProblem = "Nobo answered " + String(status);
     }
@@ -504,6 +531,7 @@ Outcome refresh(uint32_t waitSeconds = 0) {
   JsonDocument doc;
   doc["fetched"] = "failed";
   doc["problem"] = lastProblem;
+  doc["largest_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   serializeJson(doc, Serial);
   Serial.println();
   // A first failure is not news: Wi-Fi blinks. Half an hour of them is, or
@@ -547,6 +575,10 @@ void status() {
   doc["height"] = M5.Display.height();
   doc["last_success"] = rtcEverSucceeded ? formatTime(rtcLastSuccess) : "";
   doc["problem"] = lastProblem;
+  doc["uptime_s"] = millis() / 1000;
+  doc["free_heap"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  doc["largest_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  doc["last_fresh_start"] = rtcFreshStarted ? formatTime(rtcLastFreshStart) : "";
   serializeJson(doc, Serial);
   Serial.println();
 }
@@ -650,6 +682,20 @@ void pollSerial() {
   esp_deep_sleep_start();
 }
 
+// A deep sleep of a second: everything in RAM starts clean, and the panel,
+// the clock and RTC memory (the ETag, the last success) carry on as after any
+// battery wake. Used only on USB, where the board would otherwise never sleep.
+[[noreturn]] void freshStart(const char *why) {
+  rtcFreshStarted = true;
+  rtcLastFreshStart = time(nullptr);
+  Serial.printf("{\"fresh_start\":\"%s\"}\n", why);
+  sleepFor(1);
+}
+
+bool freshStartAllowed() {
+  return !rtcFreshStarted || time(nullptr) - rtcLastFreshStart >= FRESH_START_GAP_SECONDS;
+}
+
 bool anyButton() {
   M5.update();
   return M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed();
@@ -666,6 +712,9 @@ void listen(uint32_t ms) {
 }  // namespace
 
 void setup() {
+  // Hand the buttons back from the sleep's RTC pull-ups to ordinary GPIO, or
+  // they cannot be read after a wake that stays awake (on USB).
+  for (gpio_num_t pin : BUTTONS) rtc_gpio_deinit(pin);
   Serial.setRxBufferSize(8192);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;
@@ -733,6 +782,9 @@ void loop() {
     bool held = millis() - asked >= USB_WAIT_SECONDS * 1000 / 2;
     bool again = outcome == Outcome::Updated || (outcome == Outcome::Unchanged && held);
     nextFetchAt = millis() + (again ? 0 : config.usbSeconds * 1000);
+    failuresInARow = outcome == Outcome::Failed ? failuresInARow + 1 : 0;
+    if (failuresInARow >= FRESH_START_AFTER_FAILURES && freshStartAllowed()) freshStart("failures");
+    if (outcome != Outcome::Failed && millis() >= USB_FRESH_START_MS) freshStart("daily");
   }
   if ((int32_t)(millis() - nextPowerCheckAt) >= 0) {
     nextPowerCheckAt = millis() + POWER_CHECK_MS;
