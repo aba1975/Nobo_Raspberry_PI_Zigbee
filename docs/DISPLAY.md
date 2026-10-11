@@ -251,3 +251,7 @@ reported green, level 18, lights running, over serial.
 1.3.0 then ran on USB from 5 to 10 October 2026 before failing as described
 under "On USB power". That the 1.3.1 fresh start cures it is reasoned from the
 symptom, not proven: the heap was not measured before it failed.
+1.3.1 was flashed on 11 October 2026; just after boot it reported 264 KB of
+internal heap free with a largest block of 254 KB, and the Pi logged its
+`200` and held `304`s again. The fresh start itself has not yet been seen to
+fire.
