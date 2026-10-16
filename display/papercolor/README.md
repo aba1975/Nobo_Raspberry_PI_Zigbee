@@ -51,6 +51,7 @@ Other commands:
 ```bash
 python provision.py --port … status            # its settings, never its secrets
 python provision.py --port … refresh           # fetch and redraw now
+python provision.py --port … clean             # white, then the picture 3 min later
 python provision.py --port … forget            # wipe everything, back to "Set me up"
 python provision.py --port … --keep-key --battery-minutes 30   # change one thing
 ```

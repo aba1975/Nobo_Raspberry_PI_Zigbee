@@ -14,6 +14,7 @@ are in NOBO_WIFI_PASSWORD and NOBO_DISPLAY_KEY. Neither is ever printed.
 
     python provision.py --port ... status     # what the display has, minus secrets
     python provision.py --port ... refresh    # fetch and redraw now
+    python provision.py --port ... clean      # white, then the picture 3 min later
     python provision.py --port ... forget     # wipe it, back to "Set me up"
 
 Needs pyserial (pip install pyserial; PlatformIO already has it).
@@ -104,7 +105,7 @@ def main() -> None:
     parser.add_argument("--usb-seconds", type=int, help="seconds to wait after a failed fetch on USB power (15-3600)")
     parser.add_argument("--rotation", type=int, choices=[-1, 0, 1, 2, 3], help="-1 keeps the panel portrait")
     parser.add_argument("--tz", help="POSIX time zone, default Central European")
-    parser.add_argument("command", nargs="?", default="config", choices=["config", "status", "refresh", "forget"])
+    parser.add_argument("command", nargs="?", default="config", choices=["config", "status", "refresh", "clean", "forget"])
     args = parser.parse_args()
 
     port = open_port(args.port)

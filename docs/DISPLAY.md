@@ -126,6 +126,19 @@ interrupt catches it: the lights flash white once at the moment of the press
 (unless they are off), and the fetch follows when the held answer returns, so
 the redraw begins within about 25 seconds and takes 20–35 more.
 
+The panel is never refreshed twice within **three minutes** (since 1.3.3).
+E Ink asks for that rest between refreshes of a Spectra 6 panel, and colours
+wash out without it — green first. On 16 October 2026, after about fifteen
+refreshes in an hour of flashing and testing, the "All closed" band no longer
+looked green, although every pixel the Pi sent was the panel's own green ink.
+A picture that arrives sooner is still fetched, and the lights follow it at
+once; it is kept and drawn when the three minutes are up, and the next ask is
+held no longer than that. A door opened and closed within a minute is
+therefore drawn closed up to three minutes after it was drawn open. On
+battery, wakes are at least two minutes apart, so nothing is kept back there.
+A serial `clean` clears the panel to white and draws the picture three minutes
+later, for a panel whose colours have washed out.
+
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
 every ask: it opened the connection and closed it 25 ms later without sending

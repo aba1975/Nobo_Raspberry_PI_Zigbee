@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.2"
+#define FIRMWARE_VERSION "1.3.3"
 
 namespace {
 
@@ -60,6 +60,10 @@ constexpr uint32_t HTTP_TIMEOUT_MS = 20000;
 // On USB the Pi holds an ask open this long while nothing changes. Below the
 // Pi's own cap of 30 s, and the HTTP timeout is raised by it.
 constexpr uint32_t USB_WAIT_SECONDS = 25;
+// The panel's colours wash out if it is refreshed again too soon: E Ink asks
+// for at least three minutes between refreshes of a Spectra 6 panel. Green
+// goes first. A newer picture than that waits; the lights do not.
+constexpr uint32_t MIN_REFRESH_GAP_MS = 180000;
 constexpr uint32_t MIN_BATTERY_MINUTES = 2;
 constexpr uint32_t MAX_BATTERY_MINUTES = 240;
 constexpr size_t MAX_PICTURE_BYTES = 256 * 1024;
@@ -140,7 +144,7 @@ uint32_t nextPowerCheckAt = 0;
 uint32_t failuresInARow = 0;
 bool usbPower = false;
 
-enum class Outcome { Updated, Unchanged, Failed };
+enum class Outcome { Updated, Deferred, Unchanged, Failed };
 
 enum class Light : uint8_t { Off, Green, Red, Blue };
 // Written by the loop, read by the light task; a byte is written whole.
@@ -192,9 +196,39 @@ void orient() {
   }
 }
 
+// When the panel last refreshed, since this boot. On battery every wake is a
+// boot, and wakes are at least two minutes apart anyway.
+bool refreshedThisBoot = false;
+uint32_t lastRefreshMs = 0;
+
 void showPanel() {
   M5.Display.display();
   M5.Display.waitDisplay();
+  refreshedThisBoot = true;
+  lastRefreshMs = millis();
+}
+
+bool panelRested() {
+  return !refreshedThisBoot || millis() - lastRefreshMs >= MIN_REFRESH_GAP_MS;
+}
+
+// A picture that came too soon after the last refresh, kept until the panel
+// has rested. Its ETag is already in rtcEtag, so the Pi holds asks against it.
+uint8_t *pendingPicture = nullptr;
+size_t pendingLength = 0;
+
+bool drawPicture(uint8_t *picture, size_t length) {
+  M5.Display.startWrite();
+  bool drawn = M5.Display.drawPng(picture, length, 0, 0);
+  M5.Display.endWrite();
+  if (drawn) showPanel();
+  return drawn;
+}
+
+void dropPending() {
+  free(pendingPicture);
+  pendingPicture = nullptr;
+  pendingLength = 0;
 }
 
 String formatTime(time_t when) {
@@ -527,17 +561,32 @@ Outcome fetch(uint32_t waitSeconds) {
     return Outcome::Failed;
   }
 
-  M5.Display.startWrite();
-  bool drawn = M5.Display.drawPng(picture, length, 0, 0);
-  M5.Display.endWrite();
+  dropPending();
+  // Only on USB: a battery wake goes back to sleep, and would never draw it.
+  if (usbPower && !panelRested()) {
+    pendingPicture = picture;
+    pendingLength = length;
+    strlcpy(rtcEtag, etag.c_str(), sizeof(rtcEtag));
+    return Outcome::Deferred;
+  }
+  bool drawn = drawPicture(picture, length);
   free(picture);
   if (!drawn) {
     lastProblem = "The picture could not be read";
     return Outcome::Failed;
   }
-  showPanel();
   strlcpy(rtcEtag, etag.c_str(), sizeof(rtcEtag));
   return Outcome::Updated;
+}
+
+// Draws a picture that was kept back, once the panel has rested.
+void drawPendingIfRested() {
+  if (!pendingPicture || !panelRested()) return;
+  bool drawn = drawPicture(pendingPicture, pendingLength);
+  dropPending();
+  // Unreadable: forget its ETag, so the Pi sends it again.
+  if (!drawn) rtcEtag[0] = '\0';
+  Serial.printf("{\"drew\":\"%s\"}\n", drawn ? "deferred" : "failed");
 }
 
 // One ask, and what the panel should show after it. asked: a button (or the
@@ -551,7 +600,9 @@ Outcome refresh(uint32_t waitSeconds = 0, bool asked = false) {
     rtcEverSucceeded = true;
     rtcProblemShown = false;
     lastProblem = "";
-    Serial.printf("{\"fetched\":\"%s\"}\n", outcome == Outcome::Updated ? "updated" : "unchanged");
+    Serial.printf("{\"fetched\":\"%s\"}\n", outcome == Outcome::Updated    ? "updated"
+                                           : outcome == Outcome::Deferred ? "deferred"
+                                                                          : "unchanged");
     return outcome;
   }
   JsonDocument doc;
@@ -661,6 +712,15 @@ void handleLine(const String &line) {
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
     buttonAsked = true;
+    Serial.println("{\"ok\":true}");
+  } else if (!strcmp(cmd, "clean")) {
+    // White, then the picture once the panel has rested: a full clear for a
+    // panel whose colours have washed out.
+    dropPending();
+    M5.Display.fillScreen(TFT_WHITE);
+    showPanel();
+    rtcEtag[0] = '\0';
+    nextFetchAt = millis();
     Serial.println("{\"ok\":true}");
   } else if (!strcmp(cmd, "light")) {
     // For checking the LEDs by eye; the Pi's next answer replaces it.
@@ -816,16 +876,24 @@ void loop() {
     buttonAsked = true;
     lightAck = true;
   }
+  drawPendingIfRested();
   if ((int32_t)(millis() - nextFetchAt) >= 0) {
     uint32_t asked = millis();
     bool pressed = buttonAsked;
     buttonAsked = false;
-    Outcome outcome = refresh(USB_WAIT_SECONDS, pressed);
+    // With a picture waiting, hold no longer than the panel has left to rest.
+    uint32_t wait = USB_WAIT_SECONDS;
+    if (pendingPicture) {
+      uint32_t left = (MIN_REFRESH_GAP_MS - (millis() - lastRefreshMs)) / 1000 + 1;
+      if (left < wait) wait = left;
+    }
+    Outcome outcome = refresh(wait, pressed);
     // Ask again at once, so the next change is caught as it happens. Not
     // after a failure, nor after a 304 that came back without waiting (a Pi
     // that does not hold answers open), or it would be asked in a tight loop.
-    bool held = millis() - asked >= USB_WAIT_SECONDS * 1000 / 2;
-    bool again = outcome == Outcome::Updated || (outcome == Outcome::Unchanged && held);
+    bool held = millis() - asked >= wait * 1000 / 2;
+    bool again = outcome == Outcome::Updated || outcome == Outcome::Deferred ||
+                 (outcome == Outcome::Unchanged && held);
     nextFetchAt = millis() + (again ? 0 : config.usbSeconds * 1000);
     failuresInARow = outcome == Outcome::Failed ? failuresInARow + 1 : 0;
     if (failuresInARow >= FRESH_START_AFTER_FAILURES && freshStartAllowed()) freshStart("failures");
