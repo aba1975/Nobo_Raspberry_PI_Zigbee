@@ -311,6 +311,19 @@ address in your router if this keeps happening.
 Pi. Zigbee reaches further with a mains-powered Zigbee device partway between
 as a repeater — an IKEA smart plug works.
 
+**On Wi-Fi, the page or the wall display stops answering for a while, then
+comes back by itself.** The Pi carries on working; its Wi-Fi has gone into
+power save and stopped hearing the network. Turn power save off for good:
+
+```
+sudo apt-get install -y iw
+sudo cp /opt/nobo-control/deploy/systemd/wifi-powersave-off.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now wifi-powersave-off.timer
+```
+
+`iw dev wlan0 get power_save` should then say `off`. Not needed with a cable.
+
 **I have forgotten the web password.**
 
 ```

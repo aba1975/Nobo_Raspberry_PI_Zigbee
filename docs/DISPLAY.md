@@ -119,8 +119,12 @@ unchanged `304` is followed by the next ask at once, so an idle display costs
 two requests a minute. After a failure it tries again in `usb_seconds` (30).
 A `304` that comes back without waiting — a Pi too old to hold answers — is
 also followed by `usb_seconds`, so it never asks in a tight loop. The buttons
-fetch at once and always redraw; during a held ask a press is noticed when
-the answer comes.
+fetch at once and always redraw. An idle display spends nearly all its time
+inside a held ask, and before 1.3.2 the buttons were only read between asks,
+so a short press was usually lost and a press looked dead. Since 1.3.2 an
+interrupt catches it: the lights flash white once at the moment of the press
+(unless they are off), and the fetch follows when the held answer returns, so
+the redraw begins within about 25 seconds and takes 20–35 more.
 
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
@@ -206,7 +210,16 @@ A single failed wake leaves the last picture: Wi-Fi blinks. Once there has
 been no successful fetch for **30 minutes**, or none at all since it was
 powered on, it draws **Not up to date**, with when it last succeeded and why
 it failed. A screen that says "All closed" must never quietly be hours old.
-The next success redraws the real picture.
+The next success redraws the real picture. A button press that fails again
+redraws the notice with **Tried again** and the time (since 1.3.2), so the
+press is seen to have done something; before that the notice was drawn once
+and a press while the Pi was away changed nothing on the screen.
+
+On 16 October 2026 the demo Pi, on Wi-Fi, heard nothing from the LAN from
+13:16 to 14:21 while it kept running — its health checks passed and it could
+not reach Verisure — and the display rightly said Not up to date. The Pi's
+Wi-Fi was in power save; see "When something is wrong" in
+[INSTALL.md](INSTALL.md) for turning it off. On a cable this does not arise.
 
 At **5 %** battery it draws a "charge me" screen once and checks again hourly,
 so it does not die showing a stale "All closed".
@@ -255,3 +268,10 @@ symptom, not proven: the heap was not measured before it failed.
 internal heap free with a largest block of 254 KB, and the Pi logged its
 `200` and held `304`s again. The fresh start itself has not yet been seen to
 fire.
+
+1.3.2 was flashed on 16 October 2026. Over serial: a `refresh` (the path a
+button takes) with the address pointed at a closed port failed with "TLS:
+ERROR - Generic error" and took the Tried again path; with the address
+restored it fetched and redrew; and for three minutes afterwards it sat on
+held `304`s, so the new interrupt does not fire by itself. A real press — the
+white flash and the redraw — has **not** yet been watched.

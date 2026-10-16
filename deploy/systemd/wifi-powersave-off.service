@@ -1,0 +1,13 @@
+# Keeps the Pi's Wi-Fi out of power save, which on the Pi's brcmfmac radio lets
+# it go deaf to the LAN while it carries on running: on 16 October 2026 the
+# demo Pi answered nothing for an hour while its own health checks passed.
+# The driver turns power save back on after every reconnect, hence the timer.
+# Needs iw (sudo apt-get install -y iw). Installing: see docs/INSTALL.md.
+[Unit]
+Description=Turn Wi-Fi power save off on wlan0
+After=sys-subsystem-net-devices-wlan0.device
+ConditionPathExists=/sys/class/net/wlan0
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'if iw dev wlan0 get power_save | grep -q "Power save: on"; then iw dev wlan0 set power_save off; fi'

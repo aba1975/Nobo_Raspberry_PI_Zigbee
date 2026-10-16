@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.1"
+#define FIRMWARE_VERSION "1.3.2"
 
 namespace {
 
@@ -81,6 +81,7 @@ constexpr int LIGHT_COUNT = 2;
 constexpr uint8_t DEFAULT_LIGHT_LEVEL = 18;
 constexpr uint32_t LIGHT_STEP_MS = 100;
 constexpr uint32_t LIGHT_ON_MS = 700;
+constexpr uint32_t LIGHT_ACK_MS = 250;
 constexpr uint32_t LIGHT_PERIOD_MS = 3000;
 // A fresh start on USB: after this many failed asks in a row, but not more
 // often than the gap, so a Pi that is simply down is not answered with a
@@ -129,6 +130,12 @@ Preferences prefs;
 String serialLine;
 String lastProblem;
 uint32_t nextFetchAt = 0;
+bool buttonAsked = false;
+// Set from an interrupt: on USB the loop spends nearly all its time inside an
+// ask the Pi holds open, and a press over before it returns would be missed.
+volatile bool buttonInterrupt = false;
+// Tells the light task to flash once, so a press is seen to have landed.
+volatile bool lightAck = false;
 uint32_t nextPowerCheckAt = 0;
 uint32_t failuresInARow = 0;
 bool usbPower = false;
@@ -230,14 +237,21 @@ void drawNotice(uint32_t band, const char *title, const String &lines, const Str
   showPanel();
 }
 
-void drawProblem() {
+// asked: somebody pressed a button, so say that it was tried, or the press
+// looks as if it did nothing.
+void drawProblem(bool asked) {
   String last = rtcEverSucceeded ? formatTime(rtcLastSuccess) : String("not since power on");
   if (!last.length()) last = "unknown";
+  String tried = "";
+  if (asked) {
+    tried = formatTime(time(nullptr));
+    tried = "Tried again: " + (tried.length() ? tried : String("just now")) + "\n";
+  }
   drawNotice(ink(191, 0, 0), "Not up to date",
              "This screen cannot reach Nobo,\n"
              "so doors and windows may have\n"
              "changed since it last could.\n\n"
-             "Last updated: " + last + "\n" + lastProblem,
+             "Last updated: " + last + "\n" + tried + lastProblem,
              "Press a button to try again");
 }
 
@@ -368,7 +382,7 @@ void showLight(uint8_t r, uint8_t g, uint8_t b) {
 bool holdLight(uint32_t ms, Light was, uint8_t level) {
   for (uint32_t waited = 0; waited < ms; waited += LIGHT_STEP_MS) {
     vTaskDelay(pdMS_TO_TICKS(LIGHT_STEP_MS));
-    if (light != was || lightLevel != level) return false;
+    if (light != was || lightLevel != level || lightAck) return false;
   }
   return true;
 }
@@ -379,6 +393,17 @@ void lightLoop(void *) {
   for (;;) {
     Light now = light;
     uint8_t level = lightLevel;
+    if (lightAck) {
+      lightAck = false;
+      // Not when the light is off: off may be the owner's choice.
+      if (now != Light::Off) {
+        showLight(level, level, level);
+        vTaskDelay(pdMS_TO_TICKS(LIGHT_ACK_MS));
+        showLight(0, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(LIGHT_ACK_MS));
+      }
+      continue;
+    }
     if (now == Light::Off) {
       showLight(0, 0, 0);
       holdLight(LIGHT_PERIOD_MS, now, level);
@@ -515,8 +540,9 @@ Outcome fetch(uint32_t waitSeconds) {
   return Outcome::Updated;
 }
 
-// One ask, and what the panel should show after it.
-Outcome refresh(uint32_t waitSeconds = 0) {
+// One ask, and what the panel should show after it. asked: a button (or the
+// serial refresh) prompted it, so a failure is drawn even if already shown.
+Outcome refresh(uint32_t waitSeconds = 0, bool asked = false) {
   if (!config.complete()) return Outcome::Failed;
   Outcome outcome = fetch(waitSeconds);
   time_t now = time(nullptr);
@@ -539,8 +565,8 @@ Outcome refresh(uint32_t waitSeconds = 0) {
   bool longGone = !rtcEverSucceeded ||
                   (rtcLastSuccess >= CLOCK_SET && now - rtcLastSuccess >= (time_t)STALE_AFTER_SECONDS);
   if (longGone) light = usbPower ? Light::Blue : Light::Off;
-  if (longGone && !rtcProblemShown) {
-    drawProblem();
+  if ((longGone && !rtcProblemShown) || asked) {
+    drawProblem(asked);
     rtcProblemShown = true;
     // Whatever the Pi says next must be drawn, even if it has not changed.
     rtcEtag[0] = '\0';
@@ -634,6 +660,7 @@ void handleLine(const String &line) {
   } else if (!strcmp(cmd, "refresh")) {
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
+    buttonAsked = true;
     Serial.println("{\"ok\":true}");
   } else if (!strcmp(cmd, "light")) {
     // For checking the LEDs by eye; the Pi's next answer replaces it.
@@ -696,9 +723,19 @@ bool freshStartAllowed() {
   return !rtcFreshStarted || time(nullptr) - rtcLastFreshStart >= FRESH_START_GAP_SECONDS;
 }
 
+void IRAM_ATTR onButton() {
+  buttonInterrupt = true;
+  lightAck = true;
+}
+
 bool anyButton() {
   M5.update();
-  return M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed();
+  bool pressed = M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed();
+  if (buttonInterrupt) {
+    buttonInterrupt = false;
+    pressed = true;
+  }
+  return pressed;
 }
 
 void listen(uint32_t ms) {
@@ -760,10 +797,14 @@ void setup() {
     // A moment to catch a provision.py that is waiting for the board, but
     // not on a timer wake: nothing is plugged in then, and every wake costs.
     if (cause != ESP_SLEEP_WAKEUP_TIMER) listen(1500);
-    refresh();
+    refresh(0, cause == ESP_SLEEP_WAKEUP_EXT1);
     sleepFor(config.batteryMinutes * 60);
   }
   startLights();
+  for (gpio_num_t pin : BUTTONS) {
+    pinMode(pin, INPUT_PULLUP);
+    attachInterrupt(pin, onButton, FALLING);
+  }
   nextFetchAt = millis();
 }
 
@@ -772,10 +813,14 @@ void loop() {
   if (anyButton()) {
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
+    buttonAsked = true;
+    lightAck = true;
   }
   if ((int32_t)(millis() - nextFetchAt) >= 0) {
     uint32_t asked = millis();
-    Outcome outcome = refresh(USB_WAIT_SECONDS);
+    bool pressed = buttonAsked;
+    buttonAsked = false;
+    Outcome outcome = refresh(USB_WAIT_SECONDS, pressed);
     // Ask again at once, so the next change is caught as it happens. Not
     // after a failure, nor after a 304 that came back without waiting (a Pi
     // that does not hold answers open), or it would be asked in a tight loop.
