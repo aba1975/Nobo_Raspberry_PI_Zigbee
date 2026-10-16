@@ -139,9 +139,17 @@ includes it. With it a refresh takes 15 s, and green looked right after the
 first one at 15:45. **But it was moss again after a redraw at 16:56**, with
 the same firmware, a full 15 s refresh, the panel no longer busy afterwards,
 5.25 V on USB and the Mac awake. So the driver was not the whole cause.
-Still to separate: the light it is looked at in (a reflective panel under a
-warm lamp in the evening makes green olive and red maroon), the panel's
-temperature, and wear of the panel itself. The chip's temperature (`chip_c`,
+The panel is new and the light had not changed. What the two moss
+redraws had in common is that each replaced a **red** band: a window was
+opened at 16:55 and closed at 16:56. Every green that looked right came after
+white (the `clean` cycle) or after green (a restart). Some red evidently stays
+behind, and red in green reads as moss — which also fits the first time, after
+an afternoon of opening and closing doors to test the lights. So since 1.3.5
+**every picture is drawn over white**: the panel is driven white, then the
+picture, two refreshes of 15 s back to back. A picture that cannot be decoded
+is found out before the white, so the old one stays. A change therefore takes
+30 s to appear rather than 15, and on battery costs two refreshes rather than
+one. The chip's temperature (`chip_c`,
 31–33 °C) ruled out the board running hot. `busy_after` in `status` is true
 if a refresh is ever cut short.
 
@@ -309,5 +317,8 @@ white flash and the redraw — has **not** yet been watched.
 first refresh took 15.0 s against 35.3 s for 1.3.3 on the same board ten
 minutes earlier, with the panel no longer busy afterwards, and the owner
 confirmed by eye that the "All closed" band was green again. At 17:01 it was
-moss again (see "On USB power"); the next step is to look at the six-ink card
-of a serial `clean` in daylight and under the room's lamp.
+moss again (see "On USB power"); 1.3.5 (white before every picture) was flashed at
+17:14. A window opened at 17:18:30 drew white then red, and the owner saw a
+good red; closed at 17:19:20, it drew white then green at 17:22:31, after the
+three-minute rest (the lights turned green at once). Whether that green looked
+right **has not yet been confirmed** by anyone looking at it.

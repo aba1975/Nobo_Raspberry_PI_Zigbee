@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.4"
+#define FIRMWARE_VERSION "1.3.5"
 
 namespace {
 
@@ -227,11 +227,23 @@ bool panelRested() {
 uint8_t *pendingPicture = nullptr;
 size_t pendingLength = 0;
 
-bool drawPicture(uint8_t *picture, size_t length) {
+bool decodePicture(uint8_t *picture, size_t length) {
   M5.Display.startWrite();
   bool drawn = M5.Display.drawPng(picture, length, 0, 0);
   M5.Display.endWrite();
-  if (drawn) showPanel();
+  return drawn;
+}
+
+// The panel is driven white before every picture. Drawn straight over a red
+// band, the green that replaced it came out moss (16 October 2026): some red
+// stays behind. Decoded once first, so a picture that cannot be read leaves
+// the old one in place rather than a white panel.
+bool drawPicture(uint8_t *picture, size_t length) {
+  if (!decodePicture(picture, length)) return false;
+  M5.Display.fillScreen(TFT_WHITE);
+  showPanel();
+  bool drawn = decodePicture(picture, length);
+  showPanel();
   return drawn;
 }
 
