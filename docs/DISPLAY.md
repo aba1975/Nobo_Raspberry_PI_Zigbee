@@ -126,20 +126,24 @@ interrupt catches it: the lights flash white once at the moment of the press
 (unless they are off), and the fetch follows when the held answer returns, so
 the redraw begins within about 25 seconds and takes about 15 more.
 
-**The cause of washed-out colours was the driver, not the panel.** On 16
+**Washed-out colours: one driver bug fixed, the cause still open.** On 16
 October 2026 the "All closed" band turned moss green, red came out maroon and
 blue darker, although every pixel the Pi sent was the panel's own ink; black,
 white and yellow were right. M5GFX up to 0.2.33 waits only 20 s for a refresh,
-then sends `POWER_OFF` while the panel is still refreshing. Timed on this board
-(`refresh_ms` in `status` and on serial, since 1.3.4), a refresh under that
-driver took 35 s and was cut off; the colour phases come last, so red, green
-and blue suffered and the others did not. M5GFX fixed it on its `develop`
-branch on 6 October 2026 (the refresh runs to the end by itself, and a
-controller left busy by a reset is reset). `platformio.ini` pins that commit
-until a release includes it. With it a refresh takes 15 s, and green was green
-again after the first one. The chip's temperature (`chip_c`, 32–33 °C) ruled
-out heat. `busy_after` in `status` is true if a refresh is ever cut short
-again.
+then sends `POWER_OFF` while the panel may still be refreshing; timed on this
+board (`refresh_ms` in `status` and on serial, since 1.3.4) a refresh under
+that driver took 35 s. M5GFX fixed this on its `develop` branch on 6 October
+2026 (the refresh runs to the end by itself, and a controller left busy by a
+reset is reset), and `platformio.ini` pins that commit until a release
+includes it. With it a refresh takes 15 s, and green looked right after the
+first one at 15:45. **But it was moss again after a redraw at 16:56**, with
+the same firmware, a full 15 s refresh, the panel no longer busy afterwards,
+5.25 V on USB and the Mac awake. So the driver was not the whole cause.
+Still to separate: the light it is looked at in (a reflective panel under a
+warm lamp in the evening makes green olive and red maroon), the panel's
+temperature, and wear of the panel itself. The chip's temperature (`chip_c`,
+31–33 °C) ruled out the board running hot. `busy_after` in `status` is true
+if a refresh is ever cut short.
 
 The panel is also never refreshed twice within **three minutes** (since
 1.3.3), which E Ink asks of a Spectra 6 panel. A picture that arrives sooner is
@@ -304,4 +308,6 @@ white flash and the redraw — has **not** yet been watched.
 1.3.4, built against M5GFX `develop`, was flashed on 16 October 2026. Its
 first refresh took 15.0 s against 35.3 s for 1.3.3 on the same board ten
 minutes earlier, with the panel no longer busy afterwards, and the owner
-confirmed by eye that the "All closed" band was green again.
+confirmed by eye that the "All closed" band was green again. At 17:01 it was
+moss again (see "On USB power"); the next step is to look at the six-ink card
+of a serial `clean` in daylight and under the room's lamp.
