@@ -320,5 +320,6 @@ confirmed by eye that the "All closed" band was green again. At 17:01 it was
 moss again (see "On USB power"); 1.3.5 (white before every picture) was flashed at
 17:14. A window opened at 17:18:30 drew white then red, and the owner saw a
 good red; closed at 17:19:20, it drew white then green at 17:22:31, after the
-three-minute rest (the lights turned green at once). Whether that green looked
-right **has not yet been confirmed** by anyone looking at it.
+three-minute rest (the lights turned green at once). The owner confirmed by eye
+that this green looked right: the red-to-green change that had come out moss
+twice that afternoon came out green over white.
