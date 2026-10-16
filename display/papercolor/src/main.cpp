@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.3"
+#define FIRMWARE_VERSION "1.3.4"
 
 namespace {
 
@@ -60,9 +60,8 @@ constexpr uint32_t HTTP_TIMEOUT_MS = 20000;
 // On USB the Pi holds an ask open this long while nothing changes. Below the
 // Pi's own cap of 30 s, and the HTTP timeout is raised by it.
 constexpr uint32_t USB_WAIT_SECONDS = 25;
-// The panel's colours wash out if it is refreshed again too soon: E Ink asks
-// for at least three minutes between refreshes of a Spectra 6 panel. Green
-// goes first. A newer picture than that waits; the lights do not.
+// E Ink asks for at least three minutes between refreshes of a Spectra 6
+// panel. A newer picture than that waits; the lights do not.
 constexpr uint32_t MIN_REFRESH_GAP_MS = 180000;
 constexpr uint32_t MIN_BATTERY_MINUTES = 2;
 constexpr uint32_t MAX_BATTERY_MINUTES = 240;
@@ -80,6 +79,9 @@ constexpr uint32_t SETUP_LISTEN_MS = 10 * 60 * 1000;
 // rather than through M5.Led: on this Arduino core (2.x, ESP-IDF 4.4)
 // M5Unified's LED bus is an empty stub that accepts colours and sends none.
 constexpr int LIGHT_PIN = 21;
+// The panel's BUSY line, low while a refresh is still running (M5GFX's own
+// pin for the PaperColor's ED2208).
+constexpr int PANEL_BUSY_PIN = 11;
 constexpr int LIGHT_COUNT = 2;
 // Until the Pi says otherwise, and for a Pi too old to say.
 constexpr uint8_t DEFAULT_LIGHT_LEVEL = 18;
@@ -201,9 +203,17 @@ void orient() {
 bool refreshedThisBoot = false;
 uint32_t lastRefreshMs = 0;
 
+uint32_t lastRefreshTookMs = 0;
+bool lastRefreshCutShort = false;
+
 void showPanel() {
+  uint32_t started = millis();
   M5.Display.display();
   M5.Display.waitDisplay();
+  lastRefreshTookMs = millis() - started;
+  lastRefreshCutShort = digitalRead(PANEL_BUSY_PIN) == LOW;
+  Serial.printf("{\"refresh_ms\":%lu,\"busy_after\":%s}\n", (unsigned long)lastRefreshTookMs,
+                lastRefreshCutShort ? "true" : "false");
   refreshedThisBoot = true;
   lastRefreshMs = millis();
 }
@@ -267,6 +277,29 @@ void drawNotice(uint32_t band, const char *title, const String &lines, const Str
   }
   M5.Display.drawFastHLine(18, h - 72, w - 36, black);
   M5.Display.drawString(foot, 18, h - 52);
+  M5.Display.endWrite();
+  showPanel();
+}
+
+// The six inks in bands, each named, to judge the panel's colours by eye.
+void drawInks() {
+  static const struct { uint8_t r, g, b; const char *name; } inks[] = {
+      {0, 0, 0, "Black"},      {255, 255, 255, "White"}, {255, 243, 56, "Yellow"},
+      {191, 0, 0, "Red"},      {100, 64, 255, "Blue"},   {67, 138, 28, "Green"},
+  };
+  const int w = M5.Display.width();
+  const int band = M5.Display.height() / 6;
+  M5.Display.startWrite();
+  M5.Display.setFont(&fonts::FreeSansBold18pt7b);
+  M5.Display.setTextDatum(middle_left);
+  for (int i = 0; i < 6; i++) {
+    uint32_t fill = ink(inks[i].r, inks[i].g, inks[i].b);
+    bool light = i == 1 || i == 2;
+    M5.Display.fillRect(0, i * band, w, band, fill);
+    M5.Display.setTextColor(light ? ink(0, 0, 0) : ink(255, 255, 255), fill);
+    M5.Display.drawString(inks[i].name, 18, i * band + band / 2);
+  }
+  M5.Display.drawRect(0, band, w, band, ink(0, 0, 0));
   M5.Display.endWrite();
   showPanel();
 }
@@ -654,6 +687,11 @@ void status() {
   doc["problem"] = lastProblem;
   doc["uptime_s"] = millis() / 1000;
   doc["free_heap"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  // The chip's own, not the panel's, but it sits by the panel's connector:
+  // a warm panel draws green towards yellow.
+  doc["chip_c"] = (int)roundf(temperatureRead());
+  doc["refresh_ms"] = lastRefreshTookMs;
+  doc["busy_after"] = lastRefreshCutShort;
   doc["largest_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   doc["last_fresh_start"] = rtcFreshStarted ? formatTime(rtcLastFreshStart) : "";
   serializeJson(doc, Serial);
@@ -714,11 +752,15 @@ void handleLine(const String &line) {
     buttonAsked = true;
     Serial.println("{\"ok\":true}");
   } else if (!strcmp(cmd, "clean")) {
-    // White, then the picture once the panel has rested: a full clear for a
-    // panel whose colours have washed out.
+    // For a panel whose colours have gone muddy, as after a refresh cut short
+    // by a reset: drive every pixel fully black, then fully white, then show
+    // the six inks side by side, and the picture once the panel has rested.
     dropPending();
+    M5.Display.fillScreen(TFT_BLACK);
+    showPanel();
     M5.Display.fillScreen(TFT_WHITE);
     showPanel();
+    drawInks();
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
     Serial.println("{\"ok\":true}");
@@ -819,6 +861,9 @@ void setup() {
   M5.begin(cfg);
   // Exact colours only: the Pi already drew in the panel's six inks.
   M5.Display.setEpdMode(epd_mode_t::epd_fastest);
+  // Refresh only in showPanel(), which times it; M5GFX would otherwise
+  // refresh at the end of every drawing transaction.
+  M5.Display.setAutoDisplay(false);
   loadConfig();
   orient();
   WiFi.mode(WIFI_STA);

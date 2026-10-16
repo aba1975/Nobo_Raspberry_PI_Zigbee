@@ -14,7 +14,7 @@ are in NOBO_WIFI_PASSWORD and NOBO_DISPLAY_KEY. Neither is ever printed.
 
     python provision.py --port ... status     # what the display has, minus secrets
     python provision.py --port ... refresh    # fetch and redraw now
-    python provision.py --port ... clean      # white, then the picture 3 min later
+    python provision.py --port ... clean      # black, white, six-ink test card, then the picture
     python provision.py --port ... forget     # wipe it, back to "Set me up"
 
 Needs pyserial (pip install pyserial; PlatformIO already has it).

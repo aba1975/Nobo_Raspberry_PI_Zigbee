@@ -124,20 +124,32 @@ inside a held ask, and before 1.3.2 the buttons were only read between asks,
 so a short press was usually lost and a press looked dead. Since 1.3.2 an
 interrupt catches it: the lights flash white once at the moment of the press
 (unless they are off), and the fetch follows when the held answer returns, so
-the redraw begins within about 25 seconds and takes 20–35 more.
+the redraw begins within about 25 seconds and takes about 15 more.
 
-The panel is never refreshed twice within **three minutes** (since 1.3.3).
-E Ink asks for that rest between refreshes of a Spectra 6 panel, and colours
-wash out without it — green first. On 16 October 2026, after about fifteen
-refreshes in an hour of flashing and testing, the "All closed" band no longer
-looked green, although every pixel the Pi sent was the panel's own green ink.
-A picture that arrives sooner is still fetched, and the lights follow it at
-once; it is kept and drawn when the three minutes are up, and the next ask is
-held no longer than that. A door opened and closed within a minute is
-therefore drawn closed up to three minutes after it was drawn open. On
-battery, wakes are at least two minutes apart, so nothing is kept back there.
-A serial `clean` clears the panel to white and draws the picture three minutes
-later, for a panel whose colours have washed out.
+**The cause of washed-out colours was the driver, not the panel.** On 16
+October 2026 the "All closed" band turned moss green, red came out maroon and
+blue darker, although every pixel the Pi sent was the panel's own ink; black,
+white and yellow were right. M5GFX up to 0.2.33 waits only 20 s for a refresh,
+then sends `POWER_OFF` while the panel is still refreshing. Timed on this board
+(`refresh_ms` in `status` and on serial, since 1.3.4), a refresh under that
+driver took 35 s and was cut off; the colour phases come last, so red, green
+and blue suffered and the others did not. M5GFX fixed it on its `develop`
+branch on 6 October 2026 (the refresh runs to the end by itself, and a
+controller left busy by a reset is reset). `platformio.ini` pins that commit
+until a release includes it. With it a refresh takes 15 s, and green was green
+again after the first one. The chip's temperature (`chip_c`, 32–33 °C) ruled
+out heat. `busy_after` in `status` is true if a refresh is ever cut short
+again.
+
+The panel is also never refreshed twice within **three minutes** (since
+1.3.3), which E Ink asks of a Spectra 6 panel. A picture that arrives sooner is
+still fetched, and the lights follow it at once; it is kept and drawn when the
+three minutes are up, and the next ask is held no longer than that. A door
+opened and closed within a minute is therefore drawn closed up to three
+minutes after it was drawn open. On battery, wakes are at least two minutes
+apart, so nothing is kept back there. A serial `clean` drives the whole panel
+black, then white, then shows the six inks side by side with their names, and
+draws the picture three minutes later, to judge the colours by eye.
 
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
@@ -288,3 +300,8 @@ ERROR - Generic error" and took the Tried again path; with the address
 restored it fetched and redrew; and for three minutes afterwards it sat on
 held `304`s, so the new interrupt does not fire by itself. A real press — the
 white flash and the redraw — has **not** yet been watched.
+
+1.3.4, built against M5GFX `develop`, was flashed on 16 October 2026. Its
+first refresh took 15.0 s against 35.3 s for 1.3.3 on the same board ten
+minutes earlier, with the panel no longer busy afterwards, and the owner
+confirmed by eye that the "All closed" band was green again.
