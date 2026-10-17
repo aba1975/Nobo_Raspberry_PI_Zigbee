@@ -15,6 +15,8 @@ are in NOBO_WIFI_PASSWORD and NOBO_DISPLAY_KEY. Neither is ever printed.
     python provision.py --port ... status     # what the display has, minus secrets
     python provision.py --port ... refresh    # fetch and redraw now
     python provision.py --port ... clean      # black, white, six-ink test card, then the picture
+    python provision.py --port ... cycle --loops 5   # black, white, red, yellow, blue, green, 3 min apart
+    python provision.py --port ... cycle --loops 0   # stop a cycle (so does the button)
     python provision.py --port ... forget     # wipe it, back to "Set me up"
 
 Needs pyserial (pip install pyserial; PlatformIO already has it).
@@ -105,13 +107,19 @@ def main() -> None:
     parser.add_argument("--usb-seconds", type=int, help="seconds to wait after a failed fetch on USB power (15-3600)")
     parser.add_argument("--rotation", type=int, choices=[-1, 0, 1, 2, 3], help="-1 keeps the panel portrait")
     parser.add_argument("--tz", help="POSIX time zone, default Central European")
-    parser.add_argument("command", nargs="?", default="config", choices=["config", "status", "refresh", "clean", "forget"])
+    parser.add_argument("--loops", type=int, default=5, help="cycle: times through the six colours (1-10, 0 stops)")
+    parser.add_argument("command", nargs="?", default="config", choices=["config", "status", "refresh", "clean", "cycle", "forget"])
     args = parser.parse_args()
 
     port = open_port(args.port)
     try:
         if args.command != "config":
-            answer = ask(port, {"cmd": args.command})
+            request: dict = {"cmd": args.command}
+            if args.command == "cycle":
+                if not 0 <= args.loops <= 10:
+                    raise SystemExit("--loops must be 0 to 10.")
+                request["loops"] = args.loops
+            answer = ask(port, request)
             print(json.dumps(answer, indent=2))
             return
 

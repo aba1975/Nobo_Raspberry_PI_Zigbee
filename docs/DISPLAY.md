@@ -189,6 +189,13 @@ minutes after it was drawn open. On battery, wakes are at least two minutes
 apart, so nothing is kept back there. A serial `clean` drives the whole panel
 black, then white, then shows the six inks side by side with their names, and
 draws the picture three minutes later, to judge the colours by eye.
+A serial `cycle` (since 1.3.6, `--loops` 1–10, default 5) drives the whole
+panel black, white, red, yellow, blue and green in turn, that many times, to
+work loose ink particles that have stuck. It keeps the three-minute rest
+between colours, so five loops take an hour and a half. It runs alongside the
+display's usual work: the lights follow the Pi, and a picture that arrives
+meanwhile is kept until the end. A button press or `--loops 0` stops it, and
+the picture is drawn once the panel has rested.
 
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed

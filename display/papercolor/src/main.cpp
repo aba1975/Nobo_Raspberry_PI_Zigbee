@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.5"
+#define FIRMWARE_VERSION "1.3.6"
 
 namespace {
 
@@ -245,6 +245,39 @@ bool drawPicture(uint8_t *picture, size_t length) {
   bool drawn = decodePicture(picture, length);
   showPanel();
   return drawn;
+}
+
+// The serial `cycle`: the whole panel black, white, red, yellow, blue and
+// green in turn, a number of times, to work ink particles loose. One colour
+// per three-minute rest, as E Ink asks, so it runs alongside everything else
+// rather than blocking: five loops take an hour and a half.
+constexpr uint8_t MAX_CYCLE_LOOPS = 10;
+uint16_t cycleStep = 0;
+uint16_t cycleSteps = 0;
+
+bool cycling() { return cycleStep < cycleSteps; }
+
+void stopCycle(const char *why) {
+  if (!cycling()) return;
+  Serial.printf("{\"cycle\":\"%s\",\"done\":%u,\"of\":%u}\n", why, cycleStep, cycleSteps);
+  cycleStep = cycleSteps = 0;
+  // The picture comes back, drawn once the panel has rested.
+  rtcEtag[0] = '\0';
+  nextFetchAt = millis();
+}
+
+void cycleIfRested() {
+  static const struct { uint8_t r, g, b; const char *name; } inks[] = {
+      {0, 0, 0, "black"},  {255, 255, 255, "white"}, {191, 0, 0, "red"},
+      {255, 243, 56, "yellow"}, {100, 64, 255, "blue"}, {67, 138, 28, "green"},
+  };
+  if (!cycling() || !panelRested()) return;
+  const auto &next = inks[cycleStep % 6];
+  M5.Display.fillScreen(ink(next.r, next.g, next.b));
+  showPanel();
+  cycleStep++;
+  Serial.printf("{\"cycle\":\"%s\",\"step\":%u,\"of\":%u}\n", next.name, cycleStep, cycleSteps);
+  if (!cycling()) stopCycle("finished");
 }
 
 void dropPending() {
@@ -608,7 +641,7 @@ Outcome fetch(uint32_t waitSeconds) {
 
   dropPending();
   // Only on USB: a battery wake goes back to sleep, and would never draw it.
-  if (usbPower && !panelRested()) {
+  if (usbPower && (!panelRested() || cycling())) {
     pendingPicture = picture;
     pendingLength = length;
     strlcpy(rtcEtag, etag.c_str(), sizeof(rtcEtag));
@@ -626,7 +659,7 @@ Outcome fetch(uint32_t waitSeconds) {
 
 // Draws a picture that was kept back, once the panel has rested.
 void drawPendingIfRested() {
-  if (!pendingPicture || !panelRested()) return;
+  if (!pendingPicture || !panelRested() || cycling()) return;
   bool drawn = drawPicture(pendingPicture, pendingLength);
   dropPending();
   // Unreadable: forget its ETag, so the Pi sends it again.
@@ -704,6 +737,10 @@ void status() {
   doc["chip_c"] = (int)roundf(temperatureRead());
   doc["refresh_ms"] = lastRefreshTookMs;
   doc["busy_after"] = lastRefreshCutShort;
+  if (cycling()) {
+    doc["cycle_step"] = cycleStep;
+    doc["cycle_of"] = cycleSteps;
+  }
   doc["largest_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   doc["last_fresh_start"] = rtcFreshStarted ? formatTime(rtcLastFreshStart) : "";
   serializeJson(doc, Serial);
@@ -776,6 +813,21 @@ void handleLine(const String &line) {
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
     Serial.println("{\"ok\":true}");
+  } else if (!strcmp(cmd, "cycle")) {
+    // loops 0 stops a cycle under way.
+    int loops = in["loops"] | 5;
+    if (loops < 0 || loops > MAX_CYCLE_LOOPS) {
+      Serial.println("{\"ok\":false,\"error\":\"loops must be 0 to 10\"}");
+    } else if (loops == 0) {
+      stopCycle("stopped");
+      Serial.println("{\"ok\":true}");
+    } else {
+      dropPending();
+      cycleStep = 0;
+      cycleSteps = loops * 6;
+      Serial.printf("{\"ok\":true,\"steps\":%u,\"minutes\":%lu}\n", cycleSteps,
+                    (unsigned long)(cycleSteps * MIN_REFRESH_GAP_MS / 60000));
+    }
   } else if (!strcmp(cmd, "light")) {
     // For checking the LEDs by eye; the Pi's next answer replaces it.
     if (in["level"].is<int>()) takeLightLevel(String(in["level"].as<int>()));
@@ -928,11 +980,13 @@ void setup() {
 void loop() {
   pollSerial();
   if (anyButton()) {
+    stopCycle("button");
     rtcEtag[0] = '\0';
     nextFetchAt = millis();
     buttonAsked = true;
     lightAck = true;
   }
+  cycleIfRested();
   drawPendingIfRested();
   if ((int32_t)(millis() - nextFetchAt) >= 0) {
     uint32_t asked = millis();

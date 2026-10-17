@@ -52,6 +52,7 @@ Other commands:
 python provision.py --port … status            # its settings, never its secrets
 python provision.py --port … refresh           # fetch and redraw now
 python provision.py --port … clean             # black, white, a six-ink test card, then the picture
+python provision.py --port … cycle --loops 5   # black, white, red, yellow, blue, green, 3 min apart; 0 or the button stops
 python provision.py --port … forget            # wipe everything, back to "Set me up"
 python provision.py --port … --keep-key --battery-minutes 30   # change one thing
 ```
