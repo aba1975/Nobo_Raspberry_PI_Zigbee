@@ -166,6 +166,20 @@ the only way to make it darker. At reading distance the dots blend into a
 deeper green. This is a server change; the firmware is untouched. `DESIGN_VERSION`
 went to 2 with it, so the darker band reached the display by itself.
 
+**Not a change in M5GFX's colour handling.** The firmware asked for
+`M5GFX@^0.2.17`, so builds before 16 October took 0.2.32 and the builds of
+16 October took 0.2.33 (13 October). Between those two releases nothing in the
+ED2208 driver changed: 0.2.33 touched SPI transfers from PSRAM, which would
+scatter wrong pixels rather than tint a whole band, and USB power on other
+boards. The driver's colour table last changed in May 2026. The driver also
+never sets the panel's temperature (no `0x41`/`0xE5` in its init), so the panel
+picks its waveform from its own thermometer. The same firmware and the same
+picture gave green at 17:22 and moss at 16:56 on 16 October, so the cause
+varies from one refresh to the next. A firmware or library bug would give the
+same result for the same input. The most likely remaining causes are the
+panel's temperature reading and its power supply during a refresh. Neither
+has been measured.
+
 The panel is also never refreshed twice within **three minutes** (since
 1.3.3), which E Ink asks of a Spectra 6 panel. A picture that arrives sooner is
 still fetched, and the lights follow it at once; it is kept and drawn when the
