@@ -153,6 +153,16 @@ one. The chip's temperature (`chip_c`,
 31–33 °C) ruled out the board running hot. `busy_after` in `status` is true
 if a refresh is ever cut short.
 
+**The moss came back anyway.** On 17 October 2026 at 13:21 a window closed and
+the display drew white then green, on its own power away from the Mac, and the
+owner saw moss again. White first is therefore not a cure either, and the
+true cause is still unknown. The owner asked for a darker green. Since then
+the Pi draws the "All closed" band as green with **one black pixel in every
+2×2 block** (`SHADED_TONES` in `app/display_render.py`). The panel has a
+single green ink and nothing between its six inks, so mixing in black dots is
+the only way to make it darker. At reading distance the dots blend into a
+deeper green. This is a server change; the firmware is untouched.
+
 The panel is also never refreshed twice within **three minutes** (since
 1.3.3), which E Ink asks of a Spectra 6 panel. A picture that arrives sooner is
 still fetched, and the lights follow it at once; it is kept and drawn when the
@@ -323,3 +333,6 @@ good red; closed at 17:19:20, it drew white then green at 17:22:31, after the
 three-minute rest (the lights turned green at once). The owner confirmed by eye
 that this green looked right: the red-to-green change that had come out moss
 twice that afternoon came out green over white.
+On 17 October at 13:21 a green drawn over white was moss again, on the
+display's own power. The band has been drawn darkened with black since (see
+"On USB power").

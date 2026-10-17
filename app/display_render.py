@@ -59,6 +59,13 @@ TONES = {
     "blue": (BLUE, WHITE),
 }
 
+# The panel's one green ink comes out a pale moss on this panel, and no
+# refresh sequence has cured that. One black pixel in every 2×2 block darkens
+# it to a deeper green at reading distance. It is the only way to darken it,
+# because the panel can show no shade between its six inks.
+SHADED_TONES = {"green"}
+BAND_BOTTOM = 148
+
 OUTLOOK_WORDS = {
     "storm": "Storm possible",
     "falling_fast": "Rain and wind likely",
@@ -340,7 +347,12 @@ def draw_frame(frame: Frame) -> Image.Image:
     inner = WIDTH - 2 * MARGIN
 
     band, ink = TONES[frame.tone]
-    draw.rectangle((0, 0, WIDTH, 148), fill=band)
+    draw.rectangle((0, 0, WIDTH, BAND_BOTTOM), fill=band)
+    if frame.tone in SHADED_TONES:
+        draw.point(
+            [(x, y) for y in range(0, BAND_BOTTOM + 1, 2) for x in range(0, WIDTH, 2)],
+            fill=BLACK,
+        )
     draw.text((MARGIN, 14), _fit(draw, frame.site, _font(20), inner), font=_font(20), fill=ink)
     size = 54
     while size > 34 and draw.textlength(frame.headline, font=_font(size, True)) > inner:

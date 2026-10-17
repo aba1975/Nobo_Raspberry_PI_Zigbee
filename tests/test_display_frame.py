@@ -169,6 +169,19 @@ def test_the_picture_uses_only_the_six_inks(client, device):
     assert pixels(png).getpixel((5, 5)) == display_render.RED
 
 
+def test_the_all_closed_band_is_green_darkened_with_black(client, device):
+    enable(client)
+    window = add_sensor(client, name="Bath window")
+    simulate(client, window["sensor_id"], state="closed")
+    _, token = new_key(client)
+    image = pixels(device.get("/api/display/frame.png", headers=bearer(token)).content)
+    assert image.getpixel((5, 5)) == display_render.GREEN
+    assert image.getpixel((4, 4)) == display_render.BLACK
+    band = image.crop((0, 0, display_render.WIDTH, 10))
+    counts = {colour: n for n, colour in band.getcolors()}
+    assert counts[display_render.BLACK] * 3 == counts[display_render.GREEN]
+
+
 def test_the_etag_holds_until_something_shown_changes(client, device):
     enable(client)
     window = add_sensor(client, name="Bath window")
