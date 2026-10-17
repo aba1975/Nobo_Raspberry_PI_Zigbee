@@ -206,6 +206,21 @@ on screen instead of drawing the picture; 1.3.7 fixes it.) What remains
 unmeasured is temperature and supply: on USB the board is awake and warm
 beside the panel all the time. On battery it sleeps cool between wakes.
 
+**Not the temperature either.** The same evening the display spent half an
+hour on battery, then went back on USB. At 22:25 a window closed and it drew
+white then green, with the display, in the owner's words, "very cold": moss
+again. Moss has now been seen warm (chip 32 °C) and cold, on USB from the wall
+and from the Mac, over white, after conditioning, and as the bare ink. Nor is it
+time since the display started: the good green at 17:22 on 16 October came
+8 minutes after a start, and the moss at 22:25 about 6. One condition remains
+untried, a redraw on battery power: unplug the display, wait a minute for it to
+sleep, and press a button, which starts it afresh on battery and draws white then
+the picture. If that is moss too, what is left is the panel itself or the drive
+settings M5GFX sends it. M5GFX's settings have not changed since April 2026, and
+some of them differ from the panel maker's reference code: booster `0x06` and
+PLL `0x30`. The `clean` chart of the six inks is the photograph to send
+M5Stack.
+
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
 every ask: it opened the connection and closed it 25 ms later without sending
