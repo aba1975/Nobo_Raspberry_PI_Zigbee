@@ -182,6 +182,13 @@ def test_the_all_closed_band_is_green_darkened_with_black(client, device):
     assert counts[display_render.BLACK] * 3 == counts[display_render.GREEN]
 
 
+def test_a_new_design_changes_the_fingerprint(monkeypatch):
+    payload = {"sensors_enabled": True, "contact_count": 1}
+    before = display_render.sensor_fingerprint(payload)
+    monkeypatch.setattr(display_render, "DESIGN_VERSION", display_render.DESIGN_VERSION + 1)
+    assert display_render.sensor_fingerprint(payload) != before
+
+
 def test_the_etag_holds_until_something_shown_changes(client, device):
     enable(client)
     window = add_sensor(client, name="Bath window")

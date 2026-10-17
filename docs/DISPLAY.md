@@ -25,7 +25,9 @@ That split is deliberate:
   of the picture but `display_render.sensor_fingerprint`: which doors and
   windows are open and since when, which are left open, which cannot be heard
   from, the alarm's left-open warning, frost, the number of sensors, and
-  whether the display's own battery is low. The device asks with
+  whether the display's own battery is low, plus `DESIGN_VERSION`, which is
+  bumped whenever the drawing changes so an update reaches the wall without
+  waiting for a door. The device asks with
   `If-None-Match` and is answered `304 Not Modified` until one of those has
   changed. A new outdoor temperature, an outlook, a room temperature or the
   hub reconnecting is drawn with the next sensor change, never on its own. A
@@ -161,7 +163,8 @@ the Pi draws the "All closed" band as green with **one black pixel in every
 2×2 block** (`SHADED_TONES` in `app/display_render.py`). The panel has a
 single green ink and nothing between its six inks, so mixing in black dots is
 the only way to make it darker. At reading distance the dots blend into a
-deeper green. This is a server change; the firmware is untouched.
+deeper green. This is a server change; the firmware is untouched. `DESIGN_VERSION`
+went to 2 with it, so the darker band reached the display by itself.
 
 The panel is also never refreshed twice within **three minutes** (since
 1.3.3), which E Ink asks of a Spectra 6 panel. A picture that arrives sooner is

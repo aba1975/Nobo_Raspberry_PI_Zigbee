@@ -64,6 +64,9 @@ TONES = {
 # it to a deeper green at reading distance. It is the only way to darken it,
 # because the panel can show no shade between its six inks.
 SHADED_TONES = {"green"}
+
+# Bump when the drawing changes, so displays redraw without waiting for a door.
+DESIGN_VERSION = 2
 BAND_BOTTOM = 148
 
 OUTLOOK_WORDS = {
@@ -244,7 +247,9 @@ def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int
 
     It is the picture's ETag, so the panel is redrawn when — and only when —
     this changes. Weather, room temperatures and the hub's connection are
-    deliberately left out. The display's own low battery is in, as a flag.
+    deliberately left out. The display's own low battery is in, as a flag,
+    and so is ``DESIGN_VERSION``, so a new way of drawing reaches every display
+    without waiting for a door.
     """
     alarm = payload.get("alarm") or {}
     state = {
@@ -265,6 +270,7 @@ def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int
             if "frost" in (room.get("warnings") or [])
         ),
         "battery_low": _battery_low(display_battery),
+        "design": DESIGN_VERSION,
     }
     text = json.dumps(state, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
