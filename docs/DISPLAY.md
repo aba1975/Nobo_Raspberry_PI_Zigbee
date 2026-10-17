@@ -197,6 +197,15 @@ display's usual work: the lights follow the Pi, and a picture that arrives
 meanwhile is kept until the end. A button press or `--loops 0` stops it, and
 the picture is drawn once the panel has rested.
 
+**Conditioning did not help.** On 17 October 2026, five loops ran from 19:52
+to 21:30 on USB from the Mac, every refresh a full 15 s. The last colour, the
+whole panel green, was moss to the owner's eye, with the chip at 32 °C. That is
+the bare green ink, with no picture and no red before it, so the moss is
+neither left-over red nor anything in the picture. (1.3.6 also left that green
+on screen instead of drawing the picture; 1.3.7 fixes it.) What remains
+unmeasured is temperature and supply: on USB the board is awake and warm
+beside the panel all the time. On battery it sleeps cool between wakes.
+
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
 every ask: it opened the connection and closed it 25 ms later without sending

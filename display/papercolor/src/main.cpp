@@ -50,7 +50,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.6"
+#define FIRMWARE_VERSION "1.3.7"
 
 namespace {
 
@@ -257,8 +257,7 @@ uint16_t cycleSteps = 0;
 
 bool cycling() { return cycleStep < cycleSteps; }
 
-void stopCycle(const char *why) {
-  if (!cycling()) return;
+void endCycle(const char *why) {
   Serial.printf("{\"cycle\":\"%s\",\"done\":%u,\"of\":%u}\n", why, cycleStep, cycleSteps);
   cycleStep = cycleSteps = 0;
   // The picture comes back, drawn once the panel has rested.
@@ -277,7 +276,11 @@ void cycleIfRested() {
   showPanel();
   cycleStep++;
   Serial.printf("{\"cycle\":\"%s\",\"step\":%u,\"of\":%u}\n", next.name, cycleStep, cycleSteps);
-  if (!cycling()) stopCycle("finished");
+  if (!cycling()) endCycle("finished");
+}
+
+void stopCycle(const char *why) {
+  if (cycling()) endCycle(why);
 }
 
 void dropPending() {
