@@ -47,10 +47,12 @@
 #include <esp_heap_caps.h>
 #include <esp32-hal-rmt.h>
 #include <esp_sleep.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.7"
+#define FIRMWARE_VERSION "1.3.8"
 
 namespace {
 
@@ -83,6 +85,11 @@ constexpr int LIGHT_PIN = 21;
 // pin for the PaperColor's ED2208).
 constexpr int PANEL_BUSY_PIN = 11;
 constexpr int LIGHT_COUNT = 2;
+// The loop must come round within this, or the board restarts. Longer than
+// any one turn can take: an ask held 30 s, TLS, and two refreshes that M5GFX
+// gives up on after 40 s each. On 18 October 2026 a display stopped mid-redraw
+// and stayed stopped for seven hours, its button dead, until power-cycled.
+constexpr uint32_t WATCHDOG_SECONDS = 300;
 // Until the Pi says otherwise, and for a Pi too old to say.
 constexpr uint8_t DEFAULT_LIGHT_LEVEL = 18;
 constexpr uint32_t LIGHT_STEP_MS = 100;
@@ -126,6 +133,13 @@ RTC_DATA_ATTR time_t rtcLastSuccess = 0;
 RTC_DATA_ATTR bool rtcEverSucceeded = false;
 RTC_DATA_ATTR bool rtcProblemShown = false;
 RTC_DATA_ATTR bool rtcEmptyShown = false;
+// The last refresh, sent with the next ask in X-Display-Refresh: on battery
+// the board sleeps straight after drawing, so it is told on the next wake.
+// The count tells the Pi a new refresh from the same one sent again.
+RTC_DATA_ATTR uint32_t rtcRefreshCount = 0;
+RTC_DATA_ATTR uint32_t rtcRefreshMs = 0;
+RTC_DATA_ATTR bool rtcRefreshBusy = false;
+RTC_DATA_ATTR int8_t rtcRefreshChipC = 0;
 RTC_DATA_ATTR uint8_t rtcBssid[6] = {0};
 RTC_DATA_ATTR int32_t rtcChannel = 0;
 RTC_DATA_ATTR bool rtcFreshStarted = false;
@@ -203,10 +217,15 @@ void orient() {
 bool refreshedThisBoot = false;
 uint32_t lastRefreshMs = 0;
 
+const char *resetReasonName();
+bool resetReported = false;
+bool restartedUnexpectedly();
+
 uint32_t lastRefreshTookMs = 0;
 bool lastRefreshCutShort = false;
 
 void showPanel() {
+  int8_t chipC = (int8_t)roundf(temperatureRead());
   uint32_t started = millis();
   M5.Display.display();
   M5.Display.waitDisplay();
@@ -214,6 +233,10 @@ void showPanel() {
   lastRefreshCutShort = digitalRead(PANEL_BUSY_PIN) == LOW;
   Serial.printf("{\"refresh_ms\":%lu,\"busy_after\":%s}\n", (unsigned long)lastRefreshTookMs,
                 lastRefreshCutShort ? "true" : "false");
+  rtcRefreshCount++;
+  rtcRefreshMs = lastRefreshTookMs;
+  rtcRefreshBusy = lastRefreshCutShort;
+  rtcRefreshChipC = chipC;
   refreshedThisBoot = true;
   lastRefreshMs = millis();
 }
@@ -471,8 +494,20 @@ void takeLightLevel(const String &value) {
   if (level >= 1 && level <= 255) lightLevel = (uint8_t)level;
 }
 
+// Guards the LED bus, so lightsOut() cannot cut into a colour being sent:
+// a WS2812 that gets half a frame takes it, and the next one keeps its own.
+SemaphoreHandle_t lightBusLock = nullptr;
+
+bool openLightBus() {
+  if (lightBus) return true;
+  lightBus = rmtInit(LIGHT_PIN, RMT_TX_MODE, RMT_MEM_64);
+  if (!lightBus) return false;
+  rmtSetTick(lightBus, 100);
+  return true;
+}
+
 // Every LED the same colour, WS2812 timing at 100 ns ticks, green first.
-void showLight(uint8_t r, uint8_t g, uint8_t b) {
+void sendLight(uint8_t r, uint8_t g, uint8_t b) {
   if (!lightBus) return;
   rmt_data_t bits[24 * LIGHT_COUNT];
   const uint8_t bytes[3] = {g, r, b};
@@ -490,6 +525,12 @@ void showLight(uint8_t r, uint8_t g, uint8_t b) {
     }
   }
   rmtWriteBlocking(lightBus, bits, i);
+}
+
+void showLight(uint8_t r, uint8_t g, uint8_t b) {
+  if (lightBusLock) xSemaphoreTake(lightBusLock, portMAX_DELAY);
+  sendLight(r, g, b);
+  if (lightBusLock) xSemaphoreGive(lightBusLock);
 }
 
 // Waits in short steps and gives up as soon as the colour or the level
@@ -539,17 +580,27 @@ void lightLoop(void *) {
 // Its own task, so the lights keep blinking through an ask the Pi holds open.
 void startLights() {
   if (lightTask) return;
-  if (!lightBus) lightBus = rmtInit(LIGHT_PIN, RMT_TX_MODE, RMT_MEM_64);
-  if (!lightBus) return;
-  rmtSetTick(lightBus, 100);
+  if (!openLightBus()) return;
+  if (!lightBusLock) lightBusLock = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(lightLoop, "lights", 4096, nullptr, 1, &lightTask, 0);
 }
 
 // The LEDs keep their colour without the processor, so they are put out
-// before it sleeps or they would glow until the battery is flat.
+// before it sleeps or they would glow until the battery is flat. Always, not
+// only when the lights were running: on battery they never are, and a WS2812
+// can latch a stray colour as power comes on. On 18 October 2026 the first of
+// the two did, and stayed lit through every sleep. The line is then held low,
+// so nothing floating on it can light one while the board sleeps.
 void lightsOut() {
-  if (lightTask) vTaskSuspend(lightTask);
-  showLight(0, 0, 0);
+  if (lightTask) {
+    if (lightBusLock) xSemaphoreTake(lightBusLock, pdMS_TO_TICKS(500));
+    vTaskSuspend(lightTask);
+  }
+  if (openLightBus()) sendLight(0, 0, 0);
+  rtc_gpio_init((gpio_num_t)LIGHT_PIN);
+  rtc_gpio_set_direction((gpio_num_t)LIGHT_PIN, RTC_GPIO_MODE_OUTPUT_ONLY);
+  rtc_gpio_set_level((gpio_num_t)LIGHT_PIN, 0);
+  rtc_gpio_hold_en((gpio_num_t)LIGHT_PIN);
 }
 
 // waitSeconds > 0 asks the Pi to hold the answer until a sensor changes.
@@ -576,12 +627,22 @@ Outcome fetch(uint32_t waitSeconds) {
   http.addHeader("X-Display-Power", usbPower ? "usb" : "battery");
   int battery = batteryPercent();
   if (battery >= 0) http.addHeader("X-Display-Battery", String(battery));
+  if (rtcRefreshCount) {
+    char refresh[64];
+    snprintf(refresh, sizeof refresh, "n=%lu;ms=%lu;busy=%d;chip=%d",
+             (unsigned long)rtcRefreshCount, (unsigned long)rtcRefreshMs, rtcRefreshBusy ? 1 : 0,
+             (int)rtcRefreshChipC);
+    http.addHeader("X-Display-Refresh", refresh);
+  }
+  // Why this boot began, until the Pi has heard it once.
+  if (!resetReported) http.addHeader("X-Display-Reset", resetReasonName());
   if (rtcEtag[0]) http.addHeader("If-None-Match", rtcEtag);
 
   int status = http.GET();
   if (http.hasHeader("Date")) takeTime(http.header("Date"));
   if (http.hasHeader("X-Display-Interval")) takeInterval(http.header("X-Display-Interval"));
   if (status == 200 || status == 304) {
+    resetReported = true;
     takeLightLevel(http.header("X-Display-Light-Level"));
     takeLight(http.header("X-Display-Light"));
   }
@@ -739,6 +800,7 @@ void status() {
   // a warm panel draws green towards yellow.
   doc["chip_c"] = (int)roundf(temperatureRead());
   doc["refresh_ms"] = lastRefreshTookMs;
+  doc["reset_reason"] = resetReasonName();
   doc["busy_after"] = lastRefreshCutShort;
   if (cycling()) {
     doc["cycle_step"] = cycleStep;
@@ -859,6 +921,27 @@ void pollSerial() {
 
 // -- sleep ---------------------------------------------------------------------------
 
+const char *resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_DEEPSLEEP: return "wake";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_TASK_WDT: return "watchdog";
+    case ESP_RST_INT_WDT: return "interrupt_watchdog";
+    case ESP_RST_WDT: return "other_watchdog";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_EXT: return "reset_pin";
+    default: return "other";
+  }
+}
+
+bool restartedUnexpectedly() {
+  esp_reset_reason_t why = esp_reset_reason();
+  return why == ESP_RST_TASK_WDT || why == ESP_RST_INT_WDT || why == ESP_RST_WDT ||
+         why == ESP_RST_PANIC || why == ESP_RST_BROWNOUT;
+}
+
 [[noreturn]] void sleepFor(uint32_t seconds) {
   lightsOut();
   Serial.flush();
@@ -910,6 +993,7 @@ bool anyButton() {
 void listen(uint32_t ms) {
   uint32_t started = millis();
   while (millis() - started < ms) {
+    esp_task_wdt_reset();
     pollSerial();
     delay(20);
   }
@@ -921,6 +1005,11 @@ void setup() {
   // Hand the buttons back from the sleep's RTC pull-ups to ordinary GPIO, or
   // they cannot be read after a wake that stays awake (on USB).
   for (gpio_num_t pin : BUTTONS) rtc_gpio_deinit(pin);
+  rtc_gpio_hold_dis((gpio_num_t)LIGHT_PIN);
+  rtc_gpio_deinit((gpio_num_t)LIGHT_PIN);
+  // Replaces the core's settings: a longer timeout, and a restart, not a log.
+  esp_task_wdt_init(WATCHDOG_SECONDS, true);
+  esp_task_wdt_add(nullptr);
   Serial.setRxBufferSize(8192);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;
@@ -940,6 +1029,10 @@ void setup() {
   bool woken = cause != ESP_SLEEP_WAKEUP_UNDEFINED;
   // A button press always redraws, so it can be seen to have done something.
   if (cause == ESP_SLEEP_WAKEUP_EXT1) rtcEtag[0] = '\0';
+  // Restarted by the watchdog or a crash, perhaps mid-refresh: RTC memory
+  // survives that, so without this the Pi would answer 304 and the panel
+  // stay half-drawn.
+  if (restartedUnexpectedly()) rtcEtag[0] = '\0';
 
   int battery = batteryPercent();
   if (!usbPower && battery >= 0 && battery <= EMPTY_BATTERY_PERCENT) {
@@ -959,6 +1052,7 @@ void setup() {
     if (!woken) drawSetup();
     uint32_t started = millis();
     while (!config.complete() && (onUsbPower() || millis() - started < SETUP_LISTEN_MS)) {
+      esp_task_wdt_reset();
       pollSerial();
       delay(20);
     }
@@ -981,6 +1075,7 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
   pollSerial();
   if (anyButton()) {
     stopCycle("button");

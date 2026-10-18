@@ -4972,6 +4972,8 @@ async def get_display_frame(request: Request, wait: int = 0):
             battery=request.headers.get("x-display-battery"),
             firmware=request.headers.get("x-display-firmware"),
             power=request.headers.get("x-display-power"),
+            refresh=request.headers.get("x-display-refresh"),
+            reset=request.headers.get("x-display-reset"),
         )
         battery = display_registry.battery(display_id)
         headers["X-Display-Interval"] = str(display_registry.battery_minutes(display_id))

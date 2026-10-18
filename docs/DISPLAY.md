@@ -231,6 +231,24 @@ some of them differ from the panel maker's reference code: booster `0x06` and
 PLL `0x30`. The `clean` chart of the six inks is the photograph to send
 M5Stack.
 
+**Moss comes with soft text.** On 18 October 2026 the owner noticed that when
+the green is moss, the black text on white is less crisp too, and when the
+green is right the text is sharp. So the whole picture is under-driven, not
+green alone — as if the refresh did not run its full course. The serial
+timings so far did not show that (15 s, the panel no longer busy, for good and
+moss alike), but they were spot checks. The M5GFX commit pinned here runs the
+refresh entirely inside the panel's controller (the `AUTO` command), and the
+controller chooses its waveform, and so how long and how hard it drives the
+ink, from its own thermometer; nothing in M5GFX sets the temperature. Since
+1.3.8 the display therefore reports every refresh to the Pi, sent with its
+next ask in `X-Display-Refresh: n=<count>;ms=<duration>;busy=<0|1>;chip=<°C>`.
+It is kept in RTC memory, so a display on battery reports it on the next
+wake. The Pi keeps the last 20 per display, with the time it heard each one,
+in `refreshes` (`GET /api/displays`), and the card in Settings shows the last.
+The next time the green is moss, compare the duration of that redraw with a
+good one: a shorter one confirms the waveform, and points at forcing the
+panel's temperature.
+
 On USB it never sleeps, so nothing would otherwise start it afresh. Firmware
 1.3.0 ran for five days on the demo Pi and then, from 10 October 2026, failed
 every ask: it opened the connection and closed it 25 ms later without sending
@@ -288,6 +306,31 @@ eye, until the Pi's next answer.
 LEDs hold their colour without the processor, so they are put out before
 every sleep. A display unplugged in the middle of a held ask stays lit until
 that ask ends, at most about 45 seconds, then goes dark.
+
+Before 1.3.8 that was true only of a display that had been on USB: on battery
+the firmware never started the LED driver, so "put out" sent nothing. On
+18 October 2026, after a restart on battery, the first of the two LEDs was
+lit and the second dark — a WS2812 can latch a stray colour as its power comes
+on, and the first in the chain is the one that sees the glitch. Nothing ever
+cleared it, so it glowed through every sleep. Since 1.3.8 the LEDs are always
+sent "off" before a sleep, whether or not they were in use, the send cannot
+be cut into by the light task mid-colour, and the data line is held low while
+the board sleeps.
+
+### When it stops
+
+On 18 October 2026 at 13:15 the display, on USB, fetched a picture, stopped
+in the middle of drawing it — the panel was left yellowish — and asked for
+nothing more for seven hours. Its button did nothing and it did not answer on
+the network, so it had hung rather than slept, and stayed so until its power
+was cycled. Since 1.3.8 a **watchdog** restarts the board if its loop has not
+come round for five minutes, longer than any one turn can take (an ask held
+30 s, TLS, and two refreshes that M5GFX abandons after 40 s each). RTC memory
+survives that restart, so after a watchdog, crash or brownout restart the
+ETag is cleared and the picture is drawn again rather than met with a `304`
+over a half-drawn panel. `status` reports `reset_reason`. A redraw asked from
+Settings (**Redraw now**) cannot reach a display that has stopped asking; the
+watchdog is what brings it back.
 
 ### On battery
 

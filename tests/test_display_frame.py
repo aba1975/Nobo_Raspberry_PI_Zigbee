@@ -931,3 +931,98 @@ def test_settings_offers_redraw_now():
     core = (root / "shared" / "core.js").read_text()
     assert "data-redraw-display" in cabin and "Nobo.api.redrawDisplay(" in cabin
     assert "/redraw`, { method: 'POST' }" in core
+
+
+# -- what the display says about its own redraws ------------------------------------
+
+
+def test_each_refresh_the_display_reports_is_kept_once(client, device):
+    display, token = new_key(client)
+    report = {**bearer(token), "X-Display-Refresh": "n=3;ms=15234;busy=0;chip=31"}
+    device.get("/api/display/frame.png", headers=report)
+    device.get("/api/display/frame.png", headers=report)
+    device.get(
+        "/api/display/frame.png",
+        headers={**bearer(token), "X-Display-Refresh": "n=4;ms=9100;busy=1;chip=12"},
+    )
+    shown = client.get("/api/displays").json()["displays"][0]
+    assert [(r["ms"], r["busy"], r["chip_c"]) for r in shown["refreshes"]] == [
+        (15234, False, 31), (9100, True, 12),
+    ]
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.list()[0]["refreshes"] == shown["refreshes"]
+
+
+def test_a_restarted_count_is_a_new_refresh_and_only_twenty_are_kept(client, device):
+    _, token = new_key(client)
+    for n in [*range(1, 25), 1]:
+        device.get(
+            "/api/display/frame.png",
+            headers={**bearer(token), "X-Display-Refresh": f"n={n};ms={n * 1000};busy=0;chip=20"},
+        )
+    kept = client.get("/api/displays").json()["displays"][0]["refreshes"]
+    assert len(kept) == display_tokens.MAX_REFRESHES
+    assert kept[-1]["ms"] == 1000 and kept[-2]["ms"] == 24000
+
+
+@pytest.mark.parametrize("value", [
+    "", "n=1;ms=1", "n=0;ms=1;busy=0;chip=1", "n=1;ms=-1;busy=0;chip=1",
+    "n=1;ms=1;busy=2;chip=1", "n=1;ms=1;busy=0;chip=900", "n=x;ms=1;busy=0;chip=1",
+    "n=1;ms=1;busy=0;chip=1;extra=2", "n=1;" * 30,
+])
+def test_a_garbled_refresh_report_is_ignored(client, device, value):
+    _, token = new_key(client)
+    response = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "X-Display-Refresh": value},
+    )
+    assert response.status_code == 200
+    assert client.get("/api/displays").json()["displays"][0]["refreshes"] == []
+
+
+def test_only_a_restart_the_display_did_not_choose_is_recorded(client, device):
+    _, token = new_key(client)
+    for reason in ("wake", "power_on", "software", "nonsense"):
+        device.get("/api/display/frame.png", headers={**bearer(token), "X-Display-Reset": reason})
+    assert client.get("/api/displays").json()["displays"][0]["last_restart"] is None
+    device.get("/api/display/frame.png", headers={**bearer(token), "X-Display-Reset": "watchdog"})
+    restart = client.get("/api/displays").json()["displays"][0]["last_restart"]
+    assert restart["reason"] == "watchdog" and restart["at"] > 0
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.list()[0]["last_restart"] == restart
+
+
+def test_damaged_refresh_records_load_as_none():
+    registry = display_tokens.DisplayRegistry()
+    registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    raw["displays"][0]["refreshes"] = [
+        {"at": 5.0, "ms": 1000, "busy": False, "chip_c": 20}, "junk", {"at": "x", "ms": 1},
+    ]
+    raw["displays"][0]["last_restart"] = {"reason": "rm -rf", "at": 5}
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    item = reloaded.list()[0]
+    assert item["refreshes"] == [{"at": 5.0, "ms": 1000, "busy": False, "chip_c": 20}]
+    assert item["last_restart"] is None
+
+
+def test_settings_shows_what_the_display_reported():
+    root = server.Path(server.__file__).resolve().parent / "static" / "ui"
+    cabin = (root / "cabin" / "cabin.js").read_text()
+    assert "data-display-health" in cabin and "Last redraw took" in cabin
+    for reason in display_tokens.UNEXPECTED_RESTARTS:
+        assert f"{reason}:" in cabin, reason
+
+
+def test_the_firmware_sends_what_the_pi_parses():
+    firmware = (
+        server.Path(server.__file__).resolve().parent.parent
+        / "display" / "papercolor" / "src" / "main.cpp"
+    ).read_text()
+    assert '"n=%lu;ms=%lu;busy=%d;chip=%d"' in firmware
+    assert display_tokens.parse_refresh("n=1;ms=15000;busy=0;chip=31")
+    for reason in display_tokens.UNEXPECTED_RESTARTS:
+        assert f'return "{reason}";' in firmware, reason

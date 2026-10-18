@@ -28,7 +28,7 @@ import logging
 import secrets
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -79,6 +79,12 @@ class Display:
     redraw_asked_at: Optional[float] = None
     # When this display was last sent a picture (a 200, not a 304).
     picture_sent_at: Optional[float] = None
+    # Its own reports of its last refreshes (X-Display-Refresh), newest last,
+    # and of the last time it restarted itself (X-Display-Reset): to compare
+    # a picture that came out wrong with one that came out right.
+    refreshes: List[Dict[str, object]] = field(default_factory=list)
+    refresh_count: int = 0
+    last_restart: Optional[Dict[str, object]] = None
 
     def public(self) -> Dict[str, object]:
         """What the settings page may see. Never the hash."""
@@ -95,6 +101,8 @@ class Display:
             "light_level": self.light_level,
             "redraw_asked_at": self.redraw_asked_at,
             "picture_sent_at": self.picture_sent_at,
+            "refreshes": [dict(item) for item in self.refreshes],
+            "last_restart": dict(self.last_restart) if self.last_restart else None,
         }
 
 
@@ -141,6 +149,59 @@ def clean_time(value: object) -> Optional[float]:
     return float(value) if value > 0 else None
 
 
+MAX_REFRESHES = 20
+# Restarts worth telling the owner about: the board did not choose them.
+UNEXPECTED_RESTARTS = (
+    "watchdog", "interrupt_watchdog", "other_watchdog", "crash", "brownout",
+)
+
+
+def parse_refresh(value: object) -> Optional[Dict[str, int]]:
+    """``n=12;ms=15234;busy=0;chip=31`` from the firmware, or None."""
+    if not isinstance(value, str) or len(value) > 80:
+        return None
+    fields: Dict[str, int] = {}
+    for part in value.split(";"):
+        key, _, number = part.strip().partition("=")
+        try:
+            fields[key] = int(number)
+        except ValueError:
+            return None
+    if set(fields) != {"n", "ms", "busy", "chip"}:
+        return None
+    if fields["n"] < 1 or not 0 <= fields["ms"] <= 600_000 or fields["busy"] not in (0, 1):
+        return None
+    if not -40 <= fields["chip"] <= 125:
+        return None
+    return fields
+
+
+def clean_refreshes(value: object) -> List[Dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    kept = []
+    for item in value[-MAX_REFRESHES:]:
+        if not isinstance(item, dict):
+            continue
+        at, ms, chip = item.get("at"), item.get("ms"), item.get("chip_c")
+        if clean_time(at) is None or isinstance(ms, bool) or not isinstance(ms, int):
+            continue
+        kept.append({
+            "at": float(at), "ms": ms, "busy": item.get("busy") is True,
+            "chip_c": chip if isinstance(chip, int) and not isinstance(chip, bool) else None,
+        })
+    return kept
+
+
+def clean_restart(value: object) -> Optional[Dict[str, object]]:
+    if not isinstance(value, dict):
+        return None
+    reason, at = value.get("reason"), clean_time(value.get("at"))
+    if reason not in UNEXPECTED_RESTARTS or at is None:
+        return None
+    return {"reason": reason, "at": at}
+
+
 def clean_battery_minutes(value: object) -> Optional[int]:
     if isinstance(value, bool):
         return None
@@ -185,6 +246,9 @@ class DisplayRegistry:
                         redraw=clean_count(item.get("redraw")),
                         redraw_asked_at=clean_time(item.get("redraw_asked_at")),
                         picture_sent_at=clean_time(item.get("picture_sent_at")),
+                        refreshes=clean_refreshes(item.get("refreshes")),
+                        refresh_count=clean_count(item.get("refresh_count")),
+                        last_restart=clean_restart(item.get("last_restart")),
                     )
                     if len(display.token_hash) == 64:
                         displays[display.display_id] = display
@@ -313,7 +377,8 @@ class DisplayRegistry:
 
     def seen(
         self, display_id: str, *, battery: object = None, firmware: object = None,
-        power: object = None, now: Optional[float] = None,
+        power: object = None, refresh: object = None, reset: object = None,
+        now: Optional[float] = None,
     ) -> None:
         when = time.time() if now is None else now
         with self._lock:
@@ -328,6 +393,17 @@ class DisplayRegistry:
                 or (version is not None and version != item.firmware)
                 or (source is not None and source != item.power)
             )
+            report = parse_refresh(refresh)
+            if report is not None and report["n"] != item.refresh_count:
+                item.refresh_count = report["n"]
+                item.refreshes = (item.refreshes + [{
+                    "at": when, "ms": report["ms"], "busy": report["busy"] == 1,
+                    "chip_c": report["chip"],
+                }])[-MAX_REFRESHES:]
+                changed = True
+            if isinstance(reset, str) and reset in UNEXPECTED_RESTARTS:
+                item.last_restart = {"reason": reset, "at": when}
+                changed = True
             item.last_seen_at = when
             if level is not None:
                 item.battery = level

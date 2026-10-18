@@ -6300,6 +6300,29 @@
       : '';
   }
 
+  const DISPLAY_RESTARTS = {
+    watchdog: 'it froze', interrupt_watchdog: 'it froze', other_watchdog: 'it froze',
+    crash: 'a crash', brownout: 'its power dipped',
+  };
+
+  /* What the display said about its own last redraw, and any restart it did not choose. */
+  function displayHealthText(display) {
+    const parts = [];
+    const last = (display.refreshes || []).slice(-1)[0];
+    if (last) {
+      let text = `Last redraw took ${Math.round(last.ms / 1000)} s`;
+      if (last.chip_c != null) text += `, board ${last.chip_c} \u00b0C`;
+      if (last.busy) text += ', and was cut short';
+      parts.push(`${text}.`);
+    }
+    const restart = display.last_restart;
+    if (restart) {
+      const why = DISPLAY_RESTARTS[restart.reason] || restart.reason;
+      parts.push(`Restarted itself ${Nobo.fmtAgo(new Date(restart.at * 1000).toISOString())} after ${why}.`);
+    }
+    return parts.join(' ');
+  }
+
   function displayRow(display) {
     const seen = display.last_seen_at
       ? `Last fetched ${Nobo.fmtAgo(new Date(display.last_seen_at * 1000).toISOString())}`
@@ -6317,6 +6340,7 @@
     if (display.firmware) chips.push(`<span class="chip">Firmware ${esc(display.firmware)}</span>`);
     const power = displayPowerText(display);
     const redraw = displayRedrawText(display);
+    const health = displayHealthText(display);
     const lightNow = display.light === false ? 'off' : display.light_level;
     const lightOptions = [...DISPLAY_LIGHT_LEVELS, ['off', 'Off']].map(([value, label]) =>
       `<option value="${value}"${value === lightNow ? ' selected' : ''}>${label}</option>`,
@@ -6349,6 +6373,7 @@
               aria-label="Redraw ${esc(display.name)} now">Redraw now</button>`)}
         </div>
         ${redraw ? `<small class="field-hint" data-redraw-state>${esc(redraw)}</small>` : ''}
+        ${health ? `<small class="field-hint" data-display-health>${esc(health)}</small>` : ''}
       </li>`;
   }
 
