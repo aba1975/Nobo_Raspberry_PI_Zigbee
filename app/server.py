@@ -4922,10 +4922,12 @@ DISPLAY_MAX_WAIT_SECONDS = 30
 DISPLAY_WAIT_STEP_SECONDS = 1.0
 
 
-def _display_etag(fingerprint: str) -> str:
+def _display_etag(fingerprint: str, redraw: int = 0) -> str:
     # Weak: two pictures with one fingerprint can differ in their bytes (the
     # outdoor temperature, say). That is the point — only a sensor counts.
-    return f'W/"{fingerprint}"'
+    # ``redraw`` is the display's "Redraw now" count: each press makes a new
+    # ETag, so that display alone is sent the picture again.
+    return f'W/"{fingerprint}.{redraw}"' if redraw else f'W/"{fingerprint}"'
 
 
 def _etag_matches(asked: Optional[str], etag: str) -> bool:
@@ -4962,6 +4964,7 @@ async def get_display_frame(request: Request, wait: int = 0):
     """
     display_id = _display_from_request(request)
     battery = None
+    redraw = 0
     headers = {"Cache-Control": "no-cache"}
     if display_id:
         display_registry.seen(
@@ -4978,7 +4981,11 @@ async def get_display_frame(request: Request, wait: int = 0):
     deadline = time.monotonic() + wait
     while True:
         payload = _display_payload()
-        etag = _display_etag(display_render.sensor_fingerprint(payload, display_battery=battery))
+        if display_id:
+            redraw = display_registry.redraw(display_id)
+        etag = _display_etag(
+            display_render.sensor_fingerprint(payload, display_battery=battery), redraw,
+        )
         if display_id:
             headers["X-Display-Light"] = (
                 display_render.status_light(payload)
@@ -4990,6 +4997,8 @@ async def get_display_frame(request: Request, wait: int = 0):
             return Response(status_code=304, headers={**headers, "ETag": etag})
         await asyncio.sleep(DISPLAY_WAIT_STEP_SECONDS)
     picture = display_render.render_png(payload, display_battery=battery)
+    if display_id:
+        display_registry.picture_sent(display_id)
     return Response(
         content=picture, media_type="image/png", headers={**headers, "ETag": etag},
     )
@@ -5061,6 +5070,27 @@ async def update_display(request: Request, display_id: str, body: DisplayUpdate)
         raise HTTPException(status_code=404, detail="No such display")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return {"display": display}
+
+
+@app.post("/api/displays/{display_id}/redraw")
+async def redraw_display(request: Request, display_id: str):
+    """Have a display draw its picture again, though no sensor has changed.
+
+    On USB it is answered within a second, as a held ask notices the new
+    ETag; on battery at its next wake. Either way the panel still rests three
+    minutes between refreshes, so a redraw asked sooner is drawn then.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    try:
+        display = display_registry.ask_redraw(display_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such display")
+    add_log_entry(
+        "sent", f"Display {display['name']}: redraw asked (by {session['username']})",
+        source="settings",
+    )
     return {"display": display}
 
 

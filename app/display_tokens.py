@@ -73,6 +73,12 @@ class Display:
     # On battery they are always off: the board is asleep between asks.
     light: bool = True
     light_level: str = DEFAULT_LIGHT_LEVEL
+    # Bumped by "Redraw now" in Settings. It is part of this display's ETag,
+    # so the next ask is answered with the picture whatever the sensors did.
+    redraw: int = 0
+    redraw_asked_at: Optional[float] = None
+    # When this display was last sent a picture (a 200, not a 304).
+    picture_sent_at: Optional[float] = None
 
     def public(self) -> Dict[str, object]:
         """What the settings page may see. Never the hash."""
@@ -87,6 +93,8 @@ class Display:
             "power": self.power,
             "light": self.light,
             "light_level": self.light_level,
+            "redraw_asked_at": self.redraw_asked_at,
+            "picture_sent_at": self.picture_sent_at,
         }
 
 
@@ -119,6 +127,18 @@ def clean_power(value: object) -> Optional[str]:
 
 def clean_light_level(value: object) -> Optional[str]:
     return value if isinstance(value, str) and value in LIGHT_LEVELS else None
+
+
+def clean_count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value if value >= 0 else 0
+
+
+def clean_time(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
 
 
 def clean_battery_minutes(value: object) -> Optional[int]:
@@ -162,6 +182,9 @@ class DisplayRegistry:
                         light=item.get("light") is not False,
                         light_level=clean_light_level(item.get("light_level"))
                         or DEFAULT_LIGHT_LEVEL,
+                        redraw=clean_count(item.get("redraw")),
+                        redraw_asked_at=clean_time(item.get("redraw_asked_at")),
+                        picture_sent_at=clean_time(item.get("picture_sent_at")),
                     )
                     if len(display.token_hash) == 64:
                         displays[display.display_id] = display
@@ -259,6 +282,17 @@ class DisplayRegistry:
             self._save_locked()
             return item.public()
 
+    def ask_redraw(self, display_id: str, now: Optional[float] = None) -> Dict[str, object]:
+        """Have the display redraw at its next ask, even if nothing changed."""
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                raise KeyError(display_id)
+            item.redraw += 1
+            item.redraw_asked_at = time.time() if now is None else now
+            self._save_locked()
+            return item.public()
+
     # -- use ---------------------------------------------------------------
 
     def verify(self, token: Optional[str]) -> Optional[str]:
@@ -328,3 +362,20 @@ class DisplayRegistry:
         with self._lock:
             item = self._displays.get(display_id)
             return LIGHT_LEVELS[item.light_level if item else DEFAULT_LIGHT_LEVEL]
+
+    def redraw(self, display_id: str) -> int:
+        with self._lock:
+            item = self._displays.get(display_id)
+            return item.redraw if item else 0
+
+    def picture_sent(self, display_id: str, now: Optional[float] = None) -> None:
+        """Record that a display was sent a picture. Rare enough to save at once."""
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                return
+            item.picture_sent_at = time.time() if now is None else now
+            try:
+                self._save_locked()
+            except OSError as exc:
+                logger.warning("Could not record when a display was sent a picture: %s", exc)

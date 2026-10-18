@@ -99,6 +99,16 @@ Displays** (admins only, shown only with sensors on).
   `{"light_level": "dim" | "medium" | "bright"}` and `{"light": false}` or
   `true`, admins only; `light` is a real JSON boolean, and a level that is
   not one of the three changes nothing, not even the rest of the request.
+- **Redraw now** on the card has that display draw its picture again though
+  no sensor has changed — for a panel left half-drawn or off-colour
+  (`POST /api/displays/{id}/redraw`, admins only). It bumps a per-display
+  count that is part of that display's ETag (`W/"<fingerprint>.<count>"`), so
+  the device needs no new firmware: on USB its held ask notices within a
+  second, on battery it is sent at the next wake. The panel still rests three
+  minutes between refreshes, so a redraw asked sooner is drawn then. The card
+  says whether the picture has been sent since (`redraw_asked_at`,
+  `picture_sent_at`). It cannot help a display that has stopped asking: a
+  hung or flat device needs its power cycled.
 
 A signed-in browser can open the picture too, which is how the card shows a
 preview.

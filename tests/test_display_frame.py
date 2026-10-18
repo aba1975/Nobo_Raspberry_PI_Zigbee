@@ -809,3 +809,125 @@ def test_a_display_saved_before_the_level_existed_is_dim():
     display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
     reloaded.load()
     assert reloaded.list()[0]["light_level"] == "dim"
+
+
+# -- "Redraw now" -------------------------------------------------------------------
+
+
+def test_redraw_now_makes_that_display_fetch_the_picture_again(client, device):
+    display, token = new_key(client)
+    other, other_token = new_key(client, "Kitchen")
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    other_first = device.get("/api/display/frame.png", headers=bearer(other_token))
+    assert first.status_code == 200
+    same = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert same.status_code == 304
+
+    response = client.post(f"/api/displays/{display['display_id']}/redraw")
+    assert response.status_code == 200, response.text
+    asked = response.json()["display"]
+    assert asked["redraw_asked_at"] >= asked["picture_sent_at"]
+
+    again = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert again.status_code == 200 and again.headers["etag"] != first.headers["etag"]
+    assert again.headers["content-type"] == "image/png"
+    settled = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": again.headers["etag"]},
+    )
+    assert settled.status_code == 304
+    # Only the display that was asked.
+    untouched = device.get(
+        "/api/display/frame.png",
+        headers={**bearer(other_token), "If-None-Match": other_first.headers["etag"]},
+    )
+    assert untouched.status_code == 304
+    listed = {item["display_id"]: item for item in client.get("/api/displays").json()["displays"]}
+    shown = listed[display["display_id"]]
+    assert shown["picture_sent_at"] >= shown["redraw_asked_at"]
+    assert listed[other["display_id"]]["redraw_asked_at"] is None
+
+
+def test_a_held_ask_is_answered_soon_after_redraw_now(client, device, monkeypatch):
+    display, token = new_key(client)
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    monkeypatch.setattr(server, "DISPLAY_WAIT_STEP_SECONDS", 0.05)
+    original = server._display_payload
+    calls = {"n": 0}
+
+    def payload():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            server.display_registry.ask_redraw(display["display_id"])
+        return original()
+
+    monkeypatch.setattr(server, "_display_payload", payload)
+    started = time.monotonic()
+    held = device.get(
+        "/api/display/frame.png?wait=5",
+        headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert held.status_code == 200
+    assert time.monotonic() - started < 3
+
+
+def test_redraw_now_survives_a_restart(client, device):
+    display, token = new_key(client)
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    assert client.post(f"/api/displays/{display['display_id']}/redraw").status_code == 200
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.redraw(display["display_id"]) == 1
+    listed = reloaded.list()[0]
+    assert listed["redraw_asked_at"] and listed["picture_sent_at"]
+    assert first.status_code == 200
+
+
+def test_a_display_saved_before_redraw_existed_loads_with_none_asked():
+    registry = display_tokens.DisplayRegistry()
+    registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    for field in ("redraw", "redraw_asked_at", "picture_sent_at"):
+        raw["displays"][0].pop(field, None)
+    raw["displays"][0]["redraw"] = "lots"
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    item = reloaded.list()[0]
+    assert reloaded.redraw(item["display_id"]) == 0
+    assert item["redraw_asked_at"] is None and item["picture_sent_at"] is None
+
+
+def test_redraw_now_is_for_admins_with_a_session(client, device, monkeypatch):
+    display, token = new_key(client)
+    path = f"/api/displays/{display['display_id']}/redraw"
+    assert client.post("/api/displays/nosuch/redraw").status_code == 404
+    assert device.post(path, follow_redirects=False).status_code == 401
+    assert device.post(path, headers=bearer(token)).status_code == 401
+    original = auth.load_users
+
+    def users():
+        data = dict(original())
+        data["admin"] = {**data["admin"], "role": "user"}
+        return data
+
+    monkeypatch.setattr(auth, "load_users", users)
+    assert client.post(path).status_code == 403
+
+
+def test_the_preview_in_settings_keeps_the_plain_etag(client):
+    display, _ = new_key(client)
+    before = client.get("/api/display/frame.png").headers["etag"]
+    client.post(f"/api/displays/{display['display_id']}/redraw")
+    assert client.get("/api/display/frame.png").headers["etag"] == before
+
+
+def test_settings_offers_redraw_now():
+    root = server.Path(server.__file__).resolve().parent / "static" / "ui"
+    cabin = (root / "cabin" / "cabin.js").read_text()
+    core = (root / "shared" / "core.js").read_text()
+    assert "data-redraw-display" in cabin and "Nobo.api.redrawDisplay(" in cabin
+    assert "/redraw`, { method: 'POST' }" in core

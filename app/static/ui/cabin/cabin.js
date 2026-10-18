@@ -6286,6 +6286,20 @@
     return '';
   }
 
+  /* Whether a "Redraw now" has reached the display yet. */
+  function displayRedrawText(display) {
+    const asked = display.redraw_asked_at;
+    const sent = display.picture_sent_at;
+    if (asked && !(sent && sent >= asked)) {
+      return display.power === 'battery'
+        ? `Redraw asked. It is sent at its next wake, within ${display.battery_minutes} min.`
+        : 'Redraw asked. Waiting for the display to ask.';
+    }
+    return sent
+      ? `Picture last sent ${Nobo.fmtAgo(new Date(sent * 1000).toISOString())}.`
+      : '';
+  }
+
   function displayRow(display) {
     const seen = display.last_seen_at
       ? `Last fetched ${Nobo.fmtAgo(new Date(display.last_seen_at * 1000).toISOString())}`
@@ -6302,6 +6316,7 @@
     }
     if (display.firmware) chips.push(`<span class="chip">Firmware ${esc(display.firmware)}</span>`);
     const power = displayPowerText(display);
+    const redraw = displayRedrawText(display);
     const lightNow = display.light === false ? 'off' : display.light_level;
     const lightOptions = [...DISPLAY_LIGHT_LEVELS, ['off', 'Off']].map(([value, label]) =>
       `<option value="${value}"${value === lightNow ? ' selected' : ''}>${label}</option>`,
@@ -6329,7 +6344,11 @@
           ${settingRow('Lights', 'Brightness on USB power.',
             `<select data-display-light="${esc(display.display_id)}"
               aria-label="How brightly ${esc(display.name)} shows its lights on USB">${lightOptions}</select>`)}
+          ${settingRow('Redraw', 'Draw the picture again, though nothing has changed.',
+            `<button class="btn" type="button" data-redraw-display="${esc(display.display_id)}"
+              aria-label="Redraw ${esc(display.name)} now">Redraw now</button>`)}
         </div>
+        ${redraw ? `<small class="field-hint" data-redraw-state>${esc(redraw)}</small>` : ''}
       </li>`;
   }
 
@@ -6369,6 +6388,16 @@
             : { light: true, light_level: select.value };
           await Nobo.api.updateDisplay(select.dataset.displayLight, body);
           Nobo.toast('Saved. The display uses it from its next check');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+        wireDisplaySettings(root);
+      };
+    });
+    box.querySelectorAll('[data-redraw-display]').forEach(button => {
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await Nobo.api.redrawDisplay(button.dataset.redrawDisplay);
+          Nobo.toast('Asked. The panel takes about 30 seconds to redraw');
         } catch (e) { Nobo.toast(e.message, 'error'); }
         wireDisplaySettings(root);
       };
