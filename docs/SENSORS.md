@@ -1203,9 +1203,11 @@ temperature**, its source, humidity and warnings (`left_open`, `too_warm`,
 `too_cold`, `humid`, `frost`). Set point and measurement are separate fields,
 so a display cannot run them together. With a weather station it also carries
 `outdoor` (temperature, humidity, today's low and high; `null` when the
-reading is stale), `weather_outlook`, and `grip_wax` — `polar`, `green`,
-`blue`, `violet` or `red`, from Swix's grip-wax chart, held for half a degree
-past each edge so it does not flicker. It opens with a session or with a
+reading is stale), `weather_outlook`, `grip_wax` — `polar`, `green`,
+`blue`, `violet` or `red`, from Swix's grip-wax chart — and `glide_wax` —
+`turquoise`, `blue`, `violet`, `red` or `yellow`, from Swix's glide table —
+each held for half a degree past its edges so it does not flicker. Which one
+a wall display draws, if either, is set per display. It opens with a session or with a
 **display key** from Settings → Wall Displays, which opens this and
 `/api/display/frame.png` — the same summary drawn as a six-colour e-paper
 picture — and nothing else. With sensors switched off it is the heating

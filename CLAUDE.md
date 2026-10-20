@@ -153,7 +153,8 @@ hub reached the hardware; everything else proves a message reached the hub.
   picture** (`/api/display/frame.png`, six inks) and the firmware only shows
   it. The ETag is `sensor_fingerprint`, **not** a hash of the PNG: a Spectra
   6 refresh takes about 15 s and flashes, so the panel redraws only for doors,
-  windows, their warnings, the grip-wax colour, the display's low battery or a
+  windows, their warnings, the ski wax (grip, glide or off, per display, and
+  its colour), the display's low battery or a
   `DESIGN_VERSION` bump. Anything else drawn must therefore stay true while it
   waits (times carry a weekday; the outdoor reading says when). Bump
   `DESIGN_VERSION` when the drawing changes. The LED colour in

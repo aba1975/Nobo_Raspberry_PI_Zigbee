@@ -6277,6 +6277,8 @@
   const DISPLAY_BATTERY_MINUTES = [2, 5, 10, 15, 30, 60];
   // Must match LIGHT_LEVELS in display_tokens.py.
   const DISPLAY_LIGHT_LEVELS = [['dim', 'Dim'], ['medium', 'Medium'], ['bright', 'Bright']];
+  // Must match DISPLAY_WAX_CHOICES in display_tokens.py.
+  const DISPLAY_WAX = [['grip', 'Grip wax'], ['glide', 'Glide wax'], ['off', 'Off']];
 
   /* When it redraws, in the words of the power it is on. */
   function displayPowerText(display) {
@@ -6346,6 +6348,9 @@
     const lightOptions = [...DISPLAY_LIGHT_LEVELS, ['off', 'Off']].map(([value, label]) =>
       `<option value="${value}"${value === lightNow ? ' selected' : ''}>${label}</option>`,
     ).join('');
+    const waxOptions = DISPLAY_WAX.map(([value, label]) =>
+      `<option value="${value}"${value === (display.wax || 'grip') ? ' selected' : ''}>${label}</option>`,
+    ).join('');
     const options = DISPLAY_BATTERY_MINUTES.map(minutes =>
       `<option value="${minutes}"${minutes === display.battery_minutes ? ' selected' : ''}>Every ${minutes} min</option>`,
     ).join('');
@@ -6369,6 +6374,9 @@
           ${settingRow('Lights', 'Brightness on USB power.',
             `<select data-display-light="${esc(display.display_id)}"
               aria-label="How brightly ${esc(display.name)} shows its lights on USB">${lightOptions}</select>`)}
+          ${settingRow('Ski wax', 'Swix wax for the temperature outside, beside it.',
+            `<select data-display-wax="${esc(display.display_id)}"
+              aria-label="Which ski wax ${esc(display.name)} recommends">${waxOptions}</select>`)}
           ${settingRow('Redraw', 'Draw the picture again, though nothing has changed.',
             `<button class="btn" type="button" data-redraw-display="${esc(display.display_id)}"
               aria-label="Redraw ${esc(display.name)} now">Redraw now</button>`)}
@@ -6395,6 +6403,11 @@
     box.innerHTML = count
       ? `<ul class="display-list">${state.displays.map(displayRow).join('')}</ul>`
       : '<p class="zd-sub">No display has been added yet.</p>';
+    // The preview shows the first display's choice of wax.
+    const preview = root.querySelector('.display-preview img');
+    if (preview && count) {
+      preview.src = `/api/display/frame.png?wax=${encodeURIComponent(state.displays[0].wax || 'grip')}`;
+    }
     box.querySelectorAll('[data-display-interval]').forEach(select => {
       select.onchange = async () => {
         try {
@@ -6414,6 +6427,15 @@
             : { light: true, light_level: select.value };
           await Nobo.api.updateDisplay(select.dataset.displayLight, body);
           Nobo.toast('Saved. The display uses it from its next check');
+        } catch (e) { Nobo.toast(e.message, 'error'); }
+        wireDisplaySettings(root);
+      };
+    });
+    box.querySelectorAll('[data-display-wax]').forEach(select => {
+      select.onchange = async () => {
+        try {
+          await Nobo.api.updateDisplay(select.dataset.displayWax, { wax: select.value });
+          Nobo.toast('Saved. The display redraws with it at its next check');
         } catch (e) { Nobo.toast(e.message, 'error'); }
         wireDisplaySettings(root);
       };

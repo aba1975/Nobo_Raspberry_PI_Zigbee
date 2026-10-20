@@ -31,8 +31,8 @@ That split is deliberate:
   `If-None-Match` and is answered `304 Not Modified` until one of those has
   changed. A new outdoor temperature, an outlook, a room temperature or the
   hub reconnecting is drawn with the next sensor change, never on its own —
-  except the colour of the recommended grip wax, below, which is in the
-  fingerprint and changes a few times a day at most. A
+  except the recommended ski wax, below — which wax the display shows, and
+  its colour, which changes a few times a day at most. A
   Spectra 6 refresh takes the best part of twenty seconds and flashes the
   whole panel; it should happen when a door opens, not every quarter of an
   hour.
@@ -61,19 +61,38 @@ first: the room, the sensor and how long ago it opened (`21:15`, or
 `Sat 21:15` when it is a day or more old). Unavailable sensors read "no
 signal" and are never counted as closed. A room near freezing gets a red row.
 With the alarm on and something open, a red row says so ("Alarm on",
-"Locked up", …). The footer carries the outside temperature in whole degrees
-and the weather outlook, when there is a weather station.
+"Locked up", …). With a weather station the footer carries the outside temperature in whole
+degrees, in large figures with "outside / at 10:05" beside them. The figures
+are always one size, the size "−24°" needs to fit left of the wax box, so a
+mild day and a hard frost look alike at a glance and turning the wax off
+does not change them either. The weather
+outlook is not on the footer: it is for the house's pages, not for a glance
+on the way out. Without an outdoor reading the footer is a line of text.
 
-With an outdoor reading the footer also names the **grip wax** for that
-temperature, in a box of the wax's colour, from the outer ring of Swix's
-grip-wax chart: Polar below −20°, Green to −10°, Blue to −3°, Violet to
-+1°, Red above. The panel has no violet ink, so violet is a red-and-blue
-checkerboard, and Polar, white on the chart, is a white box with a black
-edge. A new colour redraws the panel, but only once the reading is half a
-degree past the edge (`GRIP_WAX_MARGIN`), so a temperature hovering at −3°
-cannot flash the panel every few minutes. The server keeps the colour last
-offered in memory; a restart costs at most one redraw. The boundaries were
-read off the chart by eye and live in `GRIP_WAX` in `display_render.py`.
+The footer also names the recommended **ski wax** for that temperature, in a
+box of the wax's colour. Each display chooses under Settings → Wall Displays
+→ **Ski wax**: **Grip wax** (the default, what every display showed before
+there was a choice), **Glide wax**, or **Off**, which leaves the temperature
+alone on the footer. The choice is in the display's ETag, so changing it
+redraws that display at its next ask; a display key cannot choose for itself.
+The Settings preview shows the first display's choice (`?wax=`, honoured only
+without a key).
+
+| Wax | Colours (Swix) |
+| --- | --- |
+| Grip, the outer ring of Swix's grip-wax chart | Polar below −20°, Green to −10°, Blue to −3°, Violet to +1°, Red above |
+| Glide, Swix's table split where its ranges overlap | Turquoise (5) below −11°, Blue (6) to −7°, Violet (7) to −3°, Red (8) to +2°, Yellow (10) above |
+
+Swix's glide table overlaps — Turquoise −18 to −10, Blue −12 to −6, Violet
+−8 to −2, Red −4 to +4, Yellow 0 to +10 — so each edge is the middle of an
+overlap. The panel has no violet or turquoise ink: violet is a red-and-blue
+checkerboard, turquoise a blue-and-green one, and Polar, white on the chart,
+is a white box with a black edge. A new colour redraws the panel, but only
+once the reading is half a degree past the edge (`WAX_MARGIN`), so a
+temperature hovering at −3° cannot flash the panel every few minutes. The
+server keeps the colour last offered of each kind in memory; a restart costs
+at most one redraw. The boundaries live in `WAX_CHARTS` in
+`display_render.py`.
 
 Two notes can appear at the bottom in red: **No contact with the Nobø hub**,
 and **Display battery low: N%** at 20 % or below.
@@ -112,6 +131,11 @@ Displays** (admins only, shown only with sensors on).
   `{"light_level": "dim" | "medium" | "bright"}` and `{"light": false}` or
   `true`, admins only; `light` is a real JSON boolean, and a level that is
   not one of the three changes nothing, not even the rest of the request.
+- **Ski wax** is chosen per display on the same card: Grip wax (the
+  default), Glide wax or Off. That is `PATCH /api/displays/{id}` with
+  `{"wax": "grip" | "glide" | "off"}`, admins only; anything else is a `400`.
+  The display redraws at its next check, because the choice is part of the
+  picture's fingerprint.
 - **Redraw now** on the card has that display draw its picture again though
   no sensor has changed — for a panel left half-drawn or off-colour
   (`POST /api/displays/{id}/redraw`, admins only). It bumps a per-display

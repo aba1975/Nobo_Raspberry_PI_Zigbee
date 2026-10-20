@@ -15,7 +15,7 @@ the best part of twenty seconds and flashes, so the ETag is not a hash of the
 picture but of ``sensor_fingerprint`` — the doors, windows and warnings the
 display exists to show. A new outdoor temperature or a hub reconnecting is
 drawn at the next sensor change, not on its own — with one exception, the
-recommended grip wax, which redraws the panel when its colour changes (a few
+recommended ski wax, which redraws the panel when its colour changes (a few
 times a day at most, and never back and forth across one edge). Everything on the picture is
 therefore written to stay true while it waits: times are absolute and carry
 their weekday ("Mon 09:47", never "12 min ago" or a bare "09:47" that is wrong
@@ -68,7 +68,7 @@ TONES = {
 SHADED_TONES = {"green"}
 
 # Bump when the drawing changes, so displays redraw without waiting for a door.
-DESIGN_VERSION = 3
+DESIGN_VERSION = 4
 BAND_BOTTOM = 148
 
 OUTLOOK_WORDS = {
@@ -89,39 +89,70 @@ ALARM_TITLES = {
 
 LOW_DISPLAY_BATTERY = 20
 
-# Swix's grip-wax chart, its outer ring: each colour up to the temperature
-# (outside, in the shade) where the next takes over. Read off the chart.
-GRIP_WAX = (
-    ("polar", "Polar", -20.0),
-    ("green", "Green", -10.0),
-    ("blue", "Blue", -3.0),
-    ("violet", "Violet", 1.0),
-    ("red", "Red", None),
-)
-GRIP_WAX_NAMES = {key: name for key, name, _ in GRIP_WAX}
+# Swix's wax charts: each colour up to the outdoor temperature (in the shade)
+# where the next takes over, coldest first.
+#
+# Grip wax is the outer ring of Swix's grip-wax chart, read off it by eye.
+# Glide wax comes from Swix's table, whose ranges overlap (Turquoise 5 is −10
+# to −18, Blue 6 −6 to −12, Violet 7 −2 to −8, Red 8 +4 to −4, Yellow 10 0 to
+# +10); each edge here is the middle of an overlap.
+WAX_CHARTS: Dict[str, Tuple[str, Tuple[Tuple[str, str, Optional[float]], ...]]] = {
+    "grip": ("Grip wax", (
+        ("polar", "Polar", -20.0),
+        ("green", "Green", -10.0),
+        ("blue", "Blue", -3.0),
+        ("violet", "Violet", 1.0),
+        ("red", "Red", None),
+    )),
+    "glide": ("Glide wax", (
+        ("turquoise", "Turquoise", -11.0),
+        ("blue", "Blue", -7.0),
+        ("violet", "Violet", -3.0),
+        ("red", "Red", 2.0),
+        ("yellow", "Yellow", None),
+    )),
+}
+WAX_KINDS = tuple(WAX_CHARTS)
+GRIP_WAX = WAX_CHARTS["grip"][1]
+GLIDE_WAX = WAX_CHARTS["glide"][1]
 
 # A new colour is drawn only once the reading is this far past the edge, so
 # a temperature hovering on one does not flash the panel every few minutes.
-GRIP_WAX_MARGIN = 0.5
+WAX_MARGIN = 0.5
 
 
-def _wax_band(temperature: float) -> str:
-    for key, _, upper in GRIP_WAX:
+def _wax_names(kind: str) -> Dict[str, str]:
+    return {key: name for key, name, _ in WAX_CHARTS[kind][1]}
+
+
+def _wax_band(kind: str, temperature: float) -> str:
+    chart = WAX_CHARTS[kind][1]
+    for key, _, upper in chart:
         if upper is None or temperature < upper:
             return key
-    return GRIP_WAX[-1][0]
+    return chart[-1][0]
 
 
-def grip_wax(temperature: Optional[float], previous: Optional[str] = None) -> Optional[str]:
-    """The grip wax for an outdoor temperature, holding ``previous`` near an edge."""
-    if temperature is None:
+def wax_for(
+    kind: str, temperature: Optional[float], previous: Optional[str] = None,
+) -> Optional[str]:
+    """The ``kind`` of wax for an outdoor temperature, holding ``previous`` near an edge."""
+    if kind not in WAX_CHARTS or temperature is None:
         return None
-    band = _wax_band(temperature)
-    if previous in GRIP_WAX_NAMES and band != previous and previous in (
-        _wax_band(temperature - GRIP_WAX_MARGIN), _wax_band(temperature + GRIP_WAX_MARGIN),
+    band = _wax_band(kind, temperature)
+    if previous in _wax_names(kind) and band != previous and previous in (
+        _wax_band(kind, temperature - WAX_MARGIN), _wax_band(kind, temperature + WAX_MARGIN),
     ):
         return previous
     return band
+
+
+def grip_wax(temperature: Optional[float], previous: Optional[str] = None) -> Optional[str]:
+    return wax_for("grip", temperature, previous)
+
+
+def glide_wax(temperature: Optional[float], previous: Optional[str] = None) -> Optional[str]:
+    return wax_for("glide", temperature, previous)
 
 
 def _outdoor_temperature(payload: Dict[str, Any]) -> Optional[float]:
@@ -129,14 +160,15 @@ def _outdoor_temperature(payload: Dict[str, Any]) -> Optional[float]:
     return None if value is None else float(value)
 
 
-def _payload_wax(payload: Dict[str, Any]) -> Optional[str]:
+def _payload_wax(payload: Dict[str, Any], kind: Optional[str]) -> Optional[str]:
     """The wax the picture shows: the server's choice, which carries the margin."""
-    if _outdoor_temperature(payload) is None:
+    if kind not in WAX_CHARTS or _outdoor_temperature(payload) is None:
         return None
-    if "grip_wax" in payload:
-        wax = payload.get("grip_wax")
-        return wax if wax in GRIP_WAX_NAMES else None
-    return grip_wax(_outdoor_temperature(payload))
+    field_name = f"{kind}_wax"
+    if field_name in payload:
+        wax = payload.get(field_name)
+        return wax if wax in _wax_names(kind) else None
+    return wax_for(kind, _outdoor_temperature(payload))
 
 FONT_DIRS = (
     Path("/usr/share/fonts/truetype/dejavu"),
@@ -168,6 +200,7 @@ class Frame:
     outdoor_at: str = ""
     outlook: str = ""
     wax: Optional[str] = None
+    wax_kind: str = "grip"
 
 
 def _since(value: Optional[str], now: datetime) -> str:
@@ -189,9 +222,13 @@ def _plural(count: int, one: str, many: str) -> str:
 
 def build_frame(
     payload: Dict[str, Any], *, display_battery: Optional[int] = None,
-    now: Optional[datetime] = None,
+    now: Optional[datetime] = None, wax_kind: Optional[str] = "grip",
 ) -> Frame:
-    """What the picture says, decided apart from how it is drawn."""
+    """What the picture says, decided apart from how it is drawn.
+
+    ``wax_kind`` is the display's choice of ski wax: ``grip``, ``glide``, or
+    None for none.
+    """
     now = now or datetime.now().astimezone()
     site = str(payload.get("site") or "")
     notes: List[Tuple[str, str]] = []
@@ -204,7 +241,8 @@ def build_frame(
         "outdoor": None if temperature is None else round(temperature),
         "outdoor_at": "" if temperature is None else now.strftime("%H:%M"),
         "outlook": OUTLOOK_WORDS.get((payload.get("weather_outlook") or {}).get("tendency") or "", ""),
-        "wax": _payload_wax(payload),
+        "wax": _payload_wax(payload, wax_kind),
+        "wax_kind": wax_kind if wax_kind in WAX_CHARTS else "grip",
     }
 
     if not payload.get("sensors_enabled"):
@@ -327,17 +365,21 @@ def _battery_low(display_battery: Optional[int]) -> bool:
     return display_battery is not None and display_battery <= LOW_DISPLAY_BATTERY
 
 
-def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int] = None) -> str:
+def sensor_fingerprint(
+    payload: Dict[str, Any], *, display_battery: Optional[int] = None,
+    wax_kind: Optional[str] = "grip",
+) -> str:
     """A hash of what the display is for: doors, windows and their warnings.
 
     It is the picture's ETag, so the panel is redrawn when — and only when —
     this changes. Weather, room temperatures and the hub's connection are
-    deliberately left out, except for the colour of the recommended grip wax,
-    which changes a few times a day at most. The display's own low battery is in, as a flag,
-    and so is ``DESIGN_VERSION``, so a new way of drawing reaches every display
-    without waiting for a door.
+    deliberately left out, except for the recommended ski wax — which kind the
+    display shows, and its colour, which changes a few times a day at most. The
+    display's own low battery is in, as a flag, and so is ``DESIGN_VERSION``,
+    so a new way of drawing reaches every display without waiting for a door.
     """
     alarm = payload.get("alarm") or {}
+    wax = _payload_wax(payload, wax_kind)
     state = {
         "enabled": bool(payload.get("sensors_enabled")),
         "count": int(payload.get("contact_count") or 0),
@@ -356,7 +398,7 @@ def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int
             if "frost" in (room.get("warnings") or [])
         ),
         "battery_low": _battery_low(display_battery),
-        "grip_wax": _payload_wax(payload),
+        "wax": [wax_kind, wax] if wax else None,
         "design": DESIGN_VERSION,
     }
     text = json.dumps(state, sort_keys=True, separators=(",", ":"))
@@ -441,6 +483,17 @@ WAX_LEFT = 240
 def _wax_fill(draw: ImageDraw.ImageDraw, box: Tuple[int, int, int, int], wax: str) -> Tuple[int, int, int]:
     """Fill ``box`` with the wax's colour; return the ink to write on it."""
     x0, y0, x1, y1 = box
+    if wax == "yellow":
+        draw.rectangle(box, fill=YELLOW)
+        return BLACK
+    if wax == "turquoise":
+        # No turquoise either: blue and green in a checkerboard, a teal.
+        draw.rectangle(box, fill=BLUE)
+        draw.point(
+            [(x, y) for y in range(y0, y1 + 1) for x in range(x0 + (y - y0) % 2, x1 + 1, 2)],
+            fill=GREEN,
+        )
+        return WHITE
     if wax == "polar":
         # Polar wax is white on the chart.
         draw.rectangle(box, fill=WHITE, outline=BLACK, width=3)
@@ -459,24 +512,76 @@ def _wax_fill(draw: ImageDraw.ImageDraw, box: Tuple[int, int, int, int], wax: st
     return WHITE
 
 
+def _big_temperature_font(draw: ImageDraw.ImageDraw, value: int, height: int, width: int):
+    """The largest bold size whose digits are at most ``height`` tall and
+    whose whole reading — a minus bar, the digits and ``°`` — is at most
+    ``width`` wide. Returns the font, the bar's size and the reading's width.
+
+    The font's minus sign is as wide as two digits; a bar of half that leaves
+    room for more height.
+    """
+    digits = str(abs(value))
+    size = height * 4 // 3
+    while True:
+        font = _font(size, True)
+        box = draw.textbbox((0, 0), digits, font=font)
+        bar = (size * 2 // 5, max(4, size // 9)) if value < 0 else (0, 0)
+        gap = size // 14 if value < 0 else 0
+        total = bar[0] + gap + int(draw.textlength(digits + "°", font=font))
+        if (box[3] - box[1] <= height and total <= width) or size <= 24:
+            return font, bar, gap, total
+        size -= 2
+
+
+# The widest reading the footer is sized for. Digits are all one width, so
+# every reading is drawn at the size this one fits: the figures never change
+# size from one day to the next.
+WIDEST_TEMPERATURE = -88
+
+
+def _draw_big_temperature(
+    draw: ImageDraw.ImageDraw, value: int, x: int, top: int, height: int, width: int,
+) -> int:
+    """``value`` in degrees, centred in ``height`` from ``top``, at the size
+    ``WIDEST_TEMPERATURE`` fits in ``width``. Returns where it ends."""
+    digits = str(abs(value))
+    font, bar, gap, _ = _big_temperature_font(draw, WIDEST_TEMPERATURE, height, width)
+    if value >= 0:
+        bar, gap = (0, 0), 0
+    total = bar[0] + gap + int(draw.textlength(digits + "°", font=font))
+    box = draw.textbbox((0, 0), digits, font=font)
+    y = top - box[1] + (height - (box[3] - box[1])) // 2
+    middle = y + (box[1] + box[3]) // 2
+    if value < 0:
+        draw.rectangle((x, middle - bar[1] // 2, x + bar[0], middle - bar[1] // 2 + bar[1]), fill=BLACK)
+    draw.text((x + bar[0] + gap, y), digits + "°", font=font, fill=BLACK)
+    return x + total
+
+
 def _draw_weather(draw: ImageDraw.ImageDraw, frame: "Frame") -> None:
-    top = FOOTER_TOP + 18
-    left_width = (WAX_LEFT if frame.wax else WIDTH - MARGIN) - MARGIN - 10
-    big = _font(44, True)
-    temperature = _degrees(frame.outdoor)
-    draw.text((MARGIN, top - 6), temperature, font=big, fill=BLACK)
-    beside = MARGIN + int(draw.textlength(temperature, font=big)) + 10
-    draw.text((beside, top + 2), "outside", font=_font(16), fill=BLACK)
-    draw.text((beside, top + 21), f"at {frame.outdoor_at}", font=_font(16), fill=BLACK)
-    if frame.outlook:
-        draw.text((MARGIN, top + 52), _fit(draw, frame.outlook, _font(18), left_width), font=_font(18), fill=BLACK)
+    # Just the reading and when it was taken, beside it: the outlook is for
+    # the house's pages, not for a glance on the way out of the door.
+    top, bottom = FOOTER_TOP + 18, HEIGHT - 10
+    height = bottom - top
+    # Sized beside the wax box whether or not it is drawn, so turning the
+    # wax off does not change the figures either.
+    left_width = WAX_LEFT - MARGIN - 10
+    small = _font(18)
+    lines = ("outside", f"at {frame.outdoor_at}")
+    beside = max(int(draw.textlength(line, font=small)) for line in lines) + 10
+    end = _draw_big_temperature(draw, frame.outdoor, MARGIN, top, height, left_width - beside)
+    line_box = draw.textbbox((0, 0), "at 07:42", font=small)
+    pitch = line_box[3] - line_box[1] + 8
+    y = top + (height - pitch * 2 + 8) // 2 - line_box[1]
+    for index, line in enumerate(lines):
+        draw.text((end + 10, y + index * pitch), line, font=small, fill=BLACK)
     if frame.wax:
-        box = (WAX_LEFT, top, WIDTH - MARGIN, HEIGHT - 10)
+        box = (WAX_LEFT, top, WIDTH - MARGIN, bottom)
         ink = _wax_fill(draw, box, frame.wax)
         middle = (box[0] + box[2]) / 2
-        label, small = "GRIP WAX", _font(14, True)
-        draw.text((middle - draw.textlength(label, font=small) / 2, top + 8), label, font=small, fill=ink)
-        word = GRIP_WAX_NAMES[frame.wax].upper()
+        label, label_font = WAX_CHARTS[frame.wax_kind][0].upper(), _font(14, True)
+        draw.text((middle - draw.textlength(label, font=label_font) / 2, top + 8), label, font=label_font, fill=ink)
+        word = _wax_names(frame.wax_kind)[frame.wax].upper()
         size = 30
         while size > 18 and draw.textlength(word, font=_font(size, True)) > box[2] - box[0] - 12:
             size -= 2
@@ -574,10 +679,12 @@ def _palette_image() -> Image.Image:
 
 def render_png(
     payload: Dict[str, Any], *, display_battery: Optional[int] = None,
-    now: Optional[datetime] = None,
+    now: Optional[datetime] = None, wax_kind: Optional[str] = "grip",
 ) -> bytes:
     """The picture as an indexed PNG: a few kilobytes, six colours, nothing else."""
-    image = draw_frame(build_frame(payload, display_battery=display_battery, now=now))
+    image = draw_frame(build_frame(
+        payload, display_battery=display_battery, now=now, wax_kind=wax_kind,
+    ))
     indexed = image.quantize(palette=_palette_image(), dither=Image.Dither.NONE)
     out = io.BytesIO()
     indexed.save(out, format="PNG", optimize=True)

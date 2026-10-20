@@ -395,8 +395,8 @@ def test_violet_is_drawn_in_red_and_blue_because_the_panel_has_no_violet():
     image = display_render.draw_frame(
         display_render.build_frame(payload(outdoor={"temperature": -1}), now=NOW),
     )
-    box = image.crop((display_render.WAX_LEFT + 4, display_render.FOOTER_TOP + 24,
-                      display_render.WIDTH - display_render.MARGIN - 4, display_render.FOOTER_TOP + 30))
+    box = image.crop((display_render.WAX_LEFT + 4, display_render.FOOTER_TOP + 42,
+                      display_render.WIDTH - display_render.MARGIN - 4, display_render.FOOTER_TOP + 48))
     colours = set(box.getdata())
     assert {display_render.RED, display_render.BLUE} <= colours
     assert colours <= set(display_render.PALETTE)
@@ -474,7 +474,7 @@ def test_a_new_grip_wax_redraws_the_panel():
 
 
 def test_the_server_holds_the_wax_across_an_edge(monkeypatch):
-    monkeypatch.setattr(server, "_display_wax", None)
+    monkeypatch.setattr(server, "_display_wax", {})
     readings = iter([-3.4, -2.8, -2.6, -2.4, -2.8, -3.4, -3.6])
     monkeypatch.setattr(server, "_display_outdoor", lambda: {"temperature": next(readings)})
     shown = [server._display_payload()["grip_wax"] for _ in range(7)]
@@ -1163,3 +1163,237 @@ def test_the_firmware_draws_at_once_when_asked():
     assert 'http.header("X-Display-Redraw") == "now"' in firmware
     # Only a picture nobody asked for waits for the panel to rest.
     assert "if (usbPower && !now && (!panelRested() || cycling()))" in firmware
+
+
+# -- grip or glide wax, or none ------------------------------------------------
+
+
+def test_the_glide_wax_follows_the_swix_table_split_where_it_overlaps():
+    cases = {
+        -25: "turquoise", -11.1: "turquoise", -11: "blue", -7.1: "blue", -7: "violet",
+        -3.1: "violet", -3: "red", 1.9: "red", 2: "yellow", 15: "yellow",
+    }
+    for temperature, wax in cases.items():
+        assert display_render.glide_wax(temperature) == wax, temperature
+    assert display_render.glide_wax(None) is None
+    assert display_render.wax_for("nonsense", -5) is None
+    # Every edge lies inside the overlap of the two colours either side of it.
+    table = {"turquoise": (-18, -10), "blue": (-12, -6), "violet": (-8, -2),
+             "red": (-4, 4), "yellow": (0, 10)}
+    chart = display_render.GLIDE_WAX
+    for (cold, _, edge), (warm, _, _) in zip(chart, chart[1:]):
+        assert table[warm][0] <= edge <= table[cold][1], (cold, warm)
+
+
+def test_the_glide_wax_holds_its_colour_half_a_degree_past_an_edge():
+    wax = display_render.glide_wax
+    assert wax(2.4, "red") == "red"
+    assert wax(2.6, "red") == "yellow"
+    assert wax(1.6, "yellow") == "yellow"
+    # A grip-only colour is no reason to hold on.
+    assert wax(-25, "polar") == "turquoise"
+
+
+def test_the_picture_shows_the_wax_the_display_chose():
+    reading = payload(outdoor={"temperature": 3})
+    grip = display_render.build_frame(reading, now=NOW, wax_kind="grip")
+    glide = display_render.build_frame(reading, now=NOW, wax_kind="glide")
+    off = display_render.build_frame(reading, now=NOW, wax_kind=None)
+    assert (grip.wax, grip.wax_kind) == ("red", "grip")
+    assert (glide.wax, glide.wax_kind) == ("yellow", "glide")
+    assert off.wax is None and off.outdoor == 3
+    # The server's held colour is per kind.
+    held = display_render.build_frame(
+        payload(outdoor={"temperature": 2.3}, glide_wax="red", grip_wax="red"),
+        now=NOW, wax_kind="glide",
+    )
+    assert held.wax == "red"
+
+
+def test_turning_the_wax_off_or_changing_kind_redraws_the_panel():
+    reading = {"outdoor": {"temperature": -6}}
+    grip = display_render.sensor_fingerprint(payload(**reading), wax_kind="grip")
+    glide = display_render.sensor_fingerprint(payload(**reading), wax_kind="glide")
+    off = display_render.sensor_fingerprint(payload(**reading), wax_kind=None)
+    assert len({grip, glide, off}) == 3
+    # With no wax shown, the temperature outside is not a reason to redraw.
+    assert off == display_render.sensor_fingerprint(payload(outdoor={"temperature": 5}), wax_kind=None)
+    assert off == display_render.sensor_fingerprint(payload(), wax_kind="glide")
+
+
+def _wax_box(image):
+    return image.crop((display_render.WAX_LEFT + 4, display_render.FOOTER_TOP + 42,
+                       display_render.WIDTH - display_render.MARGIN - 4, display_render.FOOTER_TOP + 48))
+
+
+def test_glide_colours_are_drawn_in_the_panel_inks():
+    def box(temperature):
+        frame = display_render.build_frame(
+            payload(outdoor={"temperature": temperature}), now=NOW, wax_kind="glide",
+        )
+        return set(_wax_box(display_render.draw_frame(frame)).getdata())
+
+    assert {display_render.BLUE, display_render.GREEN} <= box(-15)
+    assert display_render.YELLOW in box(6)
+    assert {display_render.RED, display_render.BLUE} <= box(-5)
+    for temperature in (-15, -9, -5, 0, 6):
+        assert box(temperature) <= set(display_render.PALETTE)
+        png = display_render.render_png(
+            payload(outdoor={"temperature": temperature}), now=NOW, wax_kind="glide",
+        )
+        assert Image.open(io.BytesIO(png)).size == (display_render.WIDTH, display_render.HEIGHT)
+
+
+def test_with_the_wax_off_the_footer_has_no_wax_box():
+    reading = payload(outdoor={"temperature": -6})
+    image = display_render.draw_frame(display_render.build_frame(reading, now=NOW, wax_kind=None))
+    assert set(_wax_box(image).getdata()) == {display_render.WHITE}
+
+
+def test_the_server_holds_each_kind_of_wax_on_its_own(monkeypatch):
+    monkeypatch.setattr(server, "_display_wax", {})
+    readings = iter([1.6, 2.3, 2.6, 0.6])
+    monkeypatch.setattr(server, "_display_outdoor", lambda: {"temperature": next(readings)})
+    shown = [
+        (value["grip_wax"], value["glide_wax"])
+        for value in (server._display_payload() for _ in range(4))
+    ]
+    # Grip red holds at 0.6, half a degree from its edge at 1; glide yellow,
+    # whose edge is at 2, does not.
+    assert shown == [("red", "red"), ("red", "red"), ("red", "yellow"), ("red", "red")]
+
+
+def test_the_wax_is_grip_by_default_set_per_display_and_survives_a_restart(client, device, monkeypatch):
+    enable(client)
+    add_sensor(client, name="Bath window")
+    monkeypatch.setattr(server, "_display_outdoor", lambda: {"temperature": -6.0})
+    display, token = new_key(client)
+    other, other_token = new_key(client, "Kitchen")
+    assert display["wax"] == "grip"
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    path = f"/api/displays/{display['display_id']}"
+    response = client.patch(path, json={"wax": "glide"})
+    assert response.status_code == 200, response.text
+    assert response.json()["display"]["wax"] == "glide"
+    # The new choice is drawn at once: the ETag has moved.
+    again = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert again.status_code == 200
+    assert client.patch(path, json={"wax": "off"}).status_code == 200
+    off = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": again.headers["etag"]},
+    )
+    assert off.status_code == 200
+    # The other display is untouched.
+    assert device.get(
+        "/api/display/frame.png", headers=bearer(other_token),
+    ).headers["etag"] == first.headers["etag"]
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.wax(display["display_id"]) == "off"
+    assert reloaded.wax(other["display_id"]) == "grip"
+    log = json.dumps(client.get("/api/log").json()["entries"])
+    assert "shows glide wax" in log and "shows no ski wax" in log
+
+
+def test_a_display_key_cannot_choose_its_own_wax(client, device, monkeypatch):
+    enable(client)
+    add_sensor(client, name="Bath window")
+    monkeypatch.setattr(server, "_display_outdoor", lambda: {"temperature": -6.0})
+    _, token = new_key(client)
+    plain = device.get("/api/display/frame.png", headers=bearer(token)).headers["etag"]
+    asked = device.get("/api/display/frame.png?wax=glide", headers=bearer(token)).headers["etag"]
+    assert plain == asked
+    # The Settings preview, with a session and no key, may.
+    grip = client.get("/api/display/frame.png").headers["etag"]
+    glide = client.get("/api/display/frame.png?wax=glide").headers["etag"]
+    assert grip != glide
+    assert client.get("/api/display/frame.png?wax=nonsense").headers["etag"] == grip
+
+
+@pytest.mark.parametrize("wax", ["Glide", "", "none", 1, True])
+def test_a_bad_wax_changes_nothing(client, wax):
+    display, _ = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    response = client.patch(path, json={"wax": wax, "battery_minutes": 60})
+    assert response.status_code in (400, 422), wax
+    saved = client.get("/api/displays").json()["displays"][0]
+    assert saved["wax"] == "grip" and saved["battery_minutes"] == display["battery_minutes"]
+
+
+def test_the_wax_choice_needs_an_admin_session(client, device, monkeypatch):
+    display, token = new_key(client)
+    path = f"/api/displays/{display['display_id']}"
+    assert device.patch(path, json={"wax": "off"}, headers=bearer(token)).status_code in (401, 403)
+    assert client.get("/api/displays").json()["displays"][0]["wax"] == "grip"
+
+
+def test_a_display_saved_before_the_wax_choice_shows_grip_wax():
+    registry = display_tokens.DisplayRegistry()
+    registry.create("Hall")
+    raw = json.loads(display_tokens.DISPLAYS_FILE.read_text())
+    del raw["displays"][0]["wax"]
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded = display_tokens.DisplayRegistry()
+    reloaded.load()
+    assert reloaded.list()[0]["wax"] == "grip"
+    raw["displays"][0]["wax"] = "klister"
+    display_tokens.DISPLAYS_FILE.write_text(json.dumps(raw))
+    reloaded.load()
+    assert reloaded.list()[0]["wax"] == "grip"
+
+
+def test_settings_offers_exactly_the_waxes_the_server_accepts():
+    cabin = _static("ui/cabin/cabin.js")
+    labels = {"grip": "Grip wax", "glide": "Glide wax", "off": "Off"}
+    offered = ", ".join(f"['{key}', '{labels[key]}']" for key in display_tokens.DISPLAY_WAX_CHOICES)
+    assert f"const DISPLAY_WAX = [{offered}];" in cabin
+    assert set(display_tokens.DISPLAY_WAX_CHOICES) == set(display_render.WAX_CHARTS) | {"off"}
+    assert "data-display-wax" in cabin
+    assert "{ wax: select.value }" in cabin
+    assert "frame.png?wax=${encodeURIComponent(" in cabin
+
+
+def _digit_rows(temperature, wax_kind):
+    frame = display_render.build_frame(
+        payload(outdoor={"temperature": temperature}), now=NOW, wax_kind=wax_kind,
+    )
+    image = display_render.draw_frame(frame)
+    return [y for y in range(display_render.FOOTER_TOP + 12, display_render.HEIGHT)
+            if any(image.getpixel((x, y)) == display_render.BLACK
+                   for x in range(display_render.MARGIN + 30, display_render.MARGIN + 60))]
+
+
+def test_the_temperature_is_drawn_at_one_size_whatever_it_reads():
+    # A figure that grows on a mild day and shrinks in a frost reads as a
+    # change of meaning. Every reading is the size "-24" needs, wax or none.
+    sizes = {(t, kind): _digit_rows(t, kind)
+             for t in (-24, -14, -6, -1, 0, 6, 12)
+             for kind in ("grip", "glide", None)}
+    heights = {key: rows[-1] - rows[0] for key, rows in sizes.items()}
+    assert max(heights.values()) - min(heights.values()) <= 2, heights
+    top = display_render.FOOTER_TOP + 18
+    assert all(rows[0] >= top - 1 and rows[-1] <= display_render.HEIGHT - 9
+               for rows in sizes.values())
+
+
+@pytest.mark.parametrize("temperature", [-28, -14, -1, 6, 12])
+def test_the_reading_and_its_time_fit_beside_it_left_of_the_wax_box(temperature):
+    image = display_render.draw_frame(
+        display_render.build_frame(payload(outdoor={"temperature": temperature}), now=NOW),
+    )
+    assert not any(image.getpixel((x, y)) == display_render.BLACK
+                   for x in range(display_render.WAX_LEFT - 9, display_render.WAX_LEFT)
+                   for y in range(display_render.FOOTER_TOP + 12, display_render.HEIGHT))
+
+
+def test_the_outlook_is_not_on_the_wax_footer():
+    def picture(outlook):
+        reading = payload(outdoor={"temperature": -6}, weather_outlook={"tendency": outlook})
+        frame = display_render.build_frame(reading, now=NOW)
+        return frame, display_render.draw_frame(frame).tobytes()
+
+    falling, drawn = picture("falling")
+    assert falling.outlook  # still known, just not drawn here
+    assert picture("rising")[1] == drawn

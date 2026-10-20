@@ -44,7 +44,7 @@ import alarm_automation
 import alarm_persistence
 import dataclasses
 import display_render
-from display_tokens import LIGHT_LEVELS, DisplayRegistry
+from display_tokens import DEFAULT_DISPLAY_WAX, DISPLAY_WAX_CHOICES, LIGHT_LEVELS, DisplayRegistry
 from alarm_persistence import AlarmLedger, AlarmSettings
 from alarm_provider import LOCK_METHODS, AlarmReading, AlarmUnavailable, SimulatedAlarm
 from alarm_verisure import VerisureAlarm, VerisureError
@@ -4859,23 +4859,26 @@ def _display_payload() -> Dict[str, Any]:
         "outdoor": outdoor,
         # Held for half a degree past a colour's edge, so the panel is
         # redrawn when the wax changes but not back and forth across one.
-        "grip_wax": _display_grip_wax(outdoor),
+        # Each display shows one of them, or neither, as set in Settings.
+        "grip_wax": _display_wax_for("grip", outdoor),
+        "glide_wax": _display_wax_for("glide", outdoor),
         "rooms": rooms,
     }
 
 
-# The grip wax last offered, for its margin. Lost on restart, which costs at
-# most one redraw.
-_display_wax: Optional[str] = None
+# The wax of each kind last offered, for its margin. Lost on restart, which
+# costs at most one redraw.
+_display_wax: Dict[str, str] = {}
 
 
-def _display_grip_wax(outdoor: Optional[Dict[str, Any]]) -> Optional[str]:
-    global _display_wax
+def _display_wax_for(kind: str, outdoor: Optional[Dict[str, Any]]) -> Optional[str]:
     temperature = (outdoor or {}).get("temperature")
     if temperature is None:
         return None
-    _display_wax = display_render.grip_wax(float(temperature), _display_wax)
-    return _display_wax
+    wax = display_render.wax_for(kind, float(temperature), _display_wax.get(kind))
+    if wax is not None:
+        _display_wax[kind] = wax
+    return wax
 
 
 def _display_outdoor() -> Optional[Dict[str, Any]]:
@@ -4956,7 +4959,7 @@ def _etag_matches(asked: Optional[str], etag: str) -> bool:
 
 
 @app.get("/api/display/frame.png")
-async def get_display_frame(request: Request, wait: int = 0):
+async def get_display_frame(request: Request, wait: int = 0, wax: Optional[str] = None):
     """The display summary drawn as a picture in the e-paper panel's six colours.
 
     Drawn here rather than on the device so that the layout, the wording and
@@ -4979,10 +4982,21 @@ async def get_display_frame(request: Request, wait: int = 0):
     (``display_render.status_light``, or ``off`` where Settings turned them
     off), with X-Display-Light-Level, how bright, of 255. All are on a 304 too,
     so they reach a display that is not redrawn.
+
+    Which ski wax the picture recommends, if any, is the display's own
+    setting. ``wax`` (``grip``, ``glide`` or ``off``) is for the preview in
+    Settings, which has no display key; a display's key ignores it.
     """
     display_id = _display_from_request(request)
     battery = None
     redraw = 0
+    if display_id:
+        wax_kind = display_registry.wax(display_id)
+    elif wax in DISPLAY_WAX_CHOICES:
+        wax_kind = wax
+    else:
+        wax_kind = DEFAULT_DISPLAY_WAX
+    wax_kind = wax_kind if wax_kind in display_render.WAX_CHARTS else None
     headers = {"Cache-Control": "no-cache"}
     if display_id:
         display_registry.seen(
@@ -5004,7 +5018,10 @@ async def get_display_frame(request: Request, wait: int = 0):
         if display_id:
             redraw = display_registry.redraw(display_id)
         etag = _display_etag(
-            display_render.sensor_fingerprint(payload, display_battery=battery), redraw,
+            display_render.sensor_fingerprint(
+                payload, display_battery=battery, wax_kind=wax_kind,
+            ),
+            redraw,
         )
         if display_id:
             headers["X-Display-Light"] = (
@@ -5019,7 +5036,7 @@ async def get_display_frame(request: Request, wait: int = 0):
         if time.monotonic() >= deadline or await request.is_disconnected():
             return Response(status_code=304, headers={**headers, "ETag": etag})
         await asyncio.sleep(DISPLAY_WAIT_STEP_SECONDS)
-    picture = display_render.render_png(payload, display_battery=battery)
+    picture = display_render.render_png(payload, display_battery=battery, wax_kind=wax_kind)
     if display_id:
         # Somebody pressed "Redraw now" and is looking at the panel: the
         # device draws this one at once instead of after its three-minute rest.
@@ -5058,19 +5075,24 @@ class DisplayUpdate(BaseModel):
     battery_minutes: Optional[int] = None
     light: Optional[StrictBool] = None
     light_level: Optional[StrictStr] = None
+    wax: Optional[StrictStr] = None
 
 
 @app.patch("/api/displays/{display_id}")
 async def update_display(request: Request, display_id: str, body: DisplayUpdate):
-    """How often a display on battery wakes, and whether and how brightly its
-    lights show on USB. It learns each at its next ask."""
+    """How often a display on battery wakes, whether and how brightly its
+    lights show on USB, and which ski wax it recommends. It learns each at its
+    next ask; a new wax is drawn at once, since it changes the picture's ETag."""
     session = _get_session_or_401(request)
     _require_admin(session)
-    if body.battery_minutes is None and body.light is None and body.light_level is None:
+    if (body.battery_minutes is None and body.light is None and body.light_level is None
+            and body.wax is None):
         raise HTTPException(status_code=400, detail="Nothing to change.")
-    # Checked before anything is saved, so a bad level changes nothing.
+    # Checked before anything is saved, so a bad value changes nothing.
     if body.light_level is not None and body.light_level not in LIGHT_LEVELS:
         raise HTTPException(status_code=400, detail=f"Choose one of {', '.join(LIGHT_LEVELS)}.")
+    if body.wax is not None and body.wax not in DISPLAY_WAX_CHOICES:
+        raise HTTPException(status_code=400, detail=f"Choose one of {', '.join(DISPLAY_WAX_CHOICES)}.")
     try:
         if body.battery_minutes is not None:
             display = display_registry.set_battery_minutes(display_id, body.battery_minutes)
@@ -5091,6 +5113,14 @@ async def update_display(request: Request, display_id: str, body: DisplayUpdate)
             add_log_entry(
                 "sent",
                 f"Display {display['name']}: lights {display['light_level']} (by {session['username']})",
+                source="settings",
+            )
+        if body.wax is not None:
+            display = display_registry.set_wax(display_id, body.wax)
+            shown = {"off": "no ski wax", "grip": "grip wax", "glide": "glide wax"}[display["wax"]]
+            add_log_entry(
+                "sent",
+                f"Display {display['name']}: shows {shown} (by {session['username']})",
                 source="settings",
             )
     except KeyError:

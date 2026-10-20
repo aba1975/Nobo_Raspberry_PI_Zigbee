@@ -57,6 +57,12 @@ POWER_SOURCES = ("usb", "battery")
 LIGHT_LEVELS = {"dim": 6, "medium": 18, "bright": 48}
 DEFAULT_LIGHT_LEVEL = "dim"
 
+# Which ski wax the picture recommends for the outdoor temperature, if any.
+# Grip by default, which is what every display showed before there was a
+# choice. Must match WAX_CHARTS in display_render.py, plus "off".
+DISPLAY_WAX_CHOICES = ("grip", "glide", "off")
+DEFAULT_DISPLAY_WAX = "grip"
+
 
 @dataclass
 class Display:
@@ -73,6 +79,7 @@ class Display:
     # On battery they are always off: the board is asleep between asks.
     light: bool = True
     light_level: str = DEFAULT_LIGHT_LEVEL
+    wax: str = DEFAULT_DISPLAY_WAX
     # Bumped by "Redraw now" in Settings. It is part of this display's ETag,
     # so the next ask is answered with the picture whatever the sensors did.
     redraw: int = 0
@@ -99,6 +106,7 @@ class Display:
             "power": self.power,
             "light": self.light,
             "light_level": self.light_level,
+            "wax": self.wax,
             "redraw_asked_at": self.redraw_asked_at,
             "picture_sent_at": self.picture_sent_at,
             "refreshes": [dict(item) for item in self.refreshes],
@@ -135,6 +143,10 @@ def clean_power(value: object) -> Optional[str]:
 
 def clean_light_level(value: object) -> Optional[str]:
     return value if isinstance(value, str) and value in LIGHT_LEVELS else None
+
+
+def clean_wax(value: object) -> Optional[str]:
+    return value if isinstance(value, str) and value in DISPLAY_WAX_CHOICES else None
 
 
 def clean_count(value: object) -> int:
@@ -243,6 +255,7 @@ class DisplayRegistry:
                         light=item.get("light") is not False,
                         light_level=clean_light_level(item.get("light_level"))
                         or DEFAULT_LIGHT_LEVEL,
+                        wax=clean_wax(item.get("wax")) or DEFAULT_DISPLAY_WAX,
                         redraw=clean_count(item.get("redraw")),
                         redraw_asked_at=clean_time(item.get("redraw_asked_at")),
                         picture_sent_at=clean_time(item.get("picture_sent_at")),
@@ -346,6 +359,18 @@ class DisplayRegistry:
             self._save_locked()
             return item.public()
 
+    def set_wax(self, display_id: str, wax: object) -> Dict[str, object]:
+        cleaned = clean_wax(wax)
+        if cleaned is None:
+            raise ValueError(f"Choose one of {', '.join(DISPLAY_WAX_CHOICES)}.")
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None:
+                raise KeyError(display_id)
+            item.wax = cleaned
+            self._save_locked()
+            return item.public()
+
     def ask_redraw(self, display_id: str, now: Optional[float] = None) -> Dict[str, object]:
         """Have the display redraw at its next ask, even if nothing changed."""
         with self._lock:
@@ -443,6 +468,12 @@ class DisplayRegistry:
         with self._lock:
             item = self._displays.get(display_id)
             return LIGHT_LEVELS[item.light_level if item else DEFAULT_LIGHT_LEVEL]
+
+    def wax(self, display_id: str) -> str:
+        """``grip``, ``glide`` or ``off``."""
+        with self._lock:
+            item = self._displays.get(display_id)
+            return item.wax if item else DEFAULT_DISPLAY_WAX
 
     def redraw(self, display_id: str) -> int:
         with self._lock:
