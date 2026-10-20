@@ -1026,3 +1026,48 @@ def test_the_firmware_sends_what_the_pi_parses():
     assert display_tokens.parse_refresh("n=1;ms=15000;busy=0;chip=31")
     for reason in display_tokens.UNEXPECTED_RESTARTS:
         assert f'return "{reason}";' in firmware, reason
+
+
+def test_the_picture_a_redraw_asked_for_says_draw_it_now(client, device):
+    # 20 October 2026: "Redraw now" pressed just after a door closed was kept
+    # for the panel's three-minute rest, and the display looked stuck.
+    display, token = new_key(client)
+    first = device.get("/api/display/frame.png", headers=bearer(token))
+    assert first.status_code == 200 and "x-display-redraw" not in first.headers
+    client.post(f"/api/displays/{display['display_id']}/redraw")
+    again = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
+    )
+    assert again.status_code == 200 and again.headers["x-display-redraw"] == "now"
+    # Once only: the next picture, sent because a door changed, is not.
+    fresh = device.get("/api/display/frame.png", headers=bearer(token))
+    assert fresh.status_code == 200 and "x-display-redraw" not in fresh.headers
+    held = device.get(
+        "/api/display/frame.png", headers={**bearer(token), "If-None-Match": again.headers["etag"]},
+    )
+    assert held.status_code == 304 and "x-display-redraw" not in held.headers
+
+
+def test_a_redraw_is_pending_until_a_picture_is_sent():
+    registry = display_tokens.DisplayRegistry()
+    display, _ = registry.create("Hall")
+    display_id = display["display_id"]
+    assert not registry.redraw_pending(display_id)
+    assert not registry.redraw_pending("nosuch")
+    registry.ask_redraw(display_id, now=100.0)
+    assert registry.redraw_pending(display_id)
+    registry.picture_sent(display_id, now=99.0)
+    assert registry.redraw_pending(display_id)
+    registry.picture_sent(display_id, now=101.0)
+    assert not registry.redraw_pending(display_id)
+
+
+def test_the_firmware_draws_at_once_when_asked():
+    firmware = (
+        server.Path(server.__file__).resolve().parent.parent
+        / "display" / "papercolor" / "src" / "main.cpp"
+    ).read_text()
+    assert '"X-Display-Redraw"' in firmware
+    assert 'http.header("X-Display-Redraw") == "now"' in firmware
+    # Only a picture nobody asked for waits for the panel to rest.
+    assert "if (usbPower && !now && (!panelRested() || cycling()))" in firmware

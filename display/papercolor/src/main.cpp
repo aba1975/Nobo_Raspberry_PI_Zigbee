@@ -52,7 +52,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.8"
+#define FIRMWARE_VERSION "1.3.9"
 
 namespace {
 
@@ -604,7 +604,12 @@ void lightsOut() {
 }
 
 // waitSeconds > 0 asks the Pi to hold the answer until a sensor changes.
-Outcome fetch(uint32_t waitSeconds) {
+// asked: a button (or the serial refresh) prompted it. Somebody is standing
+// at the panel, so the picture is drawn at once, rest or no rest; so is one
+// the Pi sends with X-Display-Redraw: now, for "Redraw now" in Settings.
+// Before 1.3.9 both were kept for the rest of the three minutes, and a press
+// right after a door closed seemed to do nothing (20 October 2026).
+Outcome fetch(uint32_t waitSeconds, bool asked) {
   if (!joinWifi()) return Outcome::Failed;
   WiFiClientSecure tls;
   tls.setCACert(config.ca.c_str());
@@ -620,8 +625,8 @@ Outcome fetch(uint32_t waitSeconds) {
     return Outcome::Failed;
   }
   static const char *keep[] = {"ETag", "Date", "X-Display-Interval", "X-Display-Light",
-                               "X-Display-Light-Level"};
-  http.collectHeaders(keep, 5);
+                               "X-Display-Light-Level", "X-Display-Redraw"};
+  http.collectHeaders(keep, 6);
   http.addHeader("Authorization", "Bearer " + config.token);
   http.addHeader("X-Display-Firmware", FIRMWARE_VERSION);
   http.addHeader("X-Display-Power", usbPower ? "usb" : "battery");
@@ -696,6 +701,7 @@ Outcome fetch(uint32_t waitSeconds) {
     }
   }
   String etag = http.header("ETag");
+  bool now = asked || http.header("X-Display-Redraw") == "now";
   http.end();
   if (got != (size_t)length) {
     free(picture);
@@ -704,8 +710,9 @@ Outcome fetch(uint32_t waitSeconds) {
   }
 
   dropPending();
+  if (now) stopCycle("asked");
   // Only on USB: a battery wake goes back to sleep, and would never draw it.
-  if (usbPower && (!panelRested() || cycling())) {
+  if (usbPower && !now && (!panelRested() || cycling())) {
     pendingPicture = picture;
     pendingLength = length;
     strlcpy(rtcEtag, etag.c_str(), sizeof(rtcEtag));
@@ -735,7 +742,7 @@ void drawPendingIfRested() {
 // serial refresh) prompted it, so a failure is drawn even if already shown.
 Outcome refresh(uint32_t waitSeconds = 0, bool asked = false) {
   if (!config.complete()) return Outcome::Failed;
-  Outcome outcome = fetch(waitSeconds);
+  Outcome outcome = fetch(waitSeconds, asked);
   time_t now = time(nullptr);
   if (outcome != Outcome::Failed) {
     rtcLastSuccess = now;

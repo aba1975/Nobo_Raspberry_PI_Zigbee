@@ -195,7 +195,12 @@ The panel is also never refreshed twice within **three minutes** (since
 still fetched, and the lights follow it at once; it is kept and drawn when the
 three minutes are up, and the next ask is held no longer than that. A door
 opened and closed within a minute is therefore drawn closed up to three
-minutes after it was drawn open. On battery, wakes are at least two minutes
+minutes after it was drawn open. A person is the exception (since 1.3.9): a
+button press, and "Redraw now" in Settings, are drawn at once, rest or no
+rest. The Pi marks the picture a redraw asked for with `X-Display-Redraw: now`.
+Before 1.3.9 both were kept like any other picture, so on 20 October 2026 a
+press right after the front door closed seemed to do nothing, and the display
+looked stuck on yellow until it was unplugged. On battery, wakes are at least two minutes
 apart, so nothing is kept back there. A serial `clean` drives the whole panel
 black, then white, then shows the six inks side by side with their names, and
 draws the picture three minutes later, to judge the colours by eye.

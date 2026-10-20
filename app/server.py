@@ -5000,6 +5000,10 @@ async def get_display_frame(request: Request, wait: int = 0):
         await asyncio.sleep(DISPLAY_WAIT_STEP_SECONDS)
     picture = display_render.render_png(payload, display_battery=battery)
     if display_id:
+        # Somebody pressed "Redraw now" and is looking at the panel: the
+        # device draws this one at once instead of after its three-minute rest.
+        if display_registry.redraw_pending(display_id):
+            headers["X-Display-Redraw"] = "now"
         display_registry.picture_sent(display_id)
     return Response(
         content=picture, media_type="image/png", headers={**headers, "ETag": etag},
@@ -5080,8 +5084,9 @@ async def redraw_display(request: Request, display_id: str):
     """Have a display draw its picture again, though no sensor has changed.
 
     On USB it is answered within a second, as a held ask notices the new
-    ETag; on battery at its next wake. Either way the panel still rests three
-    minutes between refreshes, so a redraw asked sooner is drawn then.
+    ETag; on battery at its next wake. The picture is sent with
+    ``X-Display-Redraw: now``, so the display draws it at once even inside
+    the three-minute rest it otherwise keeps between refreshes.
     """
     session = _get_session_or_401(request)
     _require_admin(session)

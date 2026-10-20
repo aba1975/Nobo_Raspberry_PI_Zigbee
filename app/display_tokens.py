@@ -444,6 +444,14 @@ class DisplayRegistry:
             item = self._displays.get(display_id)
             return item.redraw if item else 0
 
+    def redraw_pending(self, display_id: str) -> bool:
+        """Whether a "Redraw now" has been asked and no picture sent since."""
+        with self._lock:
+            item = self._displays.get(display_id)
+            if item is None or item.redraw_asked_at is None:
+                return False
+            return item.picture_sent_at is None or item.picture_sent_at < item.redraw_asked_at
+
     def picture_sent(self, display_id: str, now: Optional[float] = None) -> None:
         """Record that a display was sent a picture. Rare enough to save at once."""
         with self._lock:
