@@ -212,30 +212,51 @@ def build_frame(
 
 
 # The colours the display's own lights may blink, when it is on USB power.
-LIGHTS = ("green", "red", "blue", "off")
+LIGHTS = ("green", "yellow", "red", "blue", "off")
+
+# The first firmware that knows yellow. An older one would read the unknown
+# word as "off", and go dark with a door open, so it is told red instead.
+YELLOW_LIGHT_FIRMWARE = (1, 4, 0)
 
 
 def status_light(payload: Dict[str, Any]) -> str:
     """What the display's lights say, in one word: the headline, from afar.
 
-    Red when anything is open, whether or not it has been left open yet;
-    green only when every door and window is closed *and* heard from, because
-    a green light is what lets somebody walk out without looking; blue, as on
-    the panel, when a sensor cannot be heard from; off when there is nothing
-    to watch. Built from the same fields as ``sensor_fingerprint``, so a
-    change of light is always a change of ETag and a waiting display hears it
-    at once.
+    The band's colour, as far as a light can say it: yellow while something
+    is open but not yet left open, red once it has been (or the alarm is on
+    with something open); green only when every door and window is closed
+    *and* heard from, because a green light is what lets somebody walk out
+    without looking; blue, as on the panel, when a sensor cannot be heard
+    from; off when there is nothing to watch. Built from the same fields as
+    ``sensor_fingerprint``, so a change of light is always a change of ETag
+    and a waiting display hears it at once.
     """
     if not payload.get("sensors_enabled"):
         return "off"
     alarm = payload.get("alarm") or {}
-    if payload.get("open_contacts") or alarm.get("left_open"):
+    contacts = payload.get("open_contacts") or []
+    if alarm.get("left_open") or any(item.get("left_open") for item in contacts):
         return "red"
+    if contacts:
+        return "yellow"
     if payload.get("unavailable_sensors"):
         return "blue"
     if not int(payload.get("contact_count") or 0):
         return "off"
     return "green"
+
+
+def light_for_firmware(light: str, firmware: Optional[str]) -> str:
+    """The light as a display running ``firmware`` can show it."""
+    if light != "yellow":
+        return light
+    parts = []
+    for piece in str(firmware or "").split(".")[:3]:
+        digits = "".join(ch for ch in piece if ch.isdigit()) if piece[:1].isdigit() else ""
+        if not digits:
+            break
+        parts.append(int(digits))
+    return light if tuple(parts) >= YELLOW_LIGHT_FIRMWARE else "red"
 
 
 def _battery_low(display_battery: Optional[int]) -> bool:

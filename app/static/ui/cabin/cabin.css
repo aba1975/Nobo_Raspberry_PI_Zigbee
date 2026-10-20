@@ -1994,6 +1994,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   background: currentColor;
 }
 .led-green { color: #2f9e5b; }
+.led-yellow { color: #e8b923; }
 .led-red { color: var(--danger); }
 .led-blue { color: #3b7fd9; }
 .led-blink { animation: led-blink 3s steps(1, end) infinite; }

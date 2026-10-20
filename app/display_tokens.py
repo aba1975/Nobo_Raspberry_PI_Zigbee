@@ -418,6 +418,11 @@ class DisplayRegistry:
                 except OSError as exc:
                     logger.warning("Could not record when a display was last seen: %s", exc)
 
+    def firmware(self, display_id: str) -> Optional[str]:
+        with self._lock:
+            item = self._displays.get(display_id)
+            return item.firmware if item else None
+
     def battery(self, display_id: str) -> Optional[int]:
         with self._lock:
             item = self._displays.get(display_id)

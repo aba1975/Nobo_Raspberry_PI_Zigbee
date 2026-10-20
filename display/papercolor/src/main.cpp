@@ -18,8 +18,8 @@
 // it to ask at once.
 //
 // On USB its two lights show what the Pi says in X-Display-Light: steady green
-// when every door and window is closed, blinking red when any is open,
-// blinking blue when a sensor cannot be heard from, or when this display can
+// when every door and window is closed, blinking yellow when one is open but
+// not yet left open, blinking red once it has been, blinking blue when a sensor cannot be heard from, or when this display can
 // no longer reach the Pi. How bright is the Pi's too (X-Display-Light-Level,
 // set in Settings). Never on battery: the board sleeps between asks, and the
 // lights are put out before it does.
@@ -52,7 +52,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define FIRMWARE_VERSION "1.3.9"
+#define FIRMWARE_VERSION "1.4.0"
 
 namespace {
 
@@ -162,7 +162,7 @@ bool usbPower = false;
 
 enum class Outcome { Updated, Deferred, Unchanged, Failed };
 
-enum class Light : uint8_t { Off, Green, Red, Blue };
+enum class Light : uint8_t { Off, Green, Yellow, Red, Blue };
 // Written by the loop, read by the light task; a byte is written whole.
 volatile Light light = Light::Off;
 volatile uint8_t lightLevel = DEFAULT_LIGHT_LEVEL;
@@ -473,6 +473,7 @@ void takeInterval(const String &value) {
 const char *lightName(Light value) {
   switch (value) {
     case Light::Green: return "green";
+    case Light::Yellow: return "yellow";
     case Light::Red: return "red";
     case Light::Blue: return "blue";
     default: return "off";
@@ -483,6 +484,7 @@ const char *lightName(Light value) {
 // light is only ever the Pi's word, never a guess here.
 void takeLight(const String &value) {
   if (value == "green") light = Light::Green;
+  else if (value == "yellow") light = Light::Yellow;
   else if (value == "red") light = Light::Red;
   else if (value == "blue") light = Light::Blue;
   else light = Light::Off;
@@ -543,8 +545,24 @@ bool holdLight(uint32_t ms, Light was, uint8_t level) {
   return true;
 }
 
+// One light's colour at a drive level. Yellow is red with some green: equal
+// parts look lime on a WS2812, whose green die is the brightest of the three.
+void showColour(Light which, uint8_t level) {
+  switch (which) {
+    case Light::Green: showLight(0, level, 0); break;
+    case Light::Yellow: {
+      uint8_t green = (uint8_t)((level * 3 + 4) / 5);
+      showLight(level, green ? green : 1, 0);
+      break;
+    }
+    case Light::Red: showLight(level, 0, 0); break;
+    case Light::Blue: showLight(0, 0, level); break;
+    default: showLight(0, 0, 0); break;
+  }
+}
+
 // Green is held: all is well, and a steady light is calmer to live with.
-// Red and blue blink, because they ask for something to be done.
+// Yellow, red and blue blink, because they ask for something to be done.
 void lightLoop(void *) {
   for (;;) {
     Light now = light;
@@ -565,8 +583,7 @@ void lightLoop(void *) {
       holdLight(LIGHT_PERIOD_MS, now, level);
       continue;
     }
-    showLight(now == Light::Red ? level : 0, now == Light::Green ? level : 0,
-              now == Light::Blue ? level : 0);
+    showColour(now, level);
     if (now == Light::Green) {
       holdLight(LIGHT_PERIOD_MS, now, level);
       continue;

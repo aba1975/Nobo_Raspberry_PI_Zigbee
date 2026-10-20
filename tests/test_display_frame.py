@@ -619,23 +619,48 @@ def light(**fields):
 
 def test_the_light_is_the_headline_from_afar():
     assert light() == "green"
-    assert light(open_contacts=[contact()]) == "red"
+    assert light(open_contacts=[contact()]) == "yellow"
     assert light(open_contacts=[contact(left_open=True)]) == "red"
+    assert light(open_contacts=[contact(), contact(zone="Loft", left_open=True)]) == "red"
     assert light(alarm={"left_open": True, "reason": "armed_away"}) == "red"
+    assert light(open_contacts=[contact()], alarm={"left_open": True, "reason": "armed_away"}) == "red"
     assert light(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]) == "blue"
     # Open outranks unheard-from: something is known to be open.
     assert light(
         open_contacts=[contact()], unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}],
-    ) == "red"
+    ) == "yellow"
     assert light(contact_count=0) == "off"
     assert light(sensors_enabled=False, open_contacts=[contact()]) == "off"
-    assert set(display_render.LIGHTS) == {"green", "red", "blue", "off"}
+    assert set(display_render.LIGHTS) == {"green", "yellow", "red", "blue", "off"}
+
+
+def test_older_firmware_is_told_red_rather_than_a_yellow_it_cannot_show():
+    for_firmware = display_render.light_for_firmware
+    assert for_firmware("yellow", "1.4.0") == "yellow"
+    assert for_firmware("yellow", "1.10.2") == "yellow"
+    assert for_firmware("yellow", "2.0") == "yellow"
+    for old in ("1.3.9", "1.2.0", None, "", "dev", "1"):
+        assert for_firmware("yellow", old) == "red", old
+    for other in ("green", "red", "blue", "off"):
+        assert for_firmware(other, "1.3.9") == other
+
+
+def test_the_firmware_knows_every_light_the_pi_sends():
+    firmware = (
+        server.Path(server.__file__).resolve().parent.parent
+        / "display" / "papercolor" / "src" / "main.cpp"
+    ).read_text()
+    for name in display_render.LIGHTS:
+        if name != "off":
+            assert f'value == "{name}"' in firmware, name
+    version = firmware.split('#define FIRMWARE_VERSION "', 1)[1].split('"', 1)[0]
+    assert display_render.light_for_firmware("yellow", version) == "yellow"
 
 
 def test_the_light_never_changes_without_the_etag_changing():
     """A waiting display only hears of what moves the fingerprint."""
     cases = [
-        {}, {"open_contacts": [contact()]},
+        {}, {"open_contacts": [contact()]}, {"open_contacts": [contact(left_open=True)]},
         {"alarm": {"left_open": True, "reason": "armed_away"}},
         {"unavailable_sensors": [{"zone": "Loft", "sensor": "Hatch"}]},
         {"contact_count": 0}, {"sensors_enabled": False},
@@ -662,6 +687,9 @@ def test_the_light_rides_on_every_answer_and_follows_the_sensors(client, device)
         "/api/display/frame.png", headers={**bearer(token), "If-None-Match": first.headers["etag"]},
     )
     assert opened.status_code == 200 and opened.headers["x-display-light"] == "red"
+    # Red above only because this display has not said what it runs.
+    newer = {**bearer(token), "X-Display-Firmware": "1.4.0"}
+    assert device.get("/api/display/frame.png", headers=newer).headers["x-display-light"] == "yellow"
 
 
 def test_the_light_can_be_turned_off_per_display_and_stays_off(client, device):

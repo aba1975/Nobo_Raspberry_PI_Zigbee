@@ -274,7 +274,7 @@ than "connection refused", and `status` over serial reports `uptime_s`,
 The PaperColor has two RGB LEDs. On USB they show the colour the Pi sends with
 every answer, `200` or `304`, in `X-Display-Light`
 (`display_render.status_light`). Green is held steady: all is well, and a
-steady light is calmer to live with. Red and blue blink slowly — a 0.7 s glow
+steady light is calmer to live with. Yellow, red and blue blink slowly — a 0.7 s glow
 every 3 s — because they ask for something to be done. A change of colour shows
 within a tenth of a second of the answer, not at the end of a blink.
 
@@ -288,9 +288,16 @@ firmware at 18.
 | Light | When |
 | --- | --- |
 | green | every door and window is closed, and every sensor is heard from |
-| red | any door or window is open, or the alarm is on with one open — left open or not yet |
+| yellow | a door or window is open, but not yet left open (the panel's yellow band) |
+| red | a door or window has been left open, or the alarm is on with one open |
 | blue | nothing is open, but a sensor cannot be heard from; or this display has not reached the Pi for 30 minutes (when it draws **Not up to date**) |
 | off | sensors turned off, no door or window sensor assigned, the light turned off in Settings, or a Pi too old to send the header |
+
+Yellow came with firmware 1.4.0 (20 October 2026), so the lights match the
+band. Equal red and green looks lime on a WS2812, so the firmware mixes
+yellow as red with three fifths as much green. An older firmware would read
+`yellow` as a word it does not know and go dark with a door open, so the Pi
+sends it `red` instead (`light_for_firmware`), as it always did.
 
 The colour is the Pi's, as the picture is: the firmware never guesses one.
 Green is only ever shown when it is known, because green is what lets

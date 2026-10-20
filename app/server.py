@@ -4990,7 +4990,10 @@ async def get_display_frame(request: Request, wait: int = 0):
         )
         if display_id:
             headers["X-Display-Light"] = (
-                display_render.status_light(payload)
+                display_render.light_for_firmware(
+                    display_render.status_light(payload),
+                    display_registry.firmware(display_id),
+                )
                 if display_registry.light(display_id) else "off"
             )
         if not _etag_matches(asked, etag):
