@@ -4834,6 +4834,7 @@ def _display_payload() -> Dict[str, Any]:
         status = "unknown"
     else:
         status = "ok"
+    outdoor = _display_outdoor()
     return {
         "generated_at": local_now().isoformat(),
         "site": site_settings()["display_name"],
@@ -4855,9 +4856,26 @@ def _display_payload() -> Dict[str, Any]:
         ),
         # Null unless the weather integration is on and the outdoor module
         # has been read recently.
-        "outdoor": _display_outdoor(),
+        "outdoor": outdoor,
+        # Held for half a degree past a colour's edge, so the panel is
+        # redrawn when the wax changes but not back and forth across one.
+        "grip_wax": _display_grip_wax(outdoor),
         "rooms": rooms,
     }
+
+
+# The grip wax last offered, for its margin. Lost on restart, which costs at
+# most one redraw.
+_display_wax: Optional[str] = None
+
+
+def _display_grip_wax(outdoor: Optional[Dict[str, Any]]) -> Optional[str]:
+    global _display_wax
+    temperature = (outdoor or {}).get("temperature")
+    if temperature is None:
+        return None
+    _display_wax = display_render.grip_wax(float(temperature), _display_wax)
+    return _display_wax
 
 
 def _display_outdoor() -> Optional[Dict[str, Any]]:

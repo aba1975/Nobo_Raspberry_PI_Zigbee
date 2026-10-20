@@ -14,7 +14,9 @@ Two rules shape the layout.
 the best part of twenty seconds and flashes, so the ETag is not a hash of the
 picture but of ``sensor_fingerprint`` — the doors, windows and warnings the
 display exists to show. A new outdoor temperature or a hub reconnecting is
-drawn at the next sensor change, not on its own. Everything on the picture is
+drawn at the next sensor change, not on its own — with one exception, the
+recommended grip wax, which redraws the panel when its colour changes (a few
+times a day at most, and never back and forth across one edge). Everything on the picture is
 therefore written to stay true while it waits: times are absolute and carry
 their weekday ("Mon 09:47", never "12 min ago" or a bare "09:47" that is wrong
 the next morning), and the outdoor reading says when it was read. Saying that
@@ -66,7 +68,7 @@ TONES = {
 SHADED_TONES = {"green"}
 
 # Bump when the drawing changes, so displays redraw without waiting for a door.
-DESIGN_VERSION = 2
+DESIGN_VERSION = 3
 BAND_BOTTOM = 148
 
 OUTLOOK_WORDS = {
@@ -86,6 +88,55 @@ ALARM_TITLES = {
 }
 
 LOW_DISPLAY_BATTERY = 20
+
+# Swix's grip-wax chart, its outer ring: each colour up to the temperature
+# (outside, in the shade) where the next takes over. Read off the chart.
+GRIP_WAX = (
+    ("polar", "Polar", -20.0),
+    ("green", "Green", -10.0),
+    ("blue", "Blue", -3.0),
+    ("violet", "Violet", 1.0),
+    ("red", "Red", None),
+)
+GRIP_WAX_NAMES = {key: name for key, name, _ in GRIP_WAX}
+
+# A new colour is drawn only once the reading is this far past the edge, so
+# a temperature hovering on one does not flash the panel every few minutes.
+GRIP_WAX_MARGIN = 0.5
+
+
+def _wax_band(temperature: float) -> str:
+    for key, _, upper in GRIP_WAX:
+        if upper is None or temperature < upper:
+            return key
+    return GRIP_WAX[-1][0]
+
+
+def grip_wax(temperature: Optional[float], previous: Optional[str] = None) -> Optional[str]:
+    """The grip wax for an outdoor temperature, holding ``previous`` near an edge."""
+    if temperature is None:
+        return None
+    band = _wax_band(temperature)
+    if previous in GRIP_WAX_NAMES and band != previous and previous in (
+        _wax_band(temperature - GRIP_WAX_MARGIN), _wax_band(temperature + GRIP_WAX_MARGIN),
+    ):
+        return previous
+    return band
+
+
+def _outdoor_temperature(payload: Dict[str, Any]) -> Optional[float]:
+    value = (payload.get("outdoor") or {}).get("temperature")
+    return None if value is None else float(value)
+
+
+def _payload_wax(payload: Dict[str, Any]) -> Optional[str]:
+    """The wax the picture shows: the server's choice, which carries the margin."""
+    if _outdoor_temperature(payload) is None:
+        return None
+    if "grip_wax" in payload:
+        wax = payload.get("grip_wax")
+        return wax if wax in GRIP_WAX_NAMES else None
+    return grip_wax(_outdoor_temperature(payload))
 
 FONT_DIRS = (
     Path("/usr/share/fonts/truetype/dejavu"),
@@ -112,6 +163,11 @@ class Frame:
     calm: Optional[str] = None
     footer: str = ""
     notes: List[Tuple[str, str]] = field(default_factory=list)
+    # The weather corner: drawn when there is an outdoor reading.
+    outdoor: Optional[int] = None
+    outdoor_at: str = ""
+    outlook: str = ""
+    wax: Optional[str] = None
 
 
 def _since(value: Optional[str], now: datetime) -> str:
@@ -143,13 +199,20 @@ def build_frame(
     if _battery_low(display_battery):
         notes.append(("red", "Display battery low, charge it"))
     footer = _footer(payload, now)
+    temperature = _outdoor_temperature(payload)
+    weather = {
+        "outdoor": None if temperature is None else round(temperature),
+        "outdoor_at": "" if temperature is None else now.strftime("%H:%M"),
+        "outlook": OUTLOOK_WORDS.get((payload.get("weather_outlook") or {}).get("tendency") or "", ""),
+        "wax": _payload_wax(payload),
+    }
 
     if not payload.get("sensors_enabled"):
         return Frame(
             tone="blue", site=site, headline="No sensors",
             subline="Door and window sensors are turned off",
             calm="Turn them on under Settings → Sensors.",
-            footer=footer, notes=notes,
+            footer=footer, notes=notes, **weather,
         )
 
     contacts = sorted(
@@ -208,6 +271,7 @@ def build_frame(
     return Frame(
         tone=tone, site=site, headline=headline, subline=subline,
         rows=rows, calm=calm if not rows else None, footer=footer, notes=notes,
+        **weather,
     )
 
 
@@ -268,7 +332,8 @@ def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int
 
     It is the picture's ETag, so the panel is redrawn when — and only when —
     this changes. Weather, room temperatures and the hub's connection are
-    deliberately left out. The display's own low battery is in, as a flag,
+    deliberately left out, except for the colour of the recommended grip wax,
+    which changes a few times a day at most. The display's own low battery is in, as a flag,
     and so is ``DESIGN_VERSION``, so a new way of drawing reaches every display
     without waiting for a door.
     """
@@ -291,10 +356,16 @@ def sensor_fingerprint(payload: Dict[str, Any], *, display_battery: Optional[int
             if "frost" in (room.get("warnings") or [])
         ),
         "battery_low": _battery_low(display_battery),
+        "grip_wax": _payload_wax(payload),
         "design": DESIGN_VERSION,
     }
     text = json.dumps(state, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def _degrees(value: int) -> str:
+    # A real minus sign: a hyphen is too short to see from across a room.
+    return f"\u2212{-value}°" if value < 0 else f"{value}°"
 
 
 def _footer(payload: Dict[str, Any], now: datetime) -> str:
@@ -302,7 +373,7 @@ def _footer(payload: Dict[str, Any], now: datetime) -> str:
     outdoor = payload.get("outdoor") or {}
     if outdoor.get("temperature") is not None:
         # Stamped, because it is redrawn only with a sensor change.
-        parts.append(f"Outside {round(float(outdoor['temperature']))}° at {now.strftime('%H:%M')}")
+        parts.append(f"Outside {_degrees(round(float(outdoor['temperature'])))} at {now.strftime('%H:%M')}")
     outlook = payload.get("weather_outlook") or {}
     words = OUTLOOK_WORDS.get(outlook.get("tendency") or "")
     if words:
@@ -361,8 +432,58 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, width: int) -> List[str]:
 
 ROW_TOP = 168
 ROW_HEIGHT = 64
-FOOTER_TOP = 520
+# Still room for five rows above it.
+FOOTER_TOP = 500
 MARGIN = 18
+WAX_LEFT = 240
+
+
+def _wax_fill(draw: ImageDraw.ImageDraw, box: Tuple[int, int, int, int], wax: str) -> Tuple[int, int, int]:
+    """Fill ``box`` with the wax's colour; return the ink to write on it."""
+    x0, y0, x1, y1 = box
+    if wax == "polar":
+        # Polar wax is white on the chart.
+        draw.rectangle(box, fill=WHITE, outline=BLACK, width=3)
+        return BLACK
+    if wax == "violet":
+        # The panel has no violet. Red and blue in a checkerboard read as one.
+        draw.rectangle(box, fill=BLUE)
+        draw.point(
+            [(x, y) for y in range(y0, y1 + 1) for x in range(x0 + (y - y0) % 2, x1 + 1, 2)],
+            fill=RED,
+        )
+        return WHITE
+    draw.rectangle(box, fill={"green": GREEN, "blue": BLUE, "red": RED}[wax])
+    if wax in SHADED_TONES:
+        draw.point([(x, y) for y in range(y0, y1 + 1, 2) for x in range(x0, x1 + 1, 2)], fill=BLACK)
+    return WHITE
+
+
+def _draw_weather(draw: ImageDraw.ImageDraw, frame: "Frame") -> None:
+    top = FOOTER_TOP + 18
+    left_width = (WAX_LEFT if frame.wax else WIDTH - MARGIN) - MARGIN - 10
+    big = _font(44, True)
+    temperature = _degrees(frame.outdoor)
+    draw.text((MARGIN, top - 6), temperature, font=big, fill=BLACK)
+    beside = MARGIN + int(draw.textlength(temperature, font=big)) + 10
+    draw.text((beside, top + 2), "outside", font=_font(16), fill=BLACK)
+    draw.text((beside, top + 21), f"at {frame.outdoor_at}", font=_font(16), fill=BLACK)
+    if frame.outlook:
+        draw.text((MARGIN, top + 52), _fit(draw, frame.outlook, _font(18), left_width), font=_font(18), fill=BLACK)
+    if frame.wax:
+        box = (WAX_LEFT, top, WIDTH - MARGIN, HEIGHT - 10)
+        ink = _wax_fill(draw, box, frame.wax)
+        middle = (box[0] + box[2]) / 2
+        label, small = "GRIP WAX", _font(14, True)
+        draw.text((middle - draw.textlength(label, font=small) / 2, top + 8), label, font=small, fill=ink)
+        word = GRIP_WAX_NAMES[frame.wax].upper()
+        size = 30
+        while size > 18 and draw.textlength(word, font=_font(size, True)) > box[2] - box[0] - 12:
+            size -= 2
+        draw.text(
+            (middle - draw.textlength(word, font=_font(size, True)) / 2, top + 28 + (30 - size) // 2),
+            word, font=_font(size, True), fill=ink,
+        )
 
 
 def draw_frame(frame: Frame) -> Image.Image:
@@ -434,7 +555,9 @@ def draw_frame(frame: Frame) -> Image.Image:
         y += 30
 
     draw.rectangle((MARGIN, FOOTER_TOP + 8, WIDTH - MARGIN, FOOTER_TOP + 10), fill=BLACK)
-    if frame.footer:
+    if frame.outdoor is not None:
+        _draw_weather(draw, frame)
+    elif frame.footer:
         draw.text((MARGIN, FOOTER_TOP + 26), _fit(draw, frame.footer, _font(22), inner), font=_font(22), fill=BLACK)
     return image
 

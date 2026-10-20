@@ -350,7 +350,56 @@ def test_the_footer_has_the_outdoor_temperature_and_outlook():
     frame = display_render.build_frame(payload(
         outdoor={"temperature": -3.6}, weather_outlook={"tendency": "falling"},
     ), now=NOW)
-    assert "-4° at 10:00" in frame.footer and "Weather turning" in frame.footer
+    assert "\u22124° at 10:00" in frame.footer and "Weather turning" in frame.footer
+    assert (frame.outdoor, frame.outdoor_at, frame.outlook) == (-4, "10:00", "Weather turning")
+
+
+def test_the_grip_wax_follows_the_swix_chart():
+    cases = {
+        -31: "polar", -20.1: "polar", -20: "green", -10.1: "green", -10: "blue",
+        -3.1: "blue", -3: "violet", 0.9: "violet", 1: "red", 25: "red",
+    }
+    for temperature, wax in cases.items():
+        assert display_render.grip_wax(temperature) == wax, temperature
+    assert display_render.grip_wax(None) is None
+
+
+def test_the_grip_wax_holds_its_colour_half_a_degree_past_an_edge():
+    wax = display_render.grip_wax
+    assert wax(-2.6, "blue") == "blue"
+    assert wax(-2.4, "blue") == "violet"
+    assert wax(-3.4, "violet") == "violet"
+    assert wax(-3.6, "violet") == "blue"
+    assert wax(0.6, "red") == "red"
+    # Far from the colour it had, it does not hold on.
+    assert wax(-25, "blue") == "polar"
+    assert wax(-2.6, "nonsense") == "violet"
+
+
+def test_the_picture_shows_the_wax_only_with_an_outdoor_reading():
+    frame = display_render.build_frame(payload(outdoor={"temperature": -6.2}), now=NOW)
+    assert frame.wax == "blue"
+    assert display_render.build_frame(payload(), now=NOW).wax is None
+    # The server's choice, with its margin, is what is drawn.
+    held = display_render.build_frame(payload(outdoor={"temperature": -2.8}, grip_wax="blue"), now=NOW)
+    assert held.wax == "blue"
+    off = display_render.build_frame(payload(sensors_enabled=False, outdoor={"temperature": -12}), now=NOW)
+    assert off.wax == "green"
+    for temperature in (-24, -14, -6, -1, 3):
+        png = display_render.render_png(payload(outdoor={"temperature": temperature}), now=NOW)
+        image = Image.open(io.BytesIO(png))
+        assert image.size == (display_render.WIDTH, display_render.HEIGHT)
+
+
+def test_violet_is_drawn_in_red_and_blue_because_the_panel_has_no_violet():
+    image = display_render.draw_frame(
+        display_render.build_frame(payload(outdoor={"temperature": -1}), now=NOW),
+    )
+    box = image.crop((display_render.WAX_LEFT + 4, display_render.FOOTER_TOP + 24,
+                      display_render.WIDTH - display_render.MARGIN - 4, display_render.FOOTER_TOP + 30))
+    colours = set(box.getdata())
+    assert {display_render.RED, display_render.BLUE} <= colours
+    assert colours <= set(display_render.PALETTE)
 
 
 def test_more_rows_than_fit_are_summed_up_not_dropped():
@@ -409,12 +458,27 @@ def fingerprint(**fields):
 
 def test_the_fingerprint_ignores_weather_temperatures_and_the_hub():
     base = fingerprint()
-    assert fingerprint(outdoor={"temperature": -3.6}) == base
+    assert fingerprint(outdoor={"temperature": -3.6}) == fingerprint(outdoor={"temperature": -8})
     assert fingerprint(weather_outlook={"tendency": "storm"}) == base
     assert fingerprint(hub_connected=False) == base
     assert fingerprint(site="Elsewhere") == base
     assert fingerprint(rooms=[{"name": "Kitchen", "actual_temperature": 21.5, "warnings": []}]) == base
     assert fingerprint(rooms=[{"name": "Kitchen", "warnings": ["humid", "too_warm"]}]) == base
+
+
+def test_a_new_grip_wax_redraws_the_panel():
+    blue = fingerprint(outdoor={"temperature": -6})
+    assert fingerprint() != blue
+    assert fingerprint(outdoor={"temperature": -14}) != blue
+    assert fingerprint(outdoor={"temperature": -2.8}, grip_wax="blue") == blue
+
+
+def test_the_server_holds_the_wax_across_an_edge(monkeypatch):
+    monkeypatch.setattr(server, "_display_wax", None)
+    readings = iter([-3.4, -2.8, -2.6, -2.4, -2.8, -3.4, -3.6])
+    monkeypatch.setattr(server, "_display_outdoor", lambda: {"temperature": next(readings)})
+    shown = [server._display_payload()["grip_wax"] for _ in range(7)]
+    assert shown == ["blue", "blue", "blue", "violet", "violet", "violet", "blue"]
 
 
 def test_the_fingerprint_follows_every_sensor_change():

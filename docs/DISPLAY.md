@@ -30,13 +30,15 @@ That split is deliberate:
   waiting for a door. The device asks with
   `If-None-Match` and is answered `304 Not Modified` until one of those has
   changed. A new outdoor temperature, an outlook, a room temperature or the
-  hub reconnecting is drawn with the next sensor change, never on its own. A
+  hub reconnecting is drawn with the next sensor change, never on its own —
+  except the colour of the recommended grip wax, below, which is in the
+  fingerprint and changes a few times a day at most. A
   Spectra 6 refresh takes the best part of twenty seconds and flashes the
   whole panel; it should happen when a door opens, not every quarter of an
   hour.
 - **So nothing on the picture may go stale while it waits.** Times carry
   their weekday ("Mon 09:47"), because a bare "09:47" is wrong the next
-  morning. The outdoor reading says when it was read ("Outside 4° at 10:05").
+  morning. The outdoor reading says when it was read ("−4° outside at 10:05").
   The low-battery note has no percentage. The hub's connection is not on the
   picture at all: doors and windows do not depend on it.
 
@@ -61,6 +63,17 @@ signal" and are never counted as closed. A room near freezing gets a red row.
 With the alarm on and something open, a red row says so ("Alarm on",
 "Locked up", …). The footer carries the outside temperature in whole degrees
 and the weather outlook, when there is a weather station.
+
+With an outdoor reading the footer also names the **grip wax** for that
+temperature, in a box of the wax's colour, from the outer ring of Swix's
+grip-wax chart: Polar below −20°, Green to −10°, Blue to −3°, Violet to
++1°, Red above. The panel has no violet ink, so violet is a red-and-blue
+checkerboard, and Polar, white on the chart, is a white box with a black
+edge. A new colour redraws the panel, but only once the reading is half a
+degree past the edge (`GRIP_WAX_MARGIN`), so a temperature hovering at −3°
+cannot flash the panel every few minutes. The server keeps the colour last
+offered in memory; a restart costs at most one redraw. The boundaries were
+read off the chart by eye and live in `GRIP_WAX` in `display_render.py`.
 
 Two notes can appear at the bottom in red: **No contact with the Nobø hub**,
 and **Display battery low: N%** at 20 % or below.
