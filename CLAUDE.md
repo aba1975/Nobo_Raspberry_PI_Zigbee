@@ -150,8 +150,15 @@ hub reached the hardware; everything else proves a message reached the hub.
   test unable to reach Netatmo
 - `app/display_tokens.py`, `app/display_render.py` and `display/papercolor/` —
   the wall display. `docs/DISPLAY.md` is the design. **The Pi draws the
-  picture** (`/api/display/frame.png`, six inks, ETag = hash of the PNG, so
-  it carries no clock) and the firmware only shows it. A display key
+  picture** (`/api/display/frame.png`, six inks) and the firmware only shows
+  it. The ETag is `sensor_fingerprint`, **not** a hash of the PNG: a Spectra
+  6 refresh takes about 15 s and flashes, so the panel redraws only for doors,
+  windows, their warnings, the grip-wax colour, the display's low battery or a
+  `DESIGN_VERSION` bump. Anything else drawn must therefore stay true while it
+  waits (times carry a weekday; the outdoor reading says when). Bump
+  `DESIGN_VERSION` when the drawing changes. The LED colour in
+  `X-Display-Light` goes through `light_for_firmware`, because firmware older
+  than 1.4.0 reads an unknown colour as off. A display key
   (`nd_…`, SHA-256 only in `data/displays.json`) opens exactly
   `DISPLAY_TOKEN_PATHS` for GET and nothing else; keep it that way. Wi-Fi,
   key and CA reach the device only through `provision.py`, never the repo
