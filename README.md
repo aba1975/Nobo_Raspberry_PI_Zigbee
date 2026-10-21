@@ -2255,10 +2255,9 @@ heater by serial number, keeps an activity log under **Settings → Diagnostics*
 an iPhone home screen. **Settings → About** says which version is running, how long it has been
 up, what the hub reports about itself and which add-ons are on.
 
-The original "classic" interface was retired in October 2026. `/classic` now sends an old bookmark
-to the front page, and a leftover `NOBO_UI=classic` in `.env` is ignored with a warning in the
-log. The last revision that still contained it is tagged `classic-ui-final`, if you ever want
-the old code exactly as it was.
+The original "classic" interface was removed in October 2026. The last revision that still
+contained it is tagged `classic-ui-final`, if you ever want the old code exactly as it was. A
+leftover `NOBO_UI` line in `.env` does nothing and can be deleted.
 
 ## Design Exploration
 

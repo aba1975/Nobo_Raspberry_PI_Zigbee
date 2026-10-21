@@ -200,10 +200,9 @@ class TestOneInterface:
             assert r.status_code == 200
             assert "/static/ui/cabin/cabin.js" in r.text
 
-    def test_an_old_classic_bookmark_lands_on_the_front_page(self, client):
+    def test_there_is_no_classic_address_any_more(self, client):
         r = client.get("/classic", follow_redirects=False)
-        assert r.status_code == 302
-        assert r.headers["location"] == "/"
+        assert r.status_code == 404
 
     def test_the_classic_files_are_gone(self, client):
         for name in ("index.html", "app.js", "auth.js", "style.css"):
@@ -212,8 +211,15 @@ class TestOneInterface:
 
     def test_the_server_no_longer_switches(self):
         source = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
-        for gone in ("UI_CHOICES", "ACTIVE_UI", "_LOGIN_CLASSIC_HTML", "_LOGIN_PAGES"):
+        for gone in ("UI_CHOICES", "ACTIVE_UI", "_LOGIN_CLASSIC_HTML", "_LOGIN_PAGES",
+                     "NOBO_UI", "/classic"):
             assert gone not in source, gone
+
+    def test_no_page_points_at_classic(self):
+        for page in STATIC.rglob("*.html"):
+            assert "/classic" not in page.read_text(encoding="utf-8"), page
+        for page in STATIC.rglob("*.js"):
+            assert "/classic" not in page.read_text(encoding="utf-8"), page
 
     def test_cabin_never_points_at_classic(self):
         assert "/classic" not in CABIN

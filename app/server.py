@@ -11015,18 +11015,9 @@ app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static
 
 
 # ===== The interface =====
-#
-# There is one: Cabin. The original "classic" interface was retired in October
-# 2026, and /classic now sends anyone with an old bookmark to the front page.
 
 CABIN_DIR = STATIC_DIR / "ui" / "cabin"
 CABIN_INDEX = CABIN_DIR / "index.html"
-
-if os.environ.get("NOBO_UI", "").strip().lower() == "classic":
-    logger.warning(
-        "NOBO_UI=classic is set, but the classic interface has been removed. "
-        "Serving Cabin; the setting can be deleted from .env."
-    )
 
 
 def _serve_ui() -> HTMLResponse:
@@ -11050,12 +11041,6 @@ async def read_root():
 async def read_cabin():
     """The same interface, at the address it had while there were two."""
     return _serve_ui()
-
-
-@app.get("/classic")
-async def read_classic():
-    """The retired interface. Old bookmarks land on the front page."""
-    return RedirectResponse(url="/", status_code=302)
 
 
 # ===== Main Entry Point =====

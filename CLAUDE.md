@@ -174,7 +174,7 @@ hub reached the hardware; everything else proves a message reached the hub.
   `DISPLAY_TOKEN_PATHS` for GET and nothing else; keep it that way. Wi-Fi,
   key and CA reach the device only through `provision.py`, never the repo
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
-- `app/static/ui/cabin/` — the interface. The classic one was removed in October 2026; `/classic` redirects to `/`, and `NOBO_UI` is ignored with a warning. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
+- `app/static/ui/cabin/` — the interface. The classic one was removed entirely in October 2026 (tag `classic-ui-final`); there is no `/classic` and no `NOBO_UI`. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01
 - `Dockerfile` — Python 3.12-slim, ARM64. `compose.yml` — the app, plus Caddy behind the `tls` profile

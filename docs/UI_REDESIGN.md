@@ -970,9 +970,9 @@ browser harness run against the live Pi.
 
 > **October 2026: Classic has been removed.** Nobody had used it since Cabin became the default,
 > and it was the only place user accounts could be managed, which kept it alive. Cabin now has
-> that under Settings → Account. `/classic` redirects to `/`, `NOBO_UI` is ignored with a warning,
-> `_LOGIN_CLASSIC_HTML` and `tests/test_ui_switch.py` are gone, and the tag `classic-ui-final`
-> marks the last revision that still contained it. The rest of this section is the record of how the switch worked.
+> that under Settings → Account. `/classic`, `NOBO_UI`, `_LOGIN_CLASSIC_HTML` and
+> `tests/test_ui_switch.py` are gone, and the tag `classic-ui-final` marks the last revision that
+> still contained it. The rest of this section is the record of how the switch worked.
 
 Concept D was adopted after being used on a real Pi against a real hub. This section records what
 changed when it shipped, and how to undo it.
