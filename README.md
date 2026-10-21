@@ -2257,8 +2257,8 @@ up, what the hub reports about itself and which add-ons are on.
 
 The original "classic" interface was retired in October 2026. `/classic` now sends an old bookmark
 to the front page, and a leftover `NOBO_UI=classic` in `.env` is ignored with a warning in the
-log. The last revision before Cabin became the default is tagged `classic-ui-final`, if you ever
-want the old code exactly as it was.
+log. The last revision that still contained it is tagged `classic-ui-final`, if you ever want
+the old code exactly as it was.
 
 ## Design Exploration
 
