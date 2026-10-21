@@ -85,11 +85,10 @@ def test_every_local_asset_reference_resolves(concept):
 
 
 def test_the_adopted_interface_is_where_the_server_looks_for_it():
-    """The production entry points must exist, whichever way NOBO_UI is set."""
+    """The production entry points must exist."""
     static_root = Path(__file__).resolve().parent.parent / "app" / "static"
     assert (static_root / "ui" / "cabin" / "index.html").exists()
     assert (static_root / "ui" / "shared" / "core.js").exists()
-    assert (static_root / "index.html").exists(), "the classic interface must stay installed"
 
 
 def test_the_installed_app_starts_at_the_app_root():

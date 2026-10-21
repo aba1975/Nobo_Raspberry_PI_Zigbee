@@ -42,8 +42,8 @@ TEST_SESSION_ID = "pytest-fixed-session-id"
 
 
 # Everything below reaches the app through the ``server`` module rather than
-# through names imported from it. Two test modules call importlib.reload(server),
-# which rebinds the module's globals while leaving the already-imported names in
+# through names imported from it. A test that calls importlib.reload(server)
+# rebinds the module's globals while leaving the already-imported names in
 # other modules pointing at the previous objects. A module-level
 # ``from server import DEMO_ZONES`` therefore ends up inspecting a list the
 # request handlers no longer use, and the tests quietly assert against a copy

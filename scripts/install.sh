@@ -283,6 +283,11 @@ say "  Installed."
 step "5/7  Building"
 
 say "  The first build takes several minutes on a Raspberry Pi. Leave it be."
+# The image has no .git, so the version Settings → About shows is stamped here,
+# beside the code, and carried in by COPY app/. Ignored by git.
+printf '{"commit":"%s","date":"%s","branch":"%s"}\n' \
+    "$(git rev-parse --short HEAD)" "$(git log -1 --format=%cI)" \
+    "$(git rev-parse --abbrev-ref HEAD)" > app/build_info.json || true
 docker compose build
 
 

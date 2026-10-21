@@ -15,7 +15,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent / "app" / "static"
 CABIN = (ROOT / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
-CLASSIC = (ROOT / "app.js").read_text(encoding="utf-8")
 CORE = (ROOT / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
 
 
@@ -86,11 +85,6 @@ def test_the_warning_does_not_re_announce_itself():
         'role="alert" would be worse still and', ''
     )
     assert '<div aria-live="polite">${warning}</div>' in _function("climateStatus")
-
-
-def test_classic_stays_thermometer_free():
-    for word in ("climate", "temperature_max", "humidity"):
-        assert word not in CLASSIC
 
 
 def test_the_thermometer_icon_exists():

@@ -48,24 +48,8 @@ class TestTheCabinInterface:
             "stepZone should round the current set point before adding the step"
 
 
-class TestTheClassicInterface:
-    def test_both_steppers_move_a_whole_degree(self):
-        source = read("app.js")
-        deltas = re.findall(r"adjustTemperature\('\$\{zone\.zone_id\}',\s*'\w+',\s*(-?[\d.]+)\)", source)
-        assert deltas, "the stepper wiring moved -- find it and update this test"
-        for d in deltas:
-            assert abs(float(d)) == 1.0, f"step of {d} cannot be stored by the hub"
-
-    def test_the_current_value_is_rounded_before_stepping(self):
-        source = read("app.js")
-        assert re.search(r"Math\.round\(currentTemp\)", source), \
-            "adjustTemperature should round the current set point before adding the step"
-
-
 class TestNoHalfDegreeIsOffered:
-    def test_neither_interface_still_carries_a_half_step(self):
-        for parts in (("ui", "cabin", "cabin.js"), ("app.js")):
-            parts = parts if isinstance(parts, tuple) else (parts,)
-            source = read(*parts)
-            for match in re.findall(r"(?:stepZone|adjustTemperature)\([^)]*\)", source):
-                assert "0.5" not in match, f"{parts[-1]}: {match}"
+    def test_the_interface_does_not_carry_a_half_step(self):
+        source = read("ui", "cabin", "cabin.js")
+        for match in re.findall(r"stepZone\([^)]*\)", source):
+            assert "0.5" not in match, match

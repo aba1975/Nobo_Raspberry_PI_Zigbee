@@ -9,10 +9,6 @@ services:
       - NOBO_IP=${NOBO_IP:-10.0.0.100}
       - NOBO_DEMO=${NOBO_DEMO:-false}
       - NOBO_ALLOW_ANON_API=${NOBO_ALLOW_ANON_API:-false}
-      # Which interface answers "/". Both ship in the image and both are always
-      # reachable at /cabin and /classic, so switching back is this one line
-      # plus a restart - no rebuild, and no loss of any other fix.
-      - NOBO_UI=${NOBO_UI:-cabin}
       # Where the application listens.
       #
       # 0.0.0.0 (the default) means anyone on your network can reach it on

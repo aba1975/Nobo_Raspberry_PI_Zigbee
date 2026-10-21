@@ -95,7 +95,7 @@ class TestUnauthenticatedRedirects:
         assert r.headers["location"] == "/login"
 
     def test_static_asset_redirects_to_login(self, client):
-        r = client.get("/static/app.js", follow_redirects=False)
+        r = client.get("/static/ui/cabin/cabin.js", follow_redirects=False)
         assert r.status_code == 302
         assert r.headers["location"] == "/login"
 
@@ -147,7 +147,7 @@ class TestAuthenticatedAccess:
 
     def test_static_asset_accessible_after_login(self, client):
         _login(client)
-        r = client.get("/static/app.js", follow_redirects=False)
+        r = client.get("/static/ui/cabin/cabin.js", follow_redirects=False)
         assert r.status_code == 200
 
     def test_auth_me_returns_user(self, client):

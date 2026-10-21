@@ -137,6 +137,19 @@ def delete_session(session_id: str) -> None:
     sessions.pop(session_id, None)
 
 
+def end_sessions_for(username: str) -> None:
+    """Sign a user out everywhere, as when their account is removed."""
+    for session_id in [sid for sid, s in sessions.items() if s.get("username") == username]:
+        sessions.pop(session_id, None)
+
+
+def rename_sessions(old: str, new: str) -> None:
+    """Keep a renamed user signed in under the new name."""
+    for session in sessions.values():
+        if session.get("username") == old:
+            session["username"] = new
+
+
 # ---------------------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------------------

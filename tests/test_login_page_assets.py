@@ -102,16 +102,16 @@ class TestFaviconIco:
             signed_in.get("/static/ui/cabin/icon.svg").content
 
 
-class TestBothInterfacesDeclareAnIcon:
-    """The classic interface declared none, so browsers asked for
-    /favicon.ico, got a 404, and drew a letter."""
+class TestTheInterfaceDeclaresAnIcon:
+    """A page that declares none makes browsers ask for /favicon.ico, and on a
+    404 they draw a letter."""
 
-    @pytest.mark.parametrize("path", ["/", "/cabin", "/classic"])
+    @pytest.mark.parametrize("path", ["/", "/cabin"])
     def test_the_page_declares_an_icon(self, signed_in, path):
         icons = _declared_icons(signed_in.get(path).text)
         assert icons, f"{path} declares no icon"
 
-    @pytest.mark.parametrize("path", ["/", "/cabin", "/classic"])
+    @pytest.mark.parametrize("path", ["/", "/cabin"])
     def test_the_declared_icon_actually_exists(self, signed_in, path):
         for url in _declared_icons(signed_in.get(path).text):
             if url.startswith("/"):
@@ -146,7 +146,6 @@ class TestOpeningTheIconsDidNotOpenAnythingElse:
         "/api/site",
         "/static/ui/cabin/cabin.js",
         "/static/ui/shared/core.js",
-        "/static/app.js",
     ])
     def test_everything_else_still_needs_a_session(self, anon, path):
         response = anon.get(path, follow_redirects=False)

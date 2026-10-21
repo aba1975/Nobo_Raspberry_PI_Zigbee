@@ -1762,6 +1762,8 @@ hub_tap: Optional[HubProtocolTap] = None
 # one and only time the hub is told what time it is. Compared against the
 # offset now to notice a daylight-saving change; None until first connected.
 hub_clock_offset: Optional[timedelta] = None
+# When the current real-hub connection was made, for Settings → About.
+hub_connected_since: Optional[datetime] = None
 
 
 def connect_to_hub_sync(force: bool = False):
@@ -1771,7 +1773,7 @@ def connect_to_hub_sync(force: bool = False):
     that is the clock resync: the hub takes its time from ``HELLO`` and from
     nothing else, so the only way to correct it is to say hello again.
     """
-    global hub, hub_connected, hub_tap, hub_clock_offset
+    global hub, hub_connected, hub_tap, hub_clock_offset, hub_connected_since
 
     # One attempt at a time. See hub_connect_lock for why this matters.
     with hub_connect_lock:
@@ -1809,6 +1811,7 @@ def connect_to_hub_sync(force: bool = False):
                     hub_tap = tap
                     hub_connected = True
                     hub_clock_offset = handshake_offset
+                    hub_connected_since = local_now()
 
             if stale:
                 # The user changed the configuration while we were connecting. This
@@ -3875,7 +3878,7 @@ def _require_sensor_enabled() -> None:
 
 
 def _sensor_provider_unavailable(detail: str) -> None:
-    # Published separately under capabilities.sensors because Classic's action
+    # Published separately under capabilities.sensors because the action
     # capability map intentionally has no sensor controls.
     raise HTTPException(status_code=501, detail=detail)  # capability: sensors
 
@@ -4757,6 +4760,101 @@ async def get_status():
     }
 
 
+# ===== About this installation =====
+APP_STARTED_AT = local_now()
+
+# Written by scripts/update.sh and scripts/install.sh just before the image is
+# built, and carried in by ``COPY app/``. The image has no .git, so this is the
+# only way the running app can say which version it is. Ignored by git.
+BUILD_INFO_FILE = Path(__file__).resolve().parent / "build_info.json"
+_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+def load_build_info(path: Path = BUILD_INFO_FILE) -> Optional[Dict[str, Optional[str]]]:
+    """The version stamp, or None when the app was not built by the scripts."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        logger.warning("Ignoring unreadable %s: %s", path.name, exc)
+        return None
+    if not isinstance(raw, dict):
+        return None
+    commit = raw.get("commit")
+    if not isinstance(commit, str) or not _COMMIT_RE.match(commit):
+        return None
+    date = raw.get("date")
+    try:
+        date = datetime.fromisoformat(date).isoformat() if isinstance(date, str) else None
+    except ValueError:
+        date = None
+    branch = raw.get("branch")
+    branch = branch if isinstance(branch, str) and _BRANCH_RE.match(branch) else None
+    return {"commit": commit, "date": date, "branch": branch}
+
+
+BUILD_INFO = load_build_info()
+
+
+def _epoch_iso(value: Any) -> Optional[str]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return datetime.fromtimestamp(value).astimezone().isoformat()
+    return None
+
+
+@app.get("/api/about")
+async def get_about():
+    """What this installation is, for Settings → About.
+
+    Read-only and nothing secret: the version, how long it has been running,
+    the clock it keeps, the hub connection and which add-ons are on. Whether
+    each add-on is on is already public to every signed-in user through
+    /api/capabilities; this adds none of their settings.
+    """
+    with connection_lock:
+        connected = hub_connected
+        since = hub_connected_since
+        offset = hub_clock_offset
+    now = local_now()
+    real = connected and not DEMO_MODE
+    displays = display_registry.list()
+    seen = [d["last_seen_at"] for d in displays
+            if isinstance(d.get("last_seen_at"), (int, float))]
+    return {
+        "build": BUILD_INFO,
+        "started_at": APP_STARTED_AT.isoformat(),
+        "timezone": {
+            "name": local_timezone_name(),
+            "offset": _format_offset(now.utcoffset() or timedelta(0)),
+            "dst": time.localtime().tm_isdst > 0,
+        },
+        "hub": {
+            "connected": connected,
+            "demo_mode": DEMO_MODE,
+            "connected_since": since.isoformat() if real and since else None,
+            # The offset the hub was told at HELLO, the only time it is told.
+            "clock_offset": _format_offset(offset) if real and offset is not None else None,
+        },
+        "addons": {
+            "sensors": {"enabled": sensor_settings.enabled,
+                        "provider": sensor_settings.provider if sensor_settings.enabled else None},
+            "alarm": {"enabled": alarm_settings.enabled,
+                      "provider": _alarm_current_settings().provider if alarm_settings.enabled else None},
+            "weather": {"enabled": weather_settings.enabled,
+                        "provider": _weather_current_settings().provider if weather_settings.enabled else None},
+            "forecast": {"enabled": forecast_service.settings.enabled,
+                         "place_set": forecast_service.settings.place is not None},
+            "alerts": {"enabled": bool(notifier.settings.get("enabled"))},
+        },
+        "displays": {
+            "count": len(displays),
+            "last_seen_at": _epoch_iso(max(seen)) if seen else None,
+        },
+    }
+
+
 def _display_payload() -> Dict[str, Any]:
     """Everything a wall display needs, flattened for a small device to parse.
 
@@ -5626,7 +5724,7 @@ async def site_manifest():
     the app.
     """
     base = {}
-    static_manifest = STATIC_DIR / "ui" / ACTIVE_UI / "manifest.webmanifest"
+    static_manifest = CABIN_DIR / "manifest.webmanifest"
     try:
         with static_manifest.open("r", encoding="utf-8") as fh:
             base = json.load(fh)
@@ -5655,15 +5753,15 @@ async def favicon():
 
     ``/favicon.ico`` has been on the public allow-list all along but nothing
     ever answered it, so it returned 404. Browsers request it unprompted for
-    any page that does not declare an icon — the classic interface declares
-    none — and on a 404 they draw a letter from the hostname instead.
+    any page that does not declare an icon, and on a 404 they draw a letter
+    from the hostname instead.
 
     An SVG is returned rather than a real .ico. The extension in the URL is a
     convention, not a promise; every browser that still asks for this path
     honours the Content-Type. Serving the same file the interface already uses
     means there is one icon to keep, not two.
     """
-    icon = STATIC_DIR / "ui" / ACTIVE_UI / "icon.svg"
+    icon = CABIN_DIR / "icon.svg"
     if not icon.is_file():
         # A missing icon is not worth an error page.
         return Response(status_code=204)
@@ -10462,87 +10560,6 @@ async def websocket_endpoint(websocket: WebSocket):
 # ===== Authentication Endpoints =====
 
 # Inline login-page HTML — served directly (not via /static) to avoid auth loop
-_LOGIN_CLASSIC_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nobø Control — Login</title>
-<style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg: #1a1a2e; --card: #16213e; --border: #0f3460;
-    --accent: #e94560; --text: #eee; --muted: #aaa;
-    --input-bg: #0f3460; --radius: 8px;
-  }
-  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif;
-    min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-    padding: 2rem; width: 100%; max-width: 380px; }
-  h1 { text-align: center; margin-bottom: 1.5rem; font-size: 1.5rem; }
-  .form-group { margin-bottom: 1rem; }
-  label { display: block; margin-bottom: .4rem; font-size: .875rem; color: var(--muted); }
-  input { width: 100%; padding: .6rem .8rem; background: var(--input-bg);
-    border: 1px solid var(--border); border-radius: var(--radius);
-    color: var(--text); font-size: 1rem; }
-  input:focus { outline: 2px solid var(--accent); }
-  button { width: 100%; margin-top: .5rem; padding: .75rem;
-    background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600;
-    border: none; border-radius: var(--radius); cursor: pointer; }
-  button:hover { opacity: .9; }
-  .error { background: rgba(233,69,96,.15); border: 1px solid var(--accent);
-    color: var(--accent); border-radius: var(--radius); padding: .6rem .8rem;
-    margin-bottom: 1rem; font-size: .875rem; display: none; }
-  .error.show { display: block; }
-  .site { text-align: center; margin: -1rem 0 1.5rem; font-size: .9rem; color: var(--muted); }
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>🔒 Nobø Control</h1>
-  <p class="site"><!--SITE_TAGLINE--></p>
-  <div class="error" id="errorMsg"></div>
-  <form id="loginForm">
-    <div class="form-group">
-      <label for="username">Username</label>
-      <input type="text" id="username" name="username" autocomplete="username" required autofocus>
-    </div>
-    <div class="form-group">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" autocomplete="current-password" required>
-    </div>
-    <button type="submit">Sign in</button>
-  </form>
-</div>
-<script>
-document.getElementById('loginForm').addEventListener('submit', async e => {
-  e.preventDefault();
-  const err = document.getElementById('errorMsg');
-  err.classList.remove('show');
-  const body = new URLSearchParams({
-    username: document.getElementById('username').value,
-    password: document.getElementById('password').value,
-  });
-  try {
-    const r = await fetch('/auth/login', { method: 'POST', body,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-    if (r.ok) {
-      window.location.href = '/';
-    } else {
-      const data = await r.json().catch(() => ({}));
-      err.textContent = data.detail || 'Login failed';
-      err.classList.add('show');
-    }
-  } catch {
-    err.textContent = 'Network error — please try again.';
-    err.classList.add('show');
-  }
-});
-</script>
-</body>
-</html>"""
-
-
 # The Cabin sign-in page. It carries the same palette, radii and type as the
 # interface behind it, so the first screen of the app is not a different product
 # from the second. Self-contained on purpose: it is the one page that must
@@ -10690,8 +10707,6 @@ form.addEventListener('submit', async e => {
 </body>
 </html>"""
 
-_LOGIN_PAGES = {"cabin": _LOGIN_CABIN_HTML, "classic": _LOGIN_CLASSIC_HTML}
-
 
 def _get_session_or_401(request: Request) -> dict:
     """Return session dict or raise HTTP 401."""
@@ -10711,7 +10726,7 @@ def _require_admin(session: dict) -> None:
 
 @app.get("/login")
 async def login_page():
-    """Serve the sign-in page matching the active interface.
+    """Serve the sign-in page.
 
     The name is substituted server-side rather than fetched by script. The
     sign-in page is the first thing anyone sees, and a page that renders "the
@@ -10722,16 +10737,12 @@ async def login_page():
 
     if site["show_on_login"] and site["is_named"]:
         tagline = f"Heating control for {html.escape(site['name'])}."
-    elif ACTIVE_UI == "cabin":
-        # The wording Cabin has always shipped with. Left alone when unnamed so
-        # an installation that never sets a name looks exactly as it did.
-        tagline = f"Heating control for {SITE_INLINE_FALLBACK}."
     else:
-        # Classic never had a tagline. Inventing one for it, and a cabin-flavoured
-        # one at that, would change a page the user chose specifically to go back to.
-        tagline = ""
+        # The wording the sign-in page has always shipped with, so an
+        # installation that never sets a name looks exactly as it did.
+        tagline = f"Heating control for {SITE_INLINE_FALLBACK}."
 
-    page = _LOGIN_PAGES[ACTIVE_UI].replace("<!--SITE_TAGLINE-->", tagline)
+    page = _LOGIN_CABIN_HTML.replace("<!--SITE_TAGLINE-->", tagline)
 
     return HTMLResponse(
         content=page,
@@ -10864,7 +10875,9 @@ async def auth_rename(request: Request):
     users[new_name] = users.pop(old_name)
     auth.save_users(users)
 
-    # Update the active session
+    # Every session of this user, not only this one: another phone left
+    # signed in would otherwise carry on under a name that no longer exists.
+    auth.rename_sessions(old_name, new_name)
     session["username"] = new_name
     return {"status": "renamed", "username": new_name}
 
@@ -10895,6 +10908,8 @@ async def admin_add_user(request: Request):
 
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required")
+    if len(username) < 2:
+        raise HTTPException(status_code=400, detail="Username must be at least 2 characters")
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     if role not in ("admin", "user"):
@@ -10923,6 +10938,15 @@ async def admin_update_user(request: Request, username: str):
     new_name = str(data.get("new_username", "")).strip() or None
     new_role = data.get("role")
 
+    if new_name and new_name != username and len(new_name) < 2:
+        raise HTTPException(status_code=400, detail="Username must be at least 2 characters")
+    if new_role == "user" and users[username].get("role") == "admin":
+        admins = [u for u, info in users.items() if info.get("role") == "admin"]
+        if admins == [username]:
+            # Nobody could then add users, change the hub or undo this.
+            raise HTTPException(status_code=400, detail="There must be at least one administrator")
+
+    old_name = username
     if new_name and new_name != username:
         if new_name in users:
             raise HTTPException(status_code=409, detail="Username already exists")
@@ -10933,6 +10957,8 @@ async def admin_update_user(request: Request, username: str):
         users[username]["role"] = new_role
 
     auth.save_users(users)
+    if username != old_name:
+        auth.rename_sessions(old_name, username)
     return {"status": "updated", "username": username}
 
 
@@ -10951,6 +10977,7 @@ async def admin_delete_user(request: Request, username: str):
 
     del users[username]
     auth.save_users(users)
+    auth.end_sessions_for(username)
     return {"status": "deleted"}
 
 
@@ -10987,69 +11014,48 @@ class RevalidatingStaticFiles(StaticFiles):
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
 
-# ===== Which interface to serve =====
+# ===== The interface =====
 #
-# Two interfaces ship in every image: "cabin", the current one, and "classic",
-# the original. Which one answers "/" is decided at startup by NOBO_UI.
-#
-# This is deliberately a runtime switch rather than a branch or a separate
-# build. Rolling back a UI by redeploying an older revision would also roll back
-# every backend fix made since, and the revision you fall back to is the one
-# nobody has run for months. Here a rollback is one line in .env and a restart:
-# no rebuild, no network, and the server keeps every fix it has.
-#
-# Both interfaces are always reachable at /cabin and /classic whatever the
-# setting, so they can be compared without changing any configuration.
+# There is one: Cabin. The original "classic" interface was retired in October
+# 2026, and /classic now sends anyone with an old bookmark to the front page.
 
-UI_CHOICES = {
-    "cabin":   STATIC_DIR / "ui" / "cabin" / "index.html",
-    "classic": STATIC_DIR / "index.html",
-}
-DEFAULT_UI = "cabin"
+CABIN_DIR = STATIC_DIR / "ui" / "cabin"
+CABIN_INDEX = CABIN_DIR / "index.html"
 
-_requested_ui = os.environ.get("NOBO_UI", DEFAULT_UI).strip().lower()
-if _requested_ui not in UI_CHOICES:
+if os.environ.get("NOBO_UI", "").strip().lower() == "classic":
     logger.warning(
-        "NOBO_UI=%r is not one of %s; falling back to %r. An unreachable "
-        "interface is worse than the wrong one, so this does not stop startup.",
-        _requested_ui, ", ".join(sorted(UI_CHOICES)), DEFAULT_UI,
+        "NOBO_UI=classic is set, but the classic interface has been removed. "
+        "Serving Cabin; the setting can be deleted from .env."
     )
-    _requested_ui = DEFAULT_UI
-ACTIVE_UI = _requested_ui
-logger.info("Serving the %r interface at /. Both are always at /cabin and /classic.", ACTIVE_UI)
 
 
-def _serve_ui(name: str) -> HTMLResponse:
-    path = UI_CHOICES[name]
+def _serve_ui() -> HTMLResponse:
     try:
-        content = path.read_text(encoding="utf-8")
+        content = CABIN_INDEX.read_text(encoding="utf-8")
     except FileNotFoundError:
-        logger.error("Interface %r is missing its entry point at %s", name, path)
-        return HTMLResponse(
-            content=f"<h1>The {name} interface is not installed</h1>",
-            status_code=404,
-        )
-    # Served inline rather than as a static file so the choice of interface is
-    # made per request and never cached by an intermediary.
+        logger.error("The interface is missing its entry point at %s", CABIN_INDEX)
+        return HTMLResponse(content="<h1>The interface is not installed</h1>", status_code=404)
+    # Served inline rather than as a static file so it is never cached by an
+    # intermediary.
     return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/")
 async def read_root():
-    """Serve whichever interface NOBO_UI selects."""
-    return _serve_ui(ACTIVE_UI)
+    """Serve the interface."""
+    return _serve_ui()
 
 
 @app.get("/cabin")
 async def read_cabin():
-    """The Cabin interface, reachable whatever NOBO_UI says."""
-    return _serve_ui("cabin")
+    """The same interface, at the address it had while there were two."""
+    return _serve_ui()
 
 
 @app.get("/classic")
 async def read_classic():
-    """The original interface, reachable whatever NOBO_UI says."""
-    return _serve_ui("classic")
+    """The retired interface. Old bookmarks land on the front page."""
+    return RedirectResponse(url="/", status_code=302)
 
 
 # ===== Main Entry Point =====

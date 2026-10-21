@@ -17,7 +17,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 CABIN = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CORE = (ROOT / "app" / "static" / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
-CLASSIC = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
 CSS = (ROOT / "app" / "static" / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
 SERVER = (ROOT / "app" / "server.py").read_text(encoding="utf-8")
 
@@ -56,14 +55,8 @@ def test_the_caller_cannot_choose_the_field_name():
     assert "Nobo.api.moveDevice(serial, zoneId)" in CABIN
 
 
-def test_the_classic_interface_was_right_and_stays_right():
-    """Classic always sent the correct field, which is why moving worked there
-    and not here. Worth pinning so a tidy-up does not level them downwards."""
-    assert "new_zone_id: newZoneId" in CLASSIC
-
-
 def test_no_interface_sends_the_old_field_name():
-    for name, text in (("cabin.js", CABIN), ("core.js", CORE), ("app.js", CLASSIC)):
+    for name, text in (("cabin.js", CABIN), ("core.js", CORE)):
         assert "{ zone_id:" not in text, f"{name} still sends zone_id"
 
 

@@ -472,6 +472,36 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint);
 }
 .sec-group:first-child { margin-top: .2rem; }
+
+/* Settings → About */
+.ab-h {
+  margin: 1rem 0 .35rem; font-size: .74rem; font-weight: 700;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint);
+}
+.ab { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: .32rem .9rem; font-size: .92rem; }
+.ab dt { color: var(--ink-soft); }
+.ab dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ab dd b { color: var(--pine); font-weight: 600; }
+.ab dd .warn { color: var(--amber); font-weight: 600; }
+.ab dd a, .ab-links a { color: var(--pine); }
+.ab-links { display: flex; flex-wrap: wrap; gap: .35rem 1rem; font-size: .92rem; }
+.ab-credit { color: var(--ink-faint); font-size: .8rem; margin-top: .7rem; line-height: 1.4; }
+
+/* Users sheet. Not .user-row: that is already the away-exception row. */
+.acct-list { list-style: none; margin: .4rem 0 0; padding: 0; }
+.acct-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .6rem;
+  padding: .5rem 0; border-bottom: 1px solid var(--rule);
+}
+.acct-name { font-weight: 600; overflow-wrap: anywhere; }
+.acct-name small { color: var(--ink-faint); font-weight: 400; }
+.acct-del-gap { min-width: 1px; }
+.acct-row select {
+  font: inherit; padding: .5rem 2.1rem .5rem .65rem; min-height: 44px;
+  border: 1px solid var(--rule); border-radius: 11px;
+  background: var(--paper); color: var(--ink);
+}
+.acct-row select:disabled { color: var(--ink-faint); opacity: 1; }
 .sec > summary {
   list-style: none; cursor: pointer; display: flex; align-items: center; gap: .6rem;
   padding: .85rem .95rem; font-weight: 650; min-height: 44px;
@@ -1512,7 +1542,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 /* Safari draws a native select at its own height and ignores the padding,
    which is why every list in Settings came out a thin grey strip beside
    44px fields. Drawn here instead, with the same chevron everywhere. */
-.card select, .sec select, .field select, .week-row select, .week-tools select {
+.card select, .sec select, .field select, .week-row select, .week-tools select, .acct-row select {
   -webkit-appearance: none; appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236B655C' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9.5l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right .65rem center; background-size: 1rem;

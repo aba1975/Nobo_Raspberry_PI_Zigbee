@@ -93,7 +93,7 @@ invented weather.
 | --- | --- |
 | `app/forecast.py` | The allow-list and HTTP call, `fetch` and `due` (the rules above), `summarise` (days and parts of days), `PlaceFinder` (Kartverket) and `ForecastService`. |
 | `app/server.py` | `GET /api/forecast` (any signed-in user; the only path that asks MET), `GET`/`PUT /api/forecast/settings` and `GET /api/forecast/places` (administrators). `/api/status` carries a brief `forecast` field so the front page knows when to reload. |
-| `app/static/ui/cabin/cabin.js` | The front-page row, the sheet and the Settings card. The classic interface does not show the forecast. |
+| `app/static/ui/cabin/cabin.js` | The front-page row, the sheet and the Settings card. |
 
 `tests/conftest.py` makes every test unable to reach MET or Kartverket: an
 autouse fixture replaces `forecast.http_get` with one that raises. Tests use

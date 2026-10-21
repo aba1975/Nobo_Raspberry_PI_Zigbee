@@ -2,8 +2,8 @@
 
 These are contract tests, not screenshots: they pin down the things that have
 actually gone wrong here before — a control that silently stops matching the
-API, an escaping hole on a user-supplied name, sensor wording leaking into
-Classic — and leave visual judgement to a person with the app open.
+API, an escaping hole on a user-supplied name — and leave visual judgement to a
+person with the app open.
 """
 
 import json
@@ -19,7 +19,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent / "app" / "static"
 CABIN = (ROOT / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CORE = (ROOT / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
-CLASSIC = (ROOT / "app.js").read_text(encoding="utf-8")
 CSS = (ROOT / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
 
 
@@ -265,11 +264,6 @@ def test_a_persistent_warning_does_not_re_announce_itself_on_every_update():
 def test_sensor_names_are_escaped_before_they_reach_the_markup():
     assert "${esc(sensor.name)}" in CABIN
     assert "${esc(zone.name)}" in CABIN
-
-
-def test_classic_remains_a_sensor_free_legacy_surface():
-    assert "/api/sensors" not in CLASSIC
-    assert "sensor-warning" not in CLASSIC
 
 
 def test_no_style_is_left_pointing_at_a_class_the_markup_dropped():
@@ -719,15 +713,6 @@ def test_a_late_poll_cannot_write_into_another_sheet():
     sheet = CABIN[start:end]
     assert "closed = true;" in sheet
     assert sheet.count("if (closed) return;") >= 3
-
-
-def test_classic_gains_no_sensor_pairing_surface():
-    # Classic deliberately has no sensor controls at all. It does talk about
-    # pairing Nobø receivers, which is a different thing entirely, so this
-    # checks for the sensor pairing surface rather than the word.
-    for hook in ("/api/sensors/pairing", "pair-status", "startSensorPairing",
-                 "Listening for a sensor"):
-        assert hook not in CLASSIC
 
 
 def test_a_battery_nobody_has_reported_is_named_not_left_blank():

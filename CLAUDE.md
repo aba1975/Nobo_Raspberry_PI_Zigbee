@@ -105,7 +105,7 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Frontend:** Two interfaces sharing one backend (`app/static/`), with live updates over a WebSocket
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
-- **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
+- **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
 - **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json`, `simulated_weather.json`, `forecast.json` and `forecast_cache.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, and `data/netatmo/`, the weather station's tokens, both left out on purpose
 
 ## Key Files
@@ -174,7 +174,7 @@ hub reached the hardware; everything else proves a message reached the hub.
   `DISPLAY_TOKEN_PATHS` for GET and nothing else; keep it that way. Wi-Fi,
   key and CA reach the device only through `provision.py`, never the repo
 - `app/notifications.py` / `app/notify_watch.py` — optional email alerts. Read the module docstring before extending: it documents what the hub genuinely cannot report
-- `app/static/ui/cabin/` — the production interface. `app/static/index.html` + `app.js` — the classic one, still reachable at `/classic`
+- `app/static/ui/cabin/` — the interface. The classic one was removed in October 2026; `/classic` redirects to `/`, and `NOBO_UI` is ignored with a warning. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01
 - `Dockerfile` — Python 3.12-slim, ARM64. `compose.yml` — the app, plus Caddy behind the `tls` profile
@@ -226,13 +226,14 @@ is easy to miss — see the container command in the README for how to include
 it.
 
 **Reach the app through `server.<name>`, never `from server import <name>`.**
-`tests/test_site_name.py` and `tests/test_ui_switch.py` call
-`importlib.reload(server)`. Reload rebinds the module's globals while reusing the
-module `__dict__`, so the request handlers pick up the new `DEMO_ZONES` while any
-name a test module imported earlier still points at the old list. A test file
-that ran after those two would then assert against a list nothing writes to, and
-pass or fail for reasons unrelated to the code — the symptom is a test that
-passes alone and fails in the full suite. `conftest.py` already resets
+Nothing reloads `server` today, but the tests that switched interfaces used to
+call `importlib.reload(server)`, and any test that does so again will hit this.
+Reload rebinds the module's globals while reusing the module `__dict__`, so the
+request handlers pick up the new `DEMO_ZONES` while any name a test module
+imported earlier still points at the old list. A test file that ran after it
+would then assert against a list nothing writes to, and pass or fail for reasons
+unrelated to the code — the symptom is a test that passes alone and fails in the
+full suite. `conftest.py` already resets
 `DEMO_ZONE_OVERRIDES` and the applied-exception set for the same reason.
 
 Most tests run in demo mode, so they never touch a real Nobø Hub. The real-hub

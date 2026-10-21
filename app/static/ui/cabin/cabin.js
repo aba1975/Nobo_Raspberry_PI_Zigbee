@@ -452,6 +452,268 @@
     });
   }
 
+  function renameMeSheet() {
+    const current = (state.me && state.me.username) || '';
+    openSheet('Change username', `
+      <p class="zd-sub">The name you sign in with. You stay signed in.</p>
+      <label class="field"><span>New username</span>
+        <input id="rnName" type="text" autocomplete="username" autocapitalize="none"
+          spellcheck="false" value="${esc(current)}">
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" data-act="save">Change it</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelector('[data-act="save"]').onclick = async (event) => {
+        const name = root.querySelector('#rnName').value.trim();
+        if (name.length < 2) { Nobo.toast('Use at least 2 characters', 'error'); return; }
+        if (name === current) { closeSheet(); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          await Nobo.api.renameMe(name);
+          closeSheet();
+          Nobo.toast(`You now sign in as ${name}`);
+          state.me = null;   // loadAll only asks again when it has none
+          await refresh(true);
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* ------------------------------------------------------------------
+   * Users - administrators only, and the server checks that again
+   * ---------------------------------------------------------------- */
+
+  async function usersSheet() {
+    let users;
+    try {
+      users = await Nobo.api.users();
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+      return;
+    }
+    const me = (state.me && state.me.username) || '';
+    const admins = users.filter(u => u.role === 'admin').length;
+    const rows = users.map(u => {
+      const self = u.username === me;
+      // The last administrator cannot be made an ordinary user: nobody would
+      // then be able to add users or change the hub.
+      const lockRole = u.role === 'admin' && admins === 1;
+      return `
+        <li class="acct-row">
+          <span class="acct-name">${esc(u.username)}${self ? ' <small>(you)</small>' : ''}</span>
+          <select data-user-role="${esc(u.username)}" aria-label="Role for ${esc(u.username)}"
+            ${lockRole ? 'disabled title="There must be at least one administrator"' : ''}>
+            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrator</option>
+            <option value="user" ${u.role !== 'admin' ? 'selected' : ''}>User</option>
+          </select>
+          ${self ? '<span class="acct-del-gap"></span>' : `<button class="btn btn-danger btn-small" type="button"
+            data-user-delete="${esc(u.username)}" aria-label="Remove ${esc(u.username)}">Remove</button>`}
+        </li>`;
+    }).join('');
+    openSheet('Users', `
+      <p class="zd-sub">An administrator can change everything, including the hub and
+        these users. A user can run the heating but not change settings.</p>
+      <ul class="acct-list">${rows}</ul>
+      <div class="ab-h">Add a user</div>
+      <label class="field"><span>Username</span>
+        <input id="nuName" type="text" autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+      <label class="field"><span>Password</span>
+        <input id="nuPassword" type="password" autocomplete="new-password" placeholder="At least 8 characters">
+      </label>
+      <label class="field"><span>Role</span>
+        <select id="nuRole">
+          <option value="user" selected>User</option>
+          <option value="admin">Administrator</option>
+        </select>
+      </label>
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Close</button>
+        <button class="btn btn-primary" type="button" data-act="add">Add user</button>
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      root.querySelectorAll('[data-user-role]').forEach(sel => {
+        sel.onchange = async () => {
+          const name = sel.dataset.userRole;
+          sel.disabled = true;
+          try {
+            await Nobo.api.updateUser(name, { role: sel.value });
+            Nobo.toast(`${name} is now ${sel.value === 'admin' ? 'an administrator' : 'a user'}`);
+            if (name === me) { state.me = null; closeSheet(); await refresh(true); return; }
+          } catch (e) {
+            Nobo.toast(e.message, 'error');
+          }
+          usersSheet();
+        };
+      });
+      root.querySelectorAll('[data-user-delete]').forEach(btn => {
+        btn.onclick = () => {
+          const name = btn.dataset.userDelete;
+          confirmSheet(`Remove ${name}?`,
+            `${name} will be signed out and can no longer sign in.`, 'Remove', async () => {
+              try {
+                await Nobo.api.deleteUser(name);
+                Nobo.toast(`${name} removed`);
+              } catch (e) {
+                Nobo.toast(e.message, 'error');
+              }
+              usersSheet();
+            }, true);
+        };
+      });
+      root.querySelector('[data-act="add"]').onclick = async (event) => {
+        const username = root.querySelector('#nuName').value.trim();
+        const password = root.querySelector('#nuPassword').value;
+        const role = root.querySelector('#nuRole').value;
+        if (username.length < 2) { Nobo.toast('Use at least 2 characters for the username', 'error'); return; }
+        if (password.length < 8) { Nobo.toast('Use at least 8 characters for the password', 'error'); return; }
+        const pressed = event.currentTarget;
+        pressed.disabled = true;
+        try {
+          await Nobo.api.addUser({ username, password, role });
+          Nobo.toast(`${username} added`);
+          usersSheet();
+        } catch (e) {
+          pressed.disabled = false;
+          Nobo.toast(e.message, 'error');
+        }
+      };
+    });
+  }
+
+  /* ------------------------------------------------------------------
+   * About - what this installation is, read from /api/about
+   * ---------------------------------------------------------------- */
+
+  const SOURCE_URL = 'https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee';
+  const PROVIDER_NAMES = {
+    simulated: 'Simulated', zigbee2mqtt: 'Zigbee2MQTT', verisure: 'Verisure', netatmo: 'Netatmo',
+  };
+
+  function aboutRows(rows) {
+    return `<dl class="ab">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+  }
+
+  function aboutAddon(item, offLabel = 'Off') {
+    if (!item || !item.enabled) return offLabel;
+    const provider = item.provider ? PROVIDER_NAMES[item.provider] || item.provider : '';
+    return `<b>On</b>${provider ? ` \u00B7 ${esc(provider)}` : ''}`;
+  }
+
+  function aboutBody(about) {
+    if (!about) return '<p class="zd-sub">Loading\u2026</p>';
+    const hub = state.hub || {};
+    const info = state.hubInfo || {};
+    const build = about.build;
+    const tz = about.timezone || {};
+    const ah = about.hub || {};
+    const zones = state.zones || [];
+    const withHeaters = zones.filter(z => (z.components || []).length > 0).length;
+
+    const sensors = [];
+    for (const zone of zones) {
+      for (const sensor of zone.sensors || []) sensors.push(sensor);
+      for (const sensor of zone.climate_sensors || []) sensors.push(sensor);
+    }
+    const lowBattery = sensors.filter(x => x.battery != null && x.battery <= 20).length;
+    const sensorLine = sensorSystemLine(zones);
+
+    const software = build
+      ? `<a href="${SOURCE_URL}/commit/${esc(build.commit)}" target="_blank" rel="noopener"><b>${esc(build.commit)}</b></a>`
+        + (build.date ? ` \u00B7 ${esc(Nobo.fmtDayMonth(build.date))} ${esc(String(new Date(build.date).getFullYear()))}` : '')
+      : 'Not recorded';
+    const running = about.started_at
+      ? `${esc(Nobo.fmtWhen(about.started_at))}`
+      : 'Unknown';
+    const timezone = [tz.name, tz.offset, tz.dst ? 'summer time' : '']
+      .filter(Boolean).map(esc).join(' \u00B7 ') || 'Unknown';
+
+    let connection;
+    if (ah.demo_mode) connection = 'Demo mode, no hub';
+    else if (ah.connected) {
+      connection = '<b>Connected</b>' + (ah.connected_since ? ` since ${esc(Nobo.fmtWhen(ah.connected_since))}` : '');
+    } else connection = '<span class="warn">Not connected</span>';
+    const hubRows = [['Connection', connection]];
+    if (!ah.demo_mode) {
+      if (hub.serial_display) hubRows.push(['Serial', esc(hub.serial_display)]);
+      if (info.software_version) hubRows.push(['Firmware', esc(info.software_version)]);
+      if (info.production_date) hubRows.push(['Made', esc(fmtHubDate(info.production_date))]);
+      if (ah.clock_offset) hubRows.push(['Hub clock', `Set at connect, ${esc(ah.clock_offset)}`]);
+    }
+
+    const houseRows = [
+      ['Rooms', `${zones.length} \u00B7 ${withHeaters} with heaters`],
+      ['Heaters and thermostats', String((state.devices || []).length)],
+      ['Schedules', String((state.weekProfiles || []).length)],
+    ];
+    if (sensorLine) {
+      houseRows.push(['Sensors', esc(sensorLine)
+        + (lowBattery ? ` \u00B7 <span class="warn">${lowBattery} battery low</span>` : '')]);
+    }
+    const displays = about.displays || {};
+    if (displays.count) {
+      houseRows.push(['Wall displays', `${displays.count}`
+        + (displays.last_seen_at ? ` \u00B7 seen ${esc(Nobo.fmtAgo(displays.last_seen_at))}` : ' \u00B7 not seen yet')]);
+    }
+
+    const addons = about.addons || {};
+    const forecast = addons.forecast || {};
+    const addonRows = [
+      ['Sensors', aboutAddon(addons.sensors)],
+      ['Alarm system', aboutAddon(addons.alarm)],
+      ['Weather station', aboutAddon(addons.weather)],
+      ['Weather forecast', forecast.enabled
+        ? `<b>On</b> \u00B7 MET Norway${forecast.place_set ? '' : ' \u00B7 no place chosen'}` : 'Off'],
+      ['Email alerts', aboutAddon(addons.alerts)],
+    ];
+
+    return `
+      <div class="ab-h">This system</div>
+      ${aboutRows([['Software', software], ['Running since', running], ['Time zone', timezone]])}
+      <div class="ab-h">Nob\u00F8 hub</div>
+      ${aboutRows(hubRows)}
+      <div class="ab-h">In the house</div>
+      ${aboutRows(houseRows)}
+      <div class="ab-h">Add-ons</div>
+      ${aboutRows(addonRows)}
+      <div class="ab-h">Help</div>
+      <div class="ab-links">
+        <a href="${SOURCE_URL}#readme" target="_blank" rel="noopener">Documentation</a>
+        <a href="${SOURCE_URL}/commits/main" target="_blank" rel="noopener">What changed</a>
+        <a href="${SOURCE_URL}" target="_blank" rel="noopener">Source code</a>
+      </div>
+      <p class="ab-credit">${forecast.enabled
+        ? 'Forecast data from MET Norway (CC BY 4.0). Place names \u00A9 Kartverket (CC BY 4.0). ' : ''}Talks
+        to the hub through pynobo. Not made or supported by Nob\u00F8 or Glen Dimplex Nordic.</p>`;
+  }
+
+  function aboutSummary(about) {
+    const build = about && about.build;
+    return build && build.date ? `Updated <b>${esc(Nobo.fmtDayMonth(build.date))}</b>` : '';
+  }
+
+  /* Settings is redrawn on every live update, so the payload is kept and only
+     asked for again when it is a minute old. */
+  function wireAbout(root) {
+    const state_ = root.querySelector('#aboutState');
+    if (state_) state_.innerHTML = aboutSummary(state.about);
+    if (state.aboutAt && Date.now() - state.aboutAt < 60000) return;
+    state.aboutAt = Date.now();
+    Nobo.api.about().then(about => {
+      state.about = about;
+      const body = document.querySelector('#aboutBody');
+      const summary = document.querySelector('#aboutState');
+      if (body) body.innerHTML = aboutBody(about);
+      if (summary) summary.innerHTML = aboutSummary(about);
+    }).catch(() => { state.aboutAt = 0; });
+  }
+
   /* The password every installation ships with is written in the README, so it
      is public knowledge and protects nothing. Anyone who reaches this page can
      already be assumed to know it. Saying so where it cannot be missed is the
@@ -5942,12 +6204,6 @@
         <small class="field-hint">Where it is shown on the front page. It can be
         changed later, here under Rooms and Groups.</small>
       </label>` : ''}
-      <label class="field">
-        <span>Icon (optional)</span>
-        <input type="text" id="azIcon" autocomplete="off" maxlength="2" placeholder="e.g. \u{1F6CF}">
-        <small class="field-hint">Stored for the classic interface, which shows an
-        icon per room. This one identifies a room by its name alone.</small>
-      </label>
       <label class="switch">
         <span class="switch-text"><strong>Heating schedule</strong>
           <span>Turn this off for a room that will never have a heater, such
@@ -5965,14 +6221,13 @@
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
       okBtn.onclick = async () => {
         const name = nameEl.value.trim();
-        const icon = root.querySelector('#azIcon').value.trim();
         const groupEl = root.querySelector('#azGroup');
         const group = groupEl ? groupEl.value : '';
         if (!name) { Nobo.toast('Give the room a name', 'error'); return; }
         okBtn.disabled = true;
         try {
           const created = await Nobo.api.addZone({
-            name, icon: icon || undefined,
+            name,
             no_schedule: !root.querySelector('#azSchedule').checked,
           });
           closeSheet();
@@ -8088,86 +8343,6 @@
     $('#topSub').textContent = 'Heating, sensors, weather and system';
 
     $('#viewSettings').innerHTML = `
-      ${settingsGroup('Heating')}
-      ${settingsSection('schedules', 'Schedules',
-        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
-        ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
-        one; open it here to see and edit its week.`)}
-        ${renderScheduleSettings()}
-        <div class="sheet-actions">
-          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
-        </div>
-      `, { icon: 'normal' })}
-      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
-        ${secIntro(`${AWAY_EXPLAINER()} Pick the rooms that should hold their
-        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
-        goes Away \u2014 a bathroom with pipes, a workshop, a wine store.`)}
-        <div id="awayExc" class="exc-list">
-          <p class="zd-sub">Loading rooms…</p>
-        </div>
-        <div class="sheet-actions">
-          <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
-        </div>
-        <div class="note">This applies both when you press Away and when a
-        planned away period starts while nobody is looking at the app.</div>
-      `, { icon: 'frost' })}
-      ${renderZoneGroupsCard(isAdmin)}
-      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
-        hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
-        ${secIntro(`Where the rooms, heaters and schedules come from. Demo invents a
-        house so you can look around straight away, and nothing it does can reach
-        a real heater.`)}
-        ${settingRow('Heaters', 'Rooms, temperatures and schedules',
-          segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
-            hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
-
-        <label class="field">
-          <span>Hub serial number</span>
-          <input type="text" id="stSerial" value="${esc(hub.serial_display || hub.serial || '')}"
-                 inputmode="numeric" autocomplete="off" placeholder="123 456 789 012">
-          <small class="field-hint">The 12 digits printed underneath the Nobø Ecohub.</small>
-        </label>
-        <label class="field">
-          <span>Hub IP address</span>
-          <input type="text" id="stIp" value="${esc(hub.ip || '')}" autocomplete="off" placeholder="192.168.1.50">
-          <small class="field-hint">Leave empty to search the local network automatically.</small>
-        </label>
-        <div class="sheet-actions">
-          <button class="btn btn-primary" type="button" data-act="save-hub">Save hub connection</button>
-        </div>
-        <div class="note note-warn">Changing between demo mode and a real hub signs you out, so the app
-        reloads cleanly against the new source.</div>
-      `, { icon: 'hub' })}
-
-      ${settingsGroup('Sensors and alerts')}
-      ${renderSensorSettingsCard(isAdmin)}
-      ${renderAlarmSettingsCard(isAdmin)}
-      ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
-        ${secIntro(`Optional email when something needs attention: a door left
-        open, the hub going away, settings changed from another app. Nothing is
-        sent unless you turn it on.`)}
-
-        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
-          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
-            { label: 'Send alerts', disabled: !isAdmin }))}
-
-        <div id="notifyBox" class="notify-box">
-          <p class="zd-sub">Loading…</p>
-        </div>
-
-        <div class="note">The Nobø hub reports very little about individual
-        heaters. It cannot see a cold room, a heater without power, or a
-        thermostat switched off at the wall \u2014 so neither can these alerts.</div>
-
-        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      `, { icon: 'bell' })}
-
-      ${settingsGroup('Weather and displays')}
-      ${renderWeatherSettingsCard(isAdmin)}
-      ${renderForecastSettingsCard(isAdmin)}
-      ${renderDisplaySettingsCard(isAdmin)}
-
-      ${settingsGroup('System')}
       ${settingsSection('place', 'My Home',
         `<b>${esc(site.name || 'Cabin')}</b>`, `
         ${secIntro(`What this place is called, across the app and on the sign-in
@@ -8209,6 +8384,87 @@
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       `, { icon: 'home' })}
+
+      ${settingsGroup('Heating')}
+      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
+        hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
+        ${secIntro(`Where the rooms, heaters and schedules come from. Demo invents a
+        house so you can look around straight away, and nothing it does can reach
+        a real heater.`)}
+        ${settingRow('Heaters', 'Rooms, temperatures and schedules',
+          segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
+            hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
+
+        <label class="field">
+          <span>Hub serial number</span>
+          <input type="text" id="stSerial" value="${esc(hub.serial_display || hub.serial || '')}"
+                 inputmode="numeric" autocomplete="off" placeholder="123 456 789 012">
+          <small class="field-hint">The 12 digits printed underneath the Nobø Ecohub.</small>
+        </label>
+        <label class="field">
+          <span>Hub IP address</span>
+          <input type="text" id="stIp" value="${esc(hub.ip || '')}" autocomplete="off" placeholder="192.168.1.50">
+          <small class="field-hint">Leave empty to search the local network automatically.</small>
+        </label>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-hub">Save hub connection</button>
+        </div>
+        <div class="note note-warn">Changing between demo mode and a real hub signs you out, so the app
+        reloads cleanly against the new source.</div>
+      `, { icon: 'hub' })}
+      ${renderZoneGroupsCard(isAdmin)}
+      ${settingsSection('schedules', 'Schedules',
+        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
+        ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
+        one; open it here to see and edit its week.`)}
+        ${renderScheduleSettings()}
+        <div class="sheet-actions">
+          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
+        </div>
+      `, { icon: 'normal' })}
+      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
+        ${secIntro(`${AWAY_EXPLAINER()} Pick the rooms that should hold their
+        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
+        goes Away \u2014 a bathroom with pipes, a workshop, a wine store.`)}
+        <div id="awayExc" class="exc-list">
+          <p class="zd-sub">Loading rooms…</p>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
+        </div>
+        <div class="note">This applies both when you press Away and when a
+        planned away period starts while nobody is looking at the app.</div>
+      `, { icon: 'frost' })}
+
+      ${settingsGroup('Sensors and alerts')}
+      ${renderSensorSettingsCard(isAdmin)}
+      ${renderAlarmSettingsCard(isAdmin)}
+      ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
+        ${secIntro(`Optional email when something needs attention: a door left
+        open, the hub going away, settings changed from another app. Nothing is
+        sent unless you turn it on.`)}
+
+        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
+          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
+            { label: 'Send alerts', disabled: !isAdmin }))}
+
+        <div id="notifyBox" class="notify-box">
+          <p class="zd-sub">Loading…</p>
+        </div>
+
+        <div class="note">The Nobø hub reports very little about individual
+        heaters. It cannot see a cold room, a heater without power, or a
+        thermostat switched off at the wall \u2014 so neither can these alerts.</div>
+
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      `, { icon: 'bell' })}
+
+      ${settingsGroup('Weather and displays')}
+      ${renderWeatherSettingsCard(isAdmin)}
+      ${renderForecastSettingsCard(isAdmin)}
+      ${renderDisplaySettingsCard(isAdmin)}
+
+      ${settingsGroup('System')}
       ${settingsSection('account', 'Account',
         me && me.using_default_password
           ? 'Default password'
@@ -8222,10 +8478,11 @@
         </div>
         <div class="sheet-actions">
           <button class="btn" type="button" data-act="change-password">Change password</button>
+          <button class="btn" type="button" data-act="rename-me">Change username</button>
           <button class="btn" type="button" data-act="signout">Sign out</button>
         </div>
-        ${settingRow('Other users', 'Adding and removing users opens the classic interface, which has the full screen for it.',
-          '<button class="btn" type="button" data-act="open-users">Manage users</button>')}
+        ${isAdmin ? settingRow('Users', 'Who can sign in here, and which of them may change settings.',
+          '<button class="btn" type="button" data-act="open-users">Manage users</button>') : ''}
       `, { icon: 'person', alert: !!(me && me.using_default_password) })}
       ${settingsSection('diagnostics', 'Diagnostics', '', `
         ${secIntro(`A record of every change made through this app, everything the
@@ -8235,13 +8492,8 @@
           <button class="btn" type="button" data-act="open-log">Open the activity log</button>
         </div>
       `, { icon: 'pulse' })}
-      ${settingsSection('about', 'About', 'Cabin', `
-        ${secIntro(`This is the Cabin interface. The previous one is still
-        installed and always reachable at <a href="/classic">/classic</a> \u2014 nothing
-        was removed.`)}
-        <div class="note">To make the classic interface the default again, set
-        <code>NOBO_UI=classic</code> in the server\u2019s <code>.env</code> file and restart.</div>
-      `, { icon: 'info' })}`;
+      ${settingsSection('about', 'About', '<span id="aboutState"></span>',
+        `<div id="aboutBody">${aboutBody(state.about)}</div>`, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
     dropEmptySettingsGroups(root);
@@ -8252,13 +8504,14 @@
     root.querySelector('[data-act="open-log"]').onclick = showLog;
     root.querySelector('[data-act="add-schedule"]').onclick = addWeekProfile;
     root.querySelector('[data-act="change-password"]').onclick = changePasswordSheet;
+    root.querySelector('[data-act="rename-me"]').onclick = renameMeSheet;
     root.querySelector('[data-act="signout"]').onclick = async () => {
       try { await Nobo.api.logout(); } catch (_) {}
       window.location.href = '/login';
     };
-    // The classic UI is no longer at "/", so this must name it explicitly or it
-    // would simply reload Cabin.
-    root.querySelector('[data-act="open-users"]').onclick = () => { window.location.href = '/classic#settings'; };
+    const usersBtn = root.querySelector('[data-act="open-users"]');
+    if (usersBtn) usersBtn.onclick = usersSheet;
+    wireAbout(root);
     root.querySelector('[data-act="save-exc"]').onclick = saveAwayExceptions;
     root.querySelectorAll('[data-rename-profile]').forEach(b => {
       b.onclick = () => renameWeekProfile(b.dataset.renameProfile);

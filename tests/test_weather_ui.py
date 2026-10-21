@@ -19,7 +19,6 @@ CABIN = (ROOT / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CABIN_HTML = (ROOT / "ui" / "cabin" / "index.html").read_text(encoding="utf-8")
 CABIN_CSS = (ROOT / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
 CORE = (ROOT / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
-CLASSIC = (ROOT / "app.js").read_text(encoding="utf-8")
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
 
@@ -135,12 +134,6 @@ def test_the_station_never_offers_a_heating_control():
 def test_a_borrowed_module_cannot_be_replaced_or_paired():
     assert "function isWeatherSensor(" in CABIN
     assert "function isBorrowedSensor(" in CABIN
-
-
-def test_classic_is_left_alone():
-    """Classic is the legacy interface. It gains nothing it would have to explain."""
-    assert "/api/weather" not in CLASSIC
-    assert "netatmo" not in CLASSIC.lower()
 
 
 def test_every_field_in_the_section_is_styled_alike():

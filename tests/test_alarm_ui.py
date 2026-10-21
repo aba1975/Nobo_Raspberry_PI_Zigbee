@@ -16,7 +16,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent / "app" / "static"
 CABIN = (ROOT / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
 CORE = (ROOT / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
-CLASSIC = (ROOT / "app.js").read_text(encoding="utf-8")
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is needed")
 
@@ -108,11 +107,6 @@ def test_the_log_names_the_alarm():
 def test_an_alarm_change_is_picked_up_without_waiting_for_the_poll():
     boot = CABIN[CABIN.index("(async function boot()"):]
     assert "if (state.status && (state.status.alarm || state.status.weather)) {" in boot[:1500]
-
-
-def test_classic_is_left_alone():
-    """Classic is the legacy interface. It gains nothing it would have to explain."""
-    assert "/api/alarm" not in CLASSIC
 
 
 def test_there_is_no_control_that_could_arm_or_unlock_verisure():

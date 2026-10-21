@@ -51,6 +51,11 @@ git pull
 echo "  Now at: $(git log --oneline -1)"
 
 echo "[2/5] Rebuilding Docker image..."
+# The image has no .git, so the version Settings → About shows is stamped here,
+# beside the code, and carried in by COPY app/. Ignored by git.
+printf '{"commit":"%s","date":"%s","branch":"%s"}\n' \
+    "$(git rev-parse --short HEAD)" "$(git log -1 --format=%cI)" \
+    "$(git rev-parse --abbrev-ref HEAD)" > app/build_info.json || true
 docker compose build
 
 echo "[3/5] Checking data directory ownership..."

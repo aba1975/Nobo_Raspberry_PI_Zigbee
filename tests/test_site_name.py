@@ -17,8 +17,6 @@ Two things are easy to get wrong here and both are covered below:
 """
 
 import html
-import importlib
-import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -341,53 +339,10 @@ class TestTheInterfaceIsStillCalledCabin:
     def test_naming_the_house_does_not_rename_the_interface(self, client):
         """The name of the place and the name of the UI are different things.
 
-        Renaming a house to Lakeside must not make the rollback instructions say
-        "the previous Lakeside interface", nor change the /cabin route.
+        Renaming a house to Lakeside must not change the /cabin route.
         """
         client.put("/api/site", json={"name": "Lakeside"})
         assert client.get("/cabin").status_code == 200
-        assert client.get("/classic").status_code == 200
-
-
-class TestTheClassicSignInPage:
-    """Classic is the rollback interface, so its sign-in page must not be
-    collateral damage. It never had a tagline, and gaining a cabin-flavoured one
-    would change the very page a user chose specifically to go back to."""
-
-    @staticmethod
-    def _classic_server(monkeypatch):
-        monkeypatch.setenv("NOBO_UI", "classic")
-        monkeypatch.setenv("NOBO_DEMO", "true")
-        return importlib.reload(server)
-
-    @pytest.fixture(autouse=True)
-    def restore(self):
-        yield
-        os.environ.pop("NOBO_UI", None)
-        importlib.reload(server)
-
-    def test_unnamed_classic_gains_no_tagline(self, monkeypatch):
-        srv = self._classic_server(monkeypatch)
-        with TestClient(srv.app) as c:
-            page = c.get("/login").text
-        assert "Heating control for" not in page
-        assert "the cabin" not in page
-
-    def test_named_classic_shows_the_name(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(config_persistence, "SITE_FILE", tmp_path / "site.json")
-        config_persistence.save_site({"name": "Lakeside", "show_on_login": True})
-
-        srv = self._classic_server(monkeypatch)
-        monkeypatch.setattr(srv.config_persistence, "SITE_FILE", tmp_path / "site.json")
-        with TestClient(srv.app) as c:
-            page = c.get("/login").text
-        assert "Heating control for Lakeside." in page
-
-    def test_the_placeholder_never_survives_into_the_page(self, monkeypatch):
-        """An unreplaced comment would be invisible on screen and wrong in source."""
-        srv = self._classic_server(monkeypatch)
-        with TestClient(srv.app) as c:
-            assert "SITE_TAGLINE" not in c.get("/login").text
 
 
 def test_the_cabin_page_never_leaks_the_placeholder(client):

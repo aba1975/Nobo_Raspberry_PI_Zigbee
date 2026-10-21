@@ -253,11 +253,10 @@ def test_a_long_topic_name_does_not_squeeze_its_state_away():
 
 
 def test_the_topics_are_in_the_order_the_owner_chose():
-    """Heating first - schedules, frost protection, rooms and the hub - then
-    the sensors and the alerts they raise, then weather and displays, and the
-    system itself last. Frost Protection sits beside Schedules because both
-    decide what temperature a room holds when nobody is there. The groups and
-    their headings are pinned in test_settings_order.py."""
+    """My Home first, then heating - the hub, rooms, schedules and frost
+    protection - then the sensors and the alerts they raise, then weather and
+    displays, and the system itself last. The groups and their headings are
+    pinned in test_settings_order.py."""
     template = _settings_template()
     tokens = re.findall(
         r"settingsSection\('([a-z]+)'|render(ZoneGroups|SensorSettings)Card\(isAdmin\)",
@@ -266,6 +265,6 @@ def test_the_topics_are_in_the_order_the_owner_chose():
     order = [section or {"ZoneGroups": "rooms", "SensorSettings": "sensors"}[card]
              for section, card in tokens]
     assert order == [
-        "schedules", "frost", "rooms", "hub", "sensors", "alerts",
-        "place", "account", "diagnostics", "about",
+        "place", "hub", "rooms", "schedules", "frost", "sensors", "alerts",
+        "account", "diagnostics", "about",
     ], order

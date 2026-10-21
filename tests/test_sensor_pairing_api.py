@@ -128,8 +128,7 @@ def test_opening_a_window_on_the_simulator_is_refused(client):
 
     response = client.post("/api/sensors/pairing", json={"seconds": 60})
 
-    # 501 is this codebase's answer for "this build cannot do that", and the
-    # Classic capability map keys off it.
+    # 501 is this codebase's answer for "this build cannot do that".
     assert response.status_code == 501
     assert "simulated sensor" in response.json()["detail"].lower()
 

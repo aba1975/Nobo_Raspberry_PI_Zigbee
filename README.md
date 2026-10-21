@@ -56,7 +56,7 @@ When you are ready for the real thing, start at [Prerequisites](#prerequisites).
 
 - [What This Project Does](#what-this-project-does) · [Features](#features)
 - **Installing:** [Prerequisites](#prerequisites) · [1 Prepare the Pi](#step-1-prepare-the-raspberry-pi) · [2 SSH](#step-2-enable-and-use-ssh) · [3 Docker](#step-3-install-docker-and-docker-compose) · [4 Clone](#step-4-clone-the-repository) · [5 Configure](#step-5-configure-environment-variables) · [6 Start](#step-6-start-the-system) · [7 Start on reboot](#step-7-make-it-start-on-reboot) · [8 Verify](#step-8-verify-it-is-working)
-- **Living with it:** [Contact sensors](#contact-sensors) · [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [Choosing the interface](#choosing-the-interface)
+- **Living with it:** [Contact sensors](#contact-sensors) · [User accounts](#managing-user-accounts) · [Naming your system](#naming-your-system) · [Dates, times and temperature](#dates-times-and-temperature) · [Hub settings](#changing-hub-settings-from-the-web-interface) · [Alongside the official app](#using-this-alongside-the-official-app) · [The interface](#the-interface)
 - **Running it:** [HTTPS](#https-on-your-own-network) · [Updating](#updating-the-software) · [Backups](#backing-up-configuration-and-data) · [Ports](#ports) · [Timezone](#timezone) · [Security notes](#security-notes)
 - **When something is wrong:** [Troubleshooting](#troubleshooting) · [API](#api) · [Testing](#testing) · [Project structure](#project-structure) · [Reference documents](#reference-documents)
 
@@ -150,9 +150,9 @@ interface says so rather than pretending the change worked.
 | Feature | What it does |
 | --- | --- |
 | **Login** | The whole interface and the entire API require a login. Nothing is readable without one. |
-| **Change password** | Under the 👤 icon. |
-| **Rename your account** | Under the 👤 icon. |
-| **Manage users** | Admins can add, remove and change the role of other users. |
+| **Change password** | **Settings → Account**. |
+| **Change your username** | **Settings → Account**. |
+| **Manage users** | Admins can add, remove and change the role of other users, under **Settings → Account**. |
 | **Lockout** | Repeated failed logins from the same address are temporarily blocked. |
 
 ### Administration
@@ -1074,8 +1074,6 @@ NOBO_DEMO=false
 - `NOBO_IP`: The IP address of your hub on your local network
 - `NOBO_DEMO`: Set to `true` to test without a real hub (uses simulated data)
 - `NOBO_ALLOW_ANON_API`: Leave this alone. It is explained under [Security Notes](#security-notes).
-- `NOBO_UI`: Which interface you get at the usual address — `cabin` (default) or `classic`.
-  See [Choosing the Interface](#choosing-the-interface).
 
 **Two things that catch people out:**
 
@@ -1330,30 +1328,30 @@ Press `Ctrl+C` to stop following logs.
 
 ## Managing User Accounts
 
-Everything to do with accounts lives behind the **user icon (👤) in the top-right corner** of the web interface. Click it to open the **User Settings** panel. Close it with the ✕ button, the `Esc` key, or by clicking outside the panel.
+Everything to do with accounts is under **Settings → Account** (the ⚙ icon, then
+the **System** group).
 
-The panel has these sections:
-
-### 🔑 Change Password
+### Change password
 
 Available to every user, for their own account. Enter your current password, then the new one twice. Passwords must be at least 8 characters.
 
 **Do this first**, to replace the default `admin` / `nobohub` credentials.
 
-### ✏️ Rename Account
+### Change username
 
-Change your own username. You stay logged in afterwards.
+Change your own username. You stay signed in afterwards.
 
-### 🛠️ Manage Users (admins only)
+### Manage users (admins only)
 
-This section is only shown to users with the `admin` role. It lists every account and lets you:
+The **Users** row is only shown to administrators. **Manage users** lists every account and lets you:
 
-- **Add a user** — enter a username and password (minimum 8 characters) and pick a role:
-  - **`user`** — can view and control heating.
-  - **`admin`** — can additionally manage accounts and change the hub connection settings.
-- **Delete a user** — click the 🗑️ button next to them. You cannot delete your own account, so there is always at least one admin left.
+- **Add a user** — enter a username (at least 2 characters) and password (at least 8) and pick a role:
+  - **User** — can view and control heating.
+  - **Administrator** — can additionally manage accounts and change settings such as the hub connection.
+- **Change a role** — pick it from the list beside the name. The last administrator cannot be made an ordinary user, or nobody could manage the system afterwards.
+- **Remove a user** — they are signed out at once. You cannot remove your own account.
 
-### 🚪 Logout
+### Sign out
 
 Ends your session and returns you to the login page.
 
@@ -1928,7 +1926,7 @@ curl http://localhost:8000/api/zones
 
 If those return data (in demo mode you should see 8 example zones), the backend is healthy and the problem is in the browser:
 
-1. **Hard refresh the page** — `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS). An old cached copy of `app.js` is the most common cause.
+1. **Hard refresh the page** — `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS). An old cached copy of the page script is the most common cause.
 2. **Open the browser console** — press `F12` and look at the Console tab. A red `SyntaxError` or similar means the page script failed to load, which stops the zone list and the live updates from ever starting.
 3. **Check for a newer version** — `sudo bash /opt/nobo-control/scripts/update.sh`.
 
@@ -1957,21 +1955,6 @@ curl http://localhost:8000/api/hub/config
 To rule out a network problem entirely, switch to demo mode from **Devices → Hub Connection**. If the 8 example zones appear, the Pi and the app are healthy and the issue is purely with reaching the hub.
 
 You do **not** need to restart anything after correcting the address — the app retries in the background and the indicator changes to `Connected` on its own.
-
-### Clicking the user icon (👤) does nothing
-
-The User Settings panel should open when you click the person icon in the top-right corner. If nothing happens:
-
-1. **Hard refresh the page** — `Ctrl+Shift+R` (`Cmd+Shift+R` on macOS). An old cached copy of `auth.js` is the most likely cause.
-2. **Make sure you are on the current version** — this was a genuine bug in earlier builds, where the script opened the panel with one CSS class while the stylesheet styled another, so the panel was technically open but invisible. Update with:
-
-   ```bash
-   sudo bash /opt/nobo-control/scripts/update.sh
-   ```
-
-3. **Check the browser console** — press `F12` and look at the Console tab for errors from `auth.js`.
-
-Note that the **🛠️ Manage Users** section only appears for accounts with the `admin` role. If you can open the panel and change your own password but see no user management, you are signed in as a regular user.
 
 ### Switched back to demo mode, but no zones load
 
@@ -2261,56 +2244,21 @@ Nobo_Raspberry_PI/
 └── README.md                   # This file
 ```
 
-## Choosing the Interface
+## The Interface
 
-There are two interfaces, and both are installed in every build.
+There is one interface, **Cabin**, at `/` (and at `/cabin`, its address while there were two). It
+is arranged around the away period, because a cabin stands empty most of the year: it leads with
+"I'm leaving" and "I'm back" rather than raw hub modes, shows what a room is doing right now with
+both its set points adjustable underneath, flags heaters whose temperature can only be turned by
+hand, manages named schedules that several rooms can share, lets you add a room and register a
+heater by serial number, keeps an activity log under **Settings → Diagnostics**, and installs on
+an iPhone home screen. **Settings → About** says which version is running, how long it has been
+up, what the hub reports about itself and which add-ons are on.
 
-| Address | Interface | |
-|---------|-----------|--|
-| `/` | whichever `NOBO_UI` selects | what you normally open |
-| `/cabin` | Cabin | always reachable |
-| `/classic` | the original | always reachable |
-
-**Cabin** is the current interface. It is arranged around the away period, because a cabin stands
-empty most of the year: it leads with "I'm leaving" and "I'm back" rather than raw hub modes, shows
-what a zone is doing right now with both its set points adjustable underneath, flags heaters whose
-temperature can only be turned by hand, manages named schedules that several zones can share, lets
-you add a zone and register a heater by serial number, keeps an activity log under
-**Settings → Diagnostics**, and installs on an iPhone home screen.
-
-It says **zone**, not "room". A zone is what shares a schedule and a comfort/eco pair, and in a
-house where several rooms share one — both first-floor bedrooms on one schedule, both second-floor
-bedrooms on another — calling it a room hides the fact that the grouping is the point.
-
-**Classic** is the original interface, unchanged.
-
-### Switching, and switching back
-
-Edit `.env` on the Pi:
-
-```bash
-cd /opt/nobo-control
-nano .env          # NOBO_UI=classic   (or: cabin)
-sudo systemctl restart nobo-control
-```
-
-That takes a few seconds. It needs no rebuild and no internet, which matters if the Pi is in a
-cabin on a phone hotspot.
-
-Rolling back this way was a deliberate choice over keeping the old interface on an old branch or
-in a separate repository. Both interfaces sit on top of the same server code, so redeploying an
-older revision to change the interface would also undo every hub, scheduling and security fix made
-since — and the revision you would be falling back to is the one nobody has run for months. A
-setting keeps the two decisions separate: you change the interface without changing anything else.
-
-You do not need to change the setting just to look at the other one. `/cabin` and `/classic` both
-work whatever `NOBO_UI` says, so you can open them side by side.
-
-If `NOBO_UI` is set to something that is not recognised, the server logs a warning and starts with
-Cabin. A typo should not leave you with no way to turn the heating on.
-
-The last revision before Cabin became the default is tagged `classic-ui-final`, if you ever want
-the code exactly as it was.
+The original "classic" interface was retired in October 2026. `/classic` now sends an old bookmark
+to the front page, and a leftover `NOBO_UI=classic` in `.env` is ignored with a warning in the
+log. The last revision before Cabin became the default is tagged `classic-ui-final`, if you ever
+want the old code exactly as it was.
 
 ## Design Exploration
 
@@ -2357,6 +2305,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | --- | --- |
 | `GET /api/health` | Health check. The only endpoint that does not need a login. |
 | `GET /api/status` | Connection status, demo mode, away schedule and the timezone in use |
+| `GET /api/about` | Version, uptime, time zone, hub connection and which add-ons are on, for **Settings → About** |
 | `GET /api/capabilities` | Which features work in the current mode (see [What works with a real hub](#what-works-with-a-real-hub-and-what-does-not)) |
 | `GET /api/zones` | All zones with current status |
 | `GET /api/display` | A compact summary for a wall display: status, open contacts, each room's mode, set and actual temperature and warnings, and the outdoor reading with its grip and glide wax (see [Wall display](docs/SENSORS.md#wall-display)) |

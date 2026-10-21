@@ -45,8 +45,13 @@ def real_hub_mode(monkeypatch):
 
 
 @pytest.fixture(scope="module")
-def app_js():
-    return (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+def cabin_js():
+    return (STATIC_DIR / "ui" / "cabin" / "cabin.js").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def core_js():
+    return (STATIC_DIR / "ui" / "shared" / "core.js").read_text(encoding="utf-8")
 
 
 class TestCapabilitiesEndpoint:
@@ -149,47 +154,20 @@ class TestEndpointsAgreeWithCapabilities:
 
 
 class TestFrontendGating:
-    def test_frontend_reads_the_endpoint(self, app_js):
-        assert "/api/capabilities" in app_js
+    """Cabin is the only interface, so it is the one that has to honour these."""
 
-    def test_every_capability_has_at_least_one_control(self, app_js):
-        """A capability nobody maps to is a control that stays clickable."""
-        mapped = set(re.findall(r":\s*'([a-z_]+)',", app_js))
+    def test_frontend_reads_the_endpoint(self, cabin_js, core_js):
+        assert "/api/capabilities" in core_js
+        assert "Nobo.api.capabilities()" in cabin_js
+
+    def test_every_capability_is_read_by_the_interface(self, cabin_js):
+        """A capability nobody reads is a control that stays offered and 501s."""
         known = set(server.DEMO_ONLY_FEATURES) | set(server.HUB_ONLY_FEATURES)
-        missing = known - mapped
-        assert not missing, (
-            f"no UI control is mapped to these capabilities, so they would stay "
-            f"enabled and fail with a 501: {sorted(missing)}"
-        )
-
-    def test_mapped_capabilities_all_exist(self, app_js):
-        """A typo in the map silently gates nothing."""
-        block = re.search(r"CAPABILITY_BY_ACTION\s*=\s*\{(.*?)\};", app_js, re.S)
-        assert block, "CAPABILITY_BY_ACTION not found in app.js"
-
-        used = set(re.findall(r":\s*'([a-z_]+)'", block.group(1)))
-        known = set(server.DEMO_ONLY_FEATURES) | set(server.HUB_ONLY_FEATURES)
-        unknown = used - known
-        assert not unknown, f"app.js gates on unknown capabilities: {sorted(unknown)}"
-
-    def test_handlers_in_the_map_exist_in_app_js(self, app_js):
-        """Guards against a control being renamed and quietly losing its gate."""
-        block = re.search(r"CAPABILITY_BY_ACTION\s*=\s*\{(.*?)\};", app_js, re.S)
-        handlers = re.findall(r"^\s*([A-Za-z_$][\w$]*)\s*:", block.group(1), re.M)
-        assert handlers
-
-        for handler in handlers:
-            assert re.search(rf"function\s+{re.escape(handler)}\s*\(", app_js), (
-                f"CAPABILITY_BY_ACTION gates '{handler}', but no such function "
-                f"exists in app.js any more"
+        assert known, "nothing is gated any more; this test can go"
+        for name in known:
+            assert f"features.{name}" in cabin_js, (
+                f"cabin.js never reads capability {name!r}, so its control would "
+                f"stay enabled and fail with a 501"
             )
 
-    def test_disabled_style_exists(self):
-        """Without the CSS rule the controls look enabled and still fire."""
-        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
-        assert ".capability-disabled" in css
-        assert "pointer-events: none" in css
 
-    def test_notice_style_exists(self):
-        css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
-        assert ".capability-notice" in css

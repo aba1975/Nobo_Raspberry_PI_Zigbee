@@ -75,3 +75,6 @@ docker-compose.override.yml
 API_Nobo.pdf
 Manual_Nobo.pdf
 *.pdf
+
+# Version stamp written by scripts/update.sh before each build
+app/build_info.json

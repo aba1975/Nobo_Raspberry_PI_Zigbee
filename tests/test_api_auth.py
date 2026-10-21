@@ -101,7 +101,7 @@ class TestAnonymousIsRejected:
 
     def test_pages_redirect_rather_than_401(self, anon):
         """Browsers should land on the login page, not see a JSON error."""
-        for path in ("/", "/static/app.js"):
+        for path in ("/", "/static/ui/cabin/cabin.js"):
             r = anon.get(path, follow_redirects=False)
             assert r.status_code == 302
             assert r.headers["location"] == "/login"

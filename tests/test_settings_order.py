@@ -1,18 +1,21 @@
 """The Cabin Settings page is ordered by how much each topic matters to a
-warm house: heating first, sensors second, weather and displays third, the
-system itself last — each run under a small heading."""
+warm house: My Home on its own at the top, then heating, sensors, weather and
+displays, and the system itself last — each run under a small heading. The
+order within each group is the owner's own."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CABIN = (ROOT / "app/static/ui/cabin/cabin.js").read_text(encoding="utf-8")
 CSS = (ROOT / "app/static/ui/cabin/cabin.css").read_text(encoding="utf-8")
 
+UNGROUPED = "settingsSection('place'"
+
 GROUPS = [
     ("Heating", [
+        "settingsSection('hub'",
+        "${renderZoneGroupsCard(isAdmin)}",
         "settingsSection('schedules'",
         "settingsSection('frost'",
-        "${renderZoneGroupsCard(isAdmin)}",
-        "settingsSection('hub'",
     ]),
     ("Sensors and alerts", [
         "${renderSensorSettingsCard(isAdmin)}",
@@ -25,7 +28,6 @@ GROUPS = [
         "${renderDisplaySettingsCard(isAdmin)}",
     ]),
     ("System", [
-        "settingsSection('place'",
         "settingsSection('account'",
         "settingsSection('diagnostics'",
         "settingsSection('about'",
@@ -42,7 +44,7 @@ def _template():
 
 def test_groups_and_sections_appear_in_priority_order():
     tpl = _template()
-    expected = []
+    expected = [UNGROUPED]
     for title, sections in GROUPS:
         expected.append(f"${{settingsGroup('{title}')}}")
         expected.extend(sections)
@@ -60,11 +62,12 @@ def test_schedules_and_frost_come_before_weather_and_displays():
         "renderDisplaySettingsCard(isAdmin)")
 
 
-def test_every_section_belongs_to_a_group():
+def test_only_my_home_stands_before_the_first_group():
     tpl = _template()
-    first_group = tpl.index("${settingsGroup(")
-    assert "settingsSection(" not in tpl[:first_group]
-    assert "SettingsCard(" not in tpl[:first_group]
+    head = tpl[:tpl.index("${settingsGroup(")]
+    assert head.count("settingsSection(") == 1
+    assert UNGROUPED in head
+    assert "SettingsCard(" not in head
 
 
 def test_a_heading_left_with_no_sections_is_removed_before_wiring():

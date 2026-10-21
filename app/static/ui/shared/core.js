@@ -50,6 +50,16 @@ const Nobo = (() => {
     setTemps:      (zoneId, temps) => req(`/api/zones/${encodeURIComponent(zoneId)}/temperature`, {
                                        method: 'POST', body: JSON.stringify(temps) }),
     logout:        ()              => req('/auth/logout', { method: 'POST' }),
+    about:         ()              => req('/api/about'),
+    renameMe:      (name)          => req('/auth/rename', {
+                                       method: 'POST', body: JSON.stringify({ new_username: name }) }),
+    users:         ()              => req('/auth/admin/users'),
+    addUser:       (body)          => req('/auth/admin/users', {
+                                       method: 'POST', body: JSON.stringify(body) }),
+    updateUser:    (name, body)    => req(`/auth/admin/users/${encodeURIComponent(name)}`, {
+                                       method: 'PATCH', body: JSON.stringify(body) }),
+    deleteUser:    (name)          => req(`/auth/admin/users/${encodeURIComponent(name)}`, {
+                                       method: 'DELETE' }),
     me:            ()              => req('/auth/me'),
     changePassword: (current, next) => req('/auth/change-password', {
                                        method: 'POST',

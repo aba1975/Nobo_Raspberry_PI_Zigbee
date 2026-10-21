@@ -51,8 +51,8 @@ def client():
 class TestPathsAreAbsolute:
     def test_static_dir_is_absolute_and_real(self):
         assert server.STATIC_DIR.is_absolute()
-        assert (server.STATIC_DIR / "index.html").is_file()
-        assert (server.STATIC_DIR / "app.js").is_file()
+        assert (server.STATIC_DIR / "ui" / "cabin" / "index.html").is_file()
+        assert (server.STATIC_DIR / "ui" / "shared" / "core.js").is_file()
 
     @pytest.mark.parametrize(
         "module_name", ["auth", "away_schedule", "config_persistence"]
@@ -89,7 +89,7 @@ class TestServingWorksFromAnyDirectory:
 
     def test_static_assets_are_served(self, client, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        for asset in ("app.js", "auth.js", "style.css"):
+        for asset in ("ui/cabin/cabin.js", "ui/cabin/cabin.css", "ui/shared/core.js"):
             assert client.get(f"/static/{asset}").status_code == 200
 
     def test_no_stray_data_dir_is_created(self, client, tmp_path, monkeypatch):

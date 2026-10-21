@@ -445,10 +445,6 @@ def test_display_calls_go_through_the_shared_client_and_names_are_escaped():
     assert "localStorage" not in cabin.split("function showDisplayKey")[1].split("function ")[0]
 
 
-def test_classic_has_no_display_surface():
-    assert "/api/displays" not in _static("app.js")
-
-
 # -- redrawn only when a sensor changes ---------------------------------------
 
 
