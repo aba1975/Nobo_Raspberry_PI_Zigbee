@@ -7963,6 +7963,20 @@
       </details>`;
   }
 
+  /** A heading over a run of sections, in priority order: heating first.
+   *  Several sections render nothing for some users or while a feature is
+   *  off, so `dropEmptySettingsGroups` removes a heading left with none. */
+  function settingsGroup(title) {
+    return `<h2 class="sec-group">${esc(title)}</h2>`;
+  }
+
+  function dropEmptySettingsGroups(root) {
+    root.querySelectorAll('.sec-group').forEach(h => {
+      const next = h.nextElementSibling;
+      if (!next || !next.matches('.sec')) h.remove();
+    });
+  }
+
   /** What a topic is for, set apart from the controls that follow it.
    *  `html` is trusted markup written in this file, never user data. */
   function secIntro(html) {
@@ -8071,9 +8085,89 @@
     const site = state.site || {};
     const isAdmin = !me || me.role === undefined || me.role === 'admin';
     $('#topTitle').textContent = 'Settings';
-    $('#topSub').textContent = 'Name, hub, schedules and users';
+    $('#topSub').textContent = 'Heating, sensors, weather and system';
 
     $('#viewSettings').innerHTML = `
+      ${settingsGroup('Heating')}
+      ${settingsSection('schedules', 'Schedules',
+        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
+        ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
+        one; open it here to see and edit its week.`)}
+        ${renderScheduleSettings()}
+        <div class="sheet-actions">
+          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
+        </div>
+      `, { icon: 'normal' })}
+      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
+        ${secIntro(`${AWAY_EXPLAINER()} Pick the rooms that should hold their
+        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
+        goes Away \u2014 a bathroom with pipes, a workshop, a wine store.`)}
+        <div id="awayExc" class="exc-list">
+          <p class="zd-sub">Loading rooms…</p>
+        </div>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
+        </div>
+        <div class="note">This applies both when you press Away and when a
+        planned away period starts while nobody is looking at the app.</div>
+      `, { icon: 'frost' })}
+      ${renderZoneGroupsCard(isAdmin)}
+      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
+        hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
+        ${secIntro(`Where the rooms, heaters and schedules come from. Demo invents a
+        house so you can look around straight away, and nothing it does can reach
+        a real heater.`)}
+        ${settingRow('Heaters', 'Rooms, temperatures and schedules',
+          segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
+            hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
+
+        <label class="field">
+          <span>Hub serial number</span>
+          <input type="text" id="stSerial" value="${esc(hub.serial_display || hub.serial || '')}"
+                 inputmode="numeric" autocomplete="off" placeholder="123 456 789 012">
+          <small class="field-hint">The 12 digits printed underneath the Nobø Ecohub.</small>
+        </label>
+        <label class="field">
+          <span>Hub IP address</span>
+          <input type="text" id="stIp" value="${esc(hub.ip || '')}" autocomplete="off" placeholder="192.168.1.50">
+          <small class="field-hint">Leave empty to search the local network automatically.</small>
+        </label>
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="save-hub">Save hub connection</button>
+        </div>
+        <div class="note note-warn">Changing between demo mode and a real hub signs you out, so the app
+        reloads cleanly against the new source.</div>
+      `, { icon: 'hub' })}
+
+      ${settingsGroup('Sensors and alerts')}
+      ${renderSensorSettingsCard(isAdmin)}
+      ${renderAlarmSettingsCard(isAdmin)}
+      ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
+        ${secIntro(`Optional email when something needs attention: a door left
+        open, the hub going away, settings changed from another app. Nothing is
+        sent unless you turn it on.`)}
+
+        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
+          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
+            { label: 'Send alerts', disabled: !isAdmin }))}
+
+        <div id="notifyBox" class="notify-box">
+          <p class="zd-sub">Loading…</p>
+        </div>
+
+        <div class="note">The Nobø hub reports very little about individual
+        heaters. It cannot see a cold room, a heater without power, or a
+        thermostat switched off at the wall \u2014 so neither can these alerts.</div>
+
+        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+      `, { icon: 'bell' })}
+
+      ${settingsGroup('Weather and displays')}
+      ${renderWeatherSettingsCard(isAdmin)}
+      ${renderForecastSettingsCard(isAdmin)}
+      ${renderDisplaySettingsCard(isAdmin)}
+
+      ${settingsGroup('System')}
       ${settingsSection('place', 'My Home',
         `<b>${esc(site.name || 'Cabin')}</b>`, `
         ${secIntro(`What this place is called, across the app and on the sign-in
@@ -8115,89 +8209,6 @@
         </div>
         ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
       `, { icon: 'home' })}
-
-      ${settingsSection('hub', 'Nobø Eco Hub Configuration',
-        hub.demo_mode ? '<b>Demo</b>' : `<b>Nobø hub</b>${hub.serial_display ? ' · ' + esc(hub.serial_display) : ''}`, `
-        ${secIntro(`Where the rooms, heaters and schedules come from. Demo invents a
-        house so you can look around straight away, and nothing it does can reach
-        a real heater.`)}
-        ${settingRow('Heaters', 'Rooms, temperatures and schedules',
-          segControl('hub-source', [['demo', 'Demo'], ['real', 'Nobø hub']],
-            hub.demo_mode ? 'demo' : 'real', { label: 'Where heater data comes from' }))}
-
-        <label class="field">
-          <span>Hub serial number</span>
-          <input type="text" id="stSerial" value="${esc(hub.serial_display || hub.serial || '')}"
-                 inputmode="numeric" autocomplete="off" placeholder="123 456 789 012">
-          <small class="field-hint">The 12 digits printed underneath the Nobø Ecohub.</small>
-        </label>
-        <label class="field">
-          <span>Hub IP address</span>
-          <input type="text" id="stIp" value="${esc(hub.ip || '')}" autocomplete="off" placeholder="192.168.1.50">
-          <small class="field-hint">Leave empty to search the local network automatically.</small>
-        </label>
-        <div class="sheet-actions">
-          <button class="btn btn-primary" type="button" data-act="save-hub">Save hub connection</button>
-        </div>
-        <div class="note note-warn">Changing between demo mode and a real hub signs you out, so the app
-        reloads cleanly against the new source.</div>
-      `, { icon: 'hub' })}
-
-      ${renderZoneGroupsCard(isAdmin)}
-
-      ${renderSensorSettingsCard(isAdmin)}
-
-      ${renderAlarmSettingsCard(isAdmin)}
-
-      ${renderWeatherSettingsCard(isAdmin)}
-      ${renderForecastSettingsCard(isAdmin)}
-
-      ${renderDisplaySettingsCard(isAdmin)}
-
-      ${settingsSection('schedules', 'Schedules',
-        `<b>${(state.weekProfiles || []).length}</b> weekly`, `
-        ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
-        one; open it here to see and edit its week.`)}
-        ${renderScheduleSettings()}
-        <div class="sheet-actions">
-          <button class="btn btn-add" type="button" data-act="add-schedule">Add a schedule</button>
-        </div>
-      `, { icon: 'normal' })}
-
-      ${settingsSection('frost', 'Frost Protection', '<span id="excState"></span>', `
-        ${secIntro(`${AWAY_EXPLAINER()} Pick the rooms that should hold their
-        Eco temperature instead of dropping to ${AWAY_TEMP_LABEL()} whenever ${SITE_IN()}
-        goes Away \u2014 a bathroom with pipes, a workshop, a wine store.`)}
-        <div id="awayExc" class="exc-list">
-          <p class="zd-sub">Loading rooms…</p>
-        </div>
-        <div class="sheet-actions">
-          <button class="btn btn-primary" type="button" data-act="save-exc">Save exceptions</button>
-        </div>
-        <div class="note">This applies both when you press Away and when a
-        planned away period starts while nobody is looking at the app.</div>
-      `, { icon: 'frost' })}
-
-      ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
-        ${secIntro(`Optional email when something needs attention: a door left
-        open, the hub going away, settings changed from another app. Nothing is
-        sent unless you turn it on.`)}
-
-        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
-          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
-            { label: 'Send alerts', disabled: !isAdmin }))}
-
-        <div id="notifyBox" class="notify-box">
-          <p class="zd-sub">Loading…</p>
-        </div>
-
-        <div class="note">The Nobø hub reports very little about individual
-        heaters. It cannot see a cold room, a heater without power, or a
-        thermostat switched off at the wall \u2014 so neither can these alerts.</div>
-
-        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
-      `, { icon: 'bell' })}
-
       ${settingsSection('account', 'Account',
         me && me.using_default_password
           ? 'Default password'
@@ -8216,7 +8227,6 @@
         ${settingRow('Other users', 'Adding and removing users opens the classic interface, which has the full screen for it.',
           '<button class="btn" type="button" data-act="open-users">Manage users</button>')}
       `, { icon: 'person', alert: !!(me && me.using_default_password) })}
-
       ${settingsSection('diagnostics', 'Diagnostics', '', `
         ${secIntro(`A record of every change made through this app, everything the
         away schedule did on its own, and the state of the connection to the hub.
@@ -8225,7 +8235,6 @@
           <button class="btn" type="button" data-act="open-log">Open the activity log</button>
         </div>
       `, { icon: 'pulse' })}
-
       ${settingsSection('about', 'About', 'Cabin', `
         ${secIntro(`This is the Cabin interface. The previous one is still
         installed and always reachable at <a href="/classic">/classic</a> \u2014 nothing
@@ -8235,6 +8244,7 @@
       `, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
+    dropEmptySettingsGroups(root);
     wireSettingsSections(root);
     wireSettingsSegments(root, hub);
     root.querySelector('[data-act="save-hub"]').onclick = saveHub;

@@ -69,10 +69,13 @@ def test_the_settings_are_for_administrators_only():
     assert "Nobo.api.weatherSettings()" in admin_block[:600]
 
 
-def test_the_section_sits_with_the_other_integrations():
+def test_the_section_sits_with_weather_after_heating_and_sensors():
     settings = CABIN[CABIN.index("function renderSettings("):]
-    assert settings.index("renderAlarmSettingsCard(isAdmin)") < settings.index(
-        "renderWeatherSettingsCard(isAdmin)") < settings.index("settingsSection('schedules'")
+    assert settings.index("settingsSection('schedules'") < settings.index(
+        "renderAlarmSettingsCard(isAdmin)") < settings.index(
+        "settingsGroup('Weather and displays')") < settings.index(
+        "renderWeatherSettingsCard(isAdmin)") < settings.index(
+        "settingsGroup('System')")
     assert "wireWeatherSettings(root);" in settings
 
 

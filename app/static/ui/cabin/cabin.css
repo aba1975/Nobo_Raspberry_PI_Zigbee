@@ -465,6 +465,13 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   border-radius: var(--radius); box-shadow: var(--shadow);
   margin-bottom: .6rem; overflow: hidden;
 }
+/* Heating first, then sensors, then weather and displays, then the system
+   itself — the order of how much each matters to a warm house. */
+.sec-group {
+  margin: 1.4rem .2rem .5rem; font-size: .74rem; font-weight: 700;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--ink-faint);
+}
+.sec-group:first-child { margin-top: .2rem; }
 .sec > summary {
   list-style: none; cursor: pointer; display: flex; align-items: center; gap: .6rem;
   padding: .85rem .95rem; font-weight: 650; min-height: 44px;

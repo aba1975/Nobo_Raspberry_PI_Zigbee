@@ -61,10 +61,13 @@ def test_nothing_is_shown_to_an_ordinary_user_or_while_it_is_off():
     assert "Nobo.api.alarmSettings()" in admin_block[:400]
 
 
-def test_the_section_sits_with_the_other_integrations():
+def test_the_section_sits_with_the_sensors_after_heating():
     settings = CABIN[CABIN.index("function renderSettings("):]
-    assert settings.index("renderSensorSettingsCard(isAdmin)") < settings.index(
-        "renderAlarmSettingsCard(isAdmin)") < settings.index("settingsSection('schedules'")
+    assert settings.index("settingsSection('schedules'") < settings.index(
+        "settingsGroup('Sensors and alerts')") < settings.index(
+        "renderSensorSettingsCard(isAdmin)") < settings.index(
+        "renderAlarmSettingsCard(isAdmin)") < settings.index(
+        "settingsGroup('Weather and displays')")
     assert "wireAlarmSettings(root);" in settings
 
 
