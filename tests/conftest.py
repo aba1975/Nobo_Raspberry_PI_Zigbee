@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import auth
 import config_persistence
 import display_tokens
+import forecast
 import sensor_persistence
 import alarm_persistence
 import sensor_verisure
@@ -228,6 +229,13 @@ def redirect_persistence(tmp_path, monkeypatch):
         monkeypatch.setattr(server_module, "sensor_precedence", sensor_verisure.Precedence(
             counted=[], standing_by={}, stood_in_for={},
         ))
+    # The weather forecast: off, nothing held, and nowhere real to write.
+    monkeypatch.setattr(forecast, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(forecast, "SETTINGS_FILE", tmp_path / "forecast.json")
+    monkeypatch.setattr(forecast, "CACHE_FILE", tmp_path / "forecast_cache.json")
+    if server_module is not None and hasattr(server_module, "forecast_service"):
+        monkeypatch.setattr(server_module, "forecast_service", forecast.ForecastService())
+        monkeypatch.setattr(server_module, "_forecast_task", None)
     # Display keys: none, and nowhere real to write one.
     monkeypatch.setattr(display_tokens, "DATA_DIR", tmp_path)
     monkeypatch.setattr(display_tokens, "DISPLAYS_FILE", tmp_path / "displays.json")
@@ -256,3 +264,21 @@ def netatmo_never_reached(monkeypatch):
         raise AssertionError(f"A test tried to reach Netatmo: {url}")
 
     monkeypatch.setattr(weather_netatmo, "http_post", refuse)
+
+
+# Captured before any test replaces it, for the tests of the guard itself.
+_REAL_FORECAST_HTTP_GET = forecast.http_get
+
+
+@pytest.fixture
+def real_forecast_http_get():
+    return _REAL_FORECAST_HTTP_GET
+
+
+@pytest.fixture(autouse=True)
+def forecast_services_never_reached(monkeypatch):
+    """No test may talk to MET Norway or Kartverket. Tests pass a fake transport."""
+    def refuse(url, headers):
+        raise AssertionError(f"A test tried to reach the forecast services: {url}")
+
+    monkeypatch.setattr(forecast, "http_get", refuse)

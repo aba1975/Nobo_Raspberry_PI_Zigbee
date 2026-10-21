@@ -166,6 +166,14 @@ const Nobo = (() => {
     netatmoDisconnect: ()     => req('/api/weather/netatmo/disconnect', { method: 'POST' }),
     simulateWeather:   (body) => req('/api/weather/simulate', {
                                   method: 'POST', body: JSON.stringify(body) }),
+    /* The weather forecast from MET Norway, by way of this system: a phone
+       never asks MET itself. Settings and place search are admin only. */
+    forecast:           ()     => req('/api/forecast'),
+    forecastSettings:   ()     => req('/api/forecast/settings'),
+    setForecastSettings: (body) => req('/api/forecast/settings', {
+                                  method: 'PUT', body: JSON.stringify(body) }),
+    forecastPlaces:     (q)    => req(`/api/forecast/places?q=${encodeURIComponent(q)}`)
+                                  .then(r => r.places || []),
     /* The station's indoor modules, offered as room thermometers. */
     weatherModules:    ()     => req('/api/sensors/weather'),
     addWeatherSensor:  (body) => req('/api/sensors/weather', {

@@ -106,7 +106,7 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
 - **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), interface (`NOBO_UI`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
-- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json` and `simulated_weather.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, and `data/netatmo/`, the weather station's tokens, both left out on purpose
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json`, `simulated_weather.json`, `forecast.json` and `forecast_cache.json`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, and `data/netatmo/`, the weather station's tokens, both left out on purpose
 
 ## Key Files
 
@@ -148,6 +148,16 @@ hub reached the hardware; everything else proves a message reached the hub.
   tokens are in `data/netatmo/` (0600 in 0700), excluded from backups and
   deleted when the integration is turned off. `tests/conftest.py` makes every
   test unable to reach Netatmo
+- `app/forecast.py` — the optional MET Norway forecast. `docs/FORECAST.md`
+  is the design. Display only: **nothing in it may change the heating**.
+  MET's free API has terms, and they are kept to the letter: identifying
+  User-Agent, nothing before `Expires` (plus jitter), never twice in ten
+  minutes, `If-Modified-Since`, backoff on 429. **No background polling** —
+  MET is asked only from `GET /api/forecast` while somebody is looking.
+  `check_allowed` permits only MET's compact forecast and Kartverket's place
+  search and elevation. Never name or link MET's consumer weather site; a
+  test fails if you do. `tests/conftest.py` makes every test unable to reach
+  either service
 - `app/display_tokens.py`, `app/display_render.py` and `display/papercolor/` —
   the wall display. `docs/DISPLAY.md` is the design. **The Pi draws the
   picture** (`/api/display/frame.png`, six inks) and the firmware only shows

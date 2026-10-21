@@ -15,6 +15,10 @@ built to Netatmo's published API and tested against a fake of it
 the refresh token, and its rate limits are taken from Netatmo's documentation
 and have not been observed here. Treat the first real connection as a test.
 
+For a forecast rather than the station's readings, see
+[FORECAST.md](FORECAST.md): it is a separate, independent feature and needs no
+station.
+
 ## What it shows
 
 | Where | What |

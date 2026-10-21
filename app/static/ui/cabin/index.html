@@ -79,6 +79,10 @@
       <div class="trip-actions" id="tripActions"></div>
     </section>
 
+    <!-- The week's forecast from MET Norway, when it is turned on and set to
+         go here. One compact row; a day opens the forecast sheet. -->
+    <section class="fc-strip" id="forecastTop" aria-label="Weather forecast" hidden></section>
+
     <!-- The weather outlook from the room barometers. Shown only while the
          weather is changing; opens the room it was read in. With a weather
          station the outlook is in the card above instead. -->
@@ -102,6 +106,9 @@
       </div>
       <ul class="zone-list" id="zoneList"></ul>
     </section>
+
+    <!-- The same forecast, for those who would rather have it under the rooms. -->
+    <section class="fc-strip" id="forecastBottom" aria-label="Weather forecast" hidden></section>
 
     <!-- Deliberately last: useful, but not what you came for. -->
     <details class="sysbox" id="sysBox">

@@ -114,6 +114,14 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Warnings** | Very cold outside (limit set in Settings), a module's battery low, and a station that cannot be read — each an optional email under Alerts. |
 | **Your Netatmo account** | No Netatmo password ever reaches the Pi: you sign in on Netatmo's own page. The access asked for can only read the weather station. The app's secret and the tokens are kept in a private file, left out of backups and deleted when the station is turned off. Setting it up needs HTTPS. |
 
+### Weather forecast (optional)
+
+| Feature | What it does |
+| --- | --- |
+| **A week's forecast** | MET Norway's forecast for one place, as one compact row of days on the front page (top, bottom or off). Tap a day for its night, morning, afternoon and evening, a chart and hour by hour, laid out for a phone. Off unless you turn it on under **Settings → Weather Forecast**. Needs no account. **For reading only**: the heating does not depend on it. See [docs/FORECAST.md](docs/FORECAST.md). |
+| **Choosing the place** | Search Kartverket's place names, or type coordinates. The height above sea level is looked up too, so mountain temperatures are right. |
+| **Keeping to MET's terms** | Only the Pi asks MET, only while somebody has the app open, never before the copy expires and never twice in ten minutes. Identified, compressed, conditional requests; slows down when MET says so. |
+
 ### Heating control
 
 | Feature | What it does |

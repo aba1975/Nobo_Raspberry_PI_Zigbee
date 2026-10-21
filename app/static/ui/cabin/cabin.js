@@ -53,6 +53,8 @@
     scheduleMeta: null,
     weekProfiles: [],
     sensorSettings: null,
+    forecast: null,          // what /api/forecast last said, while it is on
+    forecastSettings: null,  // admin only
     sensorDevices: [],
     sensorRouters: [],
     /* The command log is only fetched when its view is opened - it is
@@ -210,6 +212,7 @@
     if (state.me && state.me.role === 'admin') {
       state.alarmSettings = await Nobo.api.alarmSettings().catch(() => state.alarmSettings);
       state.weatherSettings = await Nobo.api.weatherSettings().catch(() => state.weatherSettings);
+      state.forecastSettings = await Nobo.api.forecastSettings().catch(() => state.forecastSettings);
       state.sensorSettings = await Nobo.api.sensorSettings().catch(() => state.sensorSettings);
       const network = state.sensorSettings && state.sensorSettings.enabled
         ? await Nobo.api.sensorNetwork().catch(() => null)
@@ -2088,7 +2091,7 @@
         'No recent air pressure reading, so there is nothing to go on.', '');
     }
     return `${html}
-      <p class="baro-note">A rough guide from the air pressure measured here, not a forecast. Check yr.no before a trip.</p>`;
+      <p class="baro-note">A rough guide from the air pressure measured here, not a forecast. Check a weather forecast before a trip.</p>`;
   }
 
   /* This room's pressure over the day, one point per hour, with the three
@@ -2268,9 +2271,302 @@
         weather.read_at ? `, last at ${esc(Nobo.fmtTimeOfDay(weather.read_at))}` : ''}.
         It only ever reads: the heating is not changed by anything here.</small>
       <div class="sheet-actions">
+        ${forecastReady() ? '<button class="btn btn-ghost" type="button" data-act="forecast">Forecast ›</button>' : ''}
         <button class="btn btn-primary" type="button" data-act="cancel">Close</button>
       </div>`, (root) => {
       root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      const toForecast = root.querySelector('[data-act="forecast"]');
+      if (toForecast) toForecast.onclick = () => { closeSheet(); forecastSheet(0); };
+    });
+  }
+
+  /* ------------------------------------------------------------------
+   * Weather forecast, from MET Norway by way of this system
+   *
+   * For reading only, and never in the way of the heating: the week sits in
+   * one compact strip (or nowhere, under Settings) and everything else is in
+   * a sheet. The browser asks this system, never MET, and only while the page
+   * is in front of somebody: MET's terms ask for no requests nobody needs,
+   * and the server asks MET only when the copy it holds has expired.
+   * ---------------------------------------------------------------- */
+
+  const FORECAST_RELOAD_MS = 30 * 60 * 1000;
+  const FC_SYMBOL = /^[a-z]+(?:_(?:day|night|polartwilight))?$/;
+  const FC_PERIODS = ['Night', 'Morning', 'Afternoon', 'Evening'];
+  const FC_COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+  let forecastLoading = null;
+  let forecastLoadedAt = 0;
+
+  function forecastBrief() { return (state.status || {}).forecast || null; }
+
+  function forecastReady() {
+    const fc = state.forecast;
+    return !!(forecastBrief() && fc && fc.enabled && (fc.days || []).length);
+  }
+
+  async function loadForecast(force = false) {
+    const brief = forecastBrief();
+    if (!brief) { state.forecast = null; return; }
+    if (document.hidden) return;
+    const held = state.forecast;
+    const current = held && held.enabled && !held.refreshing
+      && held.fetched_at === brief.fetched_at
+      && Date.now() - forecastLoadedAt < FORECAST_RELOAD_MS;
+    if (current && !force) return;
+    if (!forecastLoading) {
+      forecastLoading = Nobo.api.forecast()
+        .then((body) => { state.forecast = body; forecastLoadedAt = Date.now(); })
+        .catch(() => { /* the strip keeps what it had, or stays hidden */ })
+        .finally(() => { forecastLoading = null; });
+    }
+    await forecastLoading;
+  }
+
+  /* Loaded beside everything else, never in front of it: the heating draws
+     first, and the strip appears when the forecast arrives. */
+  function refreshForecast(force = false) {
+    loadForecast(force).then(() => {
+      if (state.view === 'home' && sheetEl.hidden && !held()) renderForecast();
+    });
+  }
+
+  function fcRound(value) {
+    if (value == null || Number.isNaN(Number(value))) return null;
+    const n = Math.round(Number(value));
+    return n === 0 ? 0 : n;
+  }
+
+  function fcTemp(value) {
+    const n = fcRound(value);
+    if (n == null) return '\u2013';
+    return `${n < 0 ? `\u2212${Math.abs(n)}` : n}\u00B0`;
+  }
+
+  function fcTempHtml(value) {
+    const n = fcRound(value);
+    if (n == null) return '\u2013';
+    return `<span class="${n < 0 ? 'fc-cold' : 'fc-warm'}">${esc(fcTemp(n))}</span>`;
+  }
+
+  function fcMm(value) {
+    const n = Number(value);
+    return value != null && n >= 0.05 ? `${n.toFixed(1).replace(/\.0$/, '')} mm` : '';
+  }
+
+  function fcDate(iso) { return new Date(`${iso}T12:00:00`); }
+
+  function fcDayName(iso, long = false) {
+    const day = fcDate(iso);
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const diff = Math.round((day - today) / 864e5);
+    if (diff === 0) return 'Today';
+    if (diff === 1 && long) return 'Tomorrow';
+    return new Intl.DateTimeFormat('en-GB', { weekday: long ? 'long' : 'short' }).format(day);
+  }
+
+  function fcWords(fc, code) { return ((fc && fc.symbols) || {})[code] || ''; }
+
+  function wxIcon(code, words, size = '') {
+    if (!code || !FC_SYMBOL.test(code)) return `<span class="wx-ico ${size}" aria-hidden="true"></span>`;
+    return `<img class="wx-ico ${size}" src="/static/ui/cabin/wx/${code}.svg" alt="${esc(words || '')}"
+      width="32" height="32" decoding="async">`;
+  }
+
+  function fcFetched(fc) {
+    if (!fc.fetched_at) return '';
+    const at = new Date(fc.fetched_at);
+    return at.toDateString() === new Date().toDateString()
+      ? Nobo.fmtTimeOfDay(at) : Nobo.fmtWhen(fc.fetched_at);
+  }
+
+  function renderForecast() {
+    const brief = forecastBrief();
+    const fc = state.forecast;
+    const where = brief ? brief.front_page : 'off';
+    [['#forecastTop', 'top'], ['#forecastBottom', 'bottom']].forEach(([id, slot]) => {
+      const el = $(id);
+      if (!el) return;
+      const show = where === slot && forecastReady();
+      el.hidden = !show;
+      if (!show) { el.innerHTML = ''; return; }
+      const fetched = fcFetched(fc);
+      const old = fc.stale || (fc.state && fc.state !== 'ok');
+      el.innerHTML = `
+        <div class="fc-strip-head">
+          <h2>Forecast${fc.place ? ` \u00B7 ${esc(fc.place.name)}` : ''}</h2>
+          <small class="${old ? 'is-old' : ''}">${old && fetched ? `Not updated since ${esc(fetched)}`
+            : `MET Norway${fetched ? ` \u00B7 ${esc(fetched)}` : ''}`}</small>
+        </div>
+        <div class="fc-days">${fc.days.map((day, i) => `
+          <button class="fc-day" type="button" data-fc-day="${i}" aria-label="${esc(
+            `${fcDayName(day.date, true)}: ${fcWords(fc, day.symbol)}, high ${fcTemp(day.max)}, low ${
+              fcTemp(day.min)}${fcMm(day.precipitation) ? `, ${fcMm(day.precipitation)}` : ''}`)}">
+            <span class="fc-d">${esc(fcDayName(day.date))}</span>
+            ${wxIcon(day.symbol, '')}
+            <span class="hl">${fcTempHtml(day.max)} <span>${esc(fcTemp(day.min))}</span></span>
+            <span class="mm">${esc(fcMm(day.precipitation))}</span>
+          </button>`).join('')}</div>`;
+      el.querySelectorAll('[data-fc-day]').forEach(button => {
+        button.onclick = () => forecastSheet(Number(button.dataset.fcDay));
+      });
+    });
+  }
+
+  function forecastNotes(fc) {
+    const notes = [];
+    if (fc.deprecated) {
+      notes.push(`MET Norway has said this version of its forecast will be withdrawn.
+        This system needs an update before then.`);
+    }
+    if (fc.state && fc.state !== 'ok' && fc.message) notes.push(fc.message);
+    else if (fc.stale) notes.push('The forecast has not been updated for over six hours.');
+    return notes.map(text => `<div class="note note-warn">${esc(text)}</div>`).join('');
+  }
+
+  function forecastCredit(fc) {
+    const fetched = fcFetched(fc);
+    return `<small class="fc-credit">Forecast data from
+      <a href="https://www.met.no/en" target="_blank" rel="noopener">MET Norway</a>, under
+      <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.
+      Days and parts of the day are summarised by this system.${fetched ? ` Fetched ${esc(fetched)}.` : ''}</small>`;
+  }
+
+  /* Temperature as a line and rain as bars, for one day. Drawn here, from
+     numbers already on the page, so nothing more is fetched. */
+  function forecastChart(hours) {
+    const temps = hours.filter(h => h.temperature != null);
+    if (temps.length < 2) return '';
+    const W = 300, H = 100;
+    const lo = Math.min(...temps.map(h => h.temperature)) - 0.5;
+    const hi = Math.max(...temps.map(h => h.temperature)) + 0.5;
+    // Each hour gets a slot of its own, so the first and last bars stay inside.
+    const slot = W / hours.length;
+    const x = (k) => slot * (k + 0.5);
+    const y = (v) => H - ((v - lo) / (hi - lo)) * (H - 12) - 6;
+    const most = Math.max(4, ...hours.map(h => h.precipitation || 0));
+    const width = Math.max(2, slot - 2);
+    const bars = hours.map((h, k) => (h.precipitation || 0) > 0
+      ? `<rect class="bar" x="${(x(k) - width / 2).toFixed(1)}" width="${width.toFixed(1)}"
+          y="${(H - (h.precipitation / most) * 45).toFixed(1)}" height="${((h.precipitation / most) * 45).toFixed(1)}"/>`
+      : '').join('');
+    const zero = lo < 0 && hi > 0
+      ? `<line class="zero" x1="0" x2="${W}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>` : '';
+    const points = hours.map((h, k) => h.temperature == null ? null
+      : `${x(k).toFixed(1)},${y(h.temperature).toFixed(1)}`).filter(Boolean).join(' ');
+    const middle = hours[Math.floor(hours.length / 2)];
+    return `
+      <svg class="fc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${zero}${bars}<polyline class="line" points="${points}"/></svg>
+      <div class="fc-axis" aria-hidden="true"><span>${esc(hours[0].time)}</span>
+        <span>${esc(middle.time)}</span><span>${esc(hours[hours.length - 1].time)}</span></div>`;
+  }
+
+  function forecastHourRow(fc, hour) {
+    const words = fcWords(fc, hour.symbol);
+    const wind = hour.wind == null ? '' : `${Math.round(hour.wind)}\u00A0m/s`;
+    const from = hour.wind_direction == null ? ''
+      : FC_COMPASS[Math.round((Number(hour.wind_direction) % 360) / 45) % 8];
+    const arrow = hour.wind_direction == null ? '' : `<i aria-hidden="true"
+      style="transform:rotate(${Math.round(Number(hour.wind_direction) + 180)}deg)">\u2191</i>`;
+    return `
+      <li>
+        <span class="tt">${esc(hour.time)}${hour.step > 1 ? `<small>${esc(`${hour.step} h`)}</small>` : ''}</span>
+        ${wxIcon(hour.symbol, words, 'sm')}
+        <span class="tv">${fcTempHtml(hour.temperature)}</span>
+        <span class="mm">${esc(fcMm(hour.precipitation))}</span>
+        <span class="w"${from ? ` aria-label="${esc(`${wind} from the ${from}`)}"` : ''}>${esc(wind)} ${arrow}</span>
+      </li>`;
+  }
+
+  function forecastDayHtml(fc, index) {
+    const day = fc.days[index];
+    const rain = fcMm(day.precipitation);
+    const facts = [
+      `Low ${fcTemp(day.min)}`,
+      rain ? `${rain} in all` : 'Dry',
+      day.wind_max != null ? `wind up to ${Math.round(day.wind_max)}\u00A0m/s` : '',
+    ].filter(Boolean).join(' \u00B7 ');
+    const periods = (day.periods || []).map((period, k) => period ? `
+      <div class="fc-period">
+        <span class="fc-pname">${esc(FC_PERIODS[k])}</span>
+        ${wxIcon(period.symbol, fcWords(fc, period.symbol), 'sm')}
+        <span class="hl">${fcTempHtml(period.max)}</span>
+        <span class="mm">${esc(fcMm(period.precipitation)) || '&nbsp;'}</span>
+      </div>` : `
+      <div class="fc-period is-past" aria-hidden="true">
+        <span class="fc-pname">${esc(FC_PERIODS[k])}</span><span class="hl">\u2013</span>
+      </div>`).join('');
+    const hours = day.hours || [];
+    const firstSix = hours.find(hour => hour.step > 1);
+    const sixNote = !firstSix ? ''
+      : hours.every(hour => hour.step > 1)
+        ? 'This far ahead MET forecasts every six hours, not by the hour.'
+        : `From ${firstSix.time} MET forecasts every six hours, not by the hour.`;
+    return `
+      <div class="fc-dayhead">
+        ${wxIcon(day.symbol, '', 'lg')}
+        <span class="big">${fcTempHtml(day.max)}</span>
+        <span class="copy">
+          <strong>${esc(fcDayName(day.date, true))} <small>${esc(Nobo.fmtDayMonth(fcDate(day.date)))}</small></strong>
+          <span>${esc(fcWords(fc, day.symbol))}</span>
+          <span>${esc(facts)}</span>
+        </span>
+      </div>
+      <div class="fc-periods">${periods}</div>
+      ${forecastChart(day.hours || [])}
+      ${sixNote ? `<p class="field-hint fc-six">${esc(sixNote)}</p>` : ''}
+      <ul class="fc-hours">${(day.hours || []).map(hour => forecastHourRow(fc, hour)).join('')}</ul>`;
+  }
+
+  /* One day at a time, chosen from tabs or by swiping, because a phone has
+     room for one day properly and not for ten of them at once. */
+  function forecastSheet(start = 0) {
+    const fc = state.forecast;
+    if (!forecastReady()) return;
+    let index = Math.max(0, Math.min(start, fc.days.length - 1));
+    openSheet(fc.place ? `Forecast for ${fc.place.name}` : 'Forecast', `
+      ${forecastNotes(fc)}
+      <div class="fc-tabs" role="tablist" aria-label="Day">${fc.days.map((day, i) => `
+        <button class="fc-tab" type="button" role="tab" data-fc-tab="${i}"
+          aria-selected="${i === index ? 'true' : 'false'}" aria-label="${esc(fcDayName(day.date, true))}">
+          <span class="fc-d">${esc(fcDayName(day.date))}</span>
+          ${wxIcon(day.symbol, '', 'sm')}
+          <span class="hl">${fcTempHtml(day.max)}</span>
+        </button>`).join('')}</div>
+      <div class="fc-panel" role="tabpanel" aria-live="polite"></div>
+      ${forecastCredit(fc)}
+      <div class="sheet-actions">
+        <button class="btn btn-primary" type="button" data-act="cancel">Close</button>
+      </div>`, (root) => {
+      const panel = root.querySelector('.fc-panel');
+      const tabs = [...root.querySelectorAll('[data-fc-tab]')];
+      const show = (next) => {
+        index = Math.max(0, Math.min(next, fc.days.length - 1));
+        tabs.forEach((tab, k) => tab.setAttribute('aria-selected', k === index ? 'true' : 'false'));
+        panel.innerHTML = forecastDayHtml(fc, index);
+        const strip = tabs[index] && tabs[index].parentElement;
+        if (strip) {
+          const tab = tabs[index];
+          strip.scrollLeft = Math.max(0, tab.offsetLeft - (strip.clientWidth - tab.offsetWidth) / 2);
+        }
+      };
+      tabs.forEach(tab => { tab.onclick = () => show(Number(tab.dataset.fcTab)); });
+      let touch = null;
+      panel.addEventListener('touchstart', (e) => {
+        const t = e.touches[0];
+        touch = { x: t.clientX, y: t.clientY };
+      }, { passive: true });
+      panel.addEventListener('touchend', (e) => {
+        if (!touch) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - touch.x;
+        const dy = t.clientY - touch.y;
+        touch = null;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) show(index + (dx < 0 ? 1 : -1));
+      }, { passive: true });
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      show(index);
     });
   }
 
@@ -6517,6 +6813,215 @@
     });
   }
 
+  /* The forecast's settings. A place is searched for on Search only, never
+     as it is typed: Kartverket is a free public service and gets one request
+     per press, which the server spaces out and remembers. */
+  const forecastSearch = { open: false, query: '', results: null, busy: false, error: '' };
+  const FC_FRONT_PAGE = [['top', 'Top'], ['bottom', 'Bottom'], ['off', 'Off']];
+  const PIN_ICON = '<svg viewBox="0 0 24 24" width="1.1em" height="1.1em" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M12 21s-6.5-6.2-6.5-11.2a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/>'
+    + '<circle cx="12" cy="9.8" r="2.3"/></svg>';
+
+  function forecastStatusLine(status) {
+    if (!status) return '';
+    if (status.state === 'no_place') return '';
+    if (status.state === 'starting') {
+      return '<div class="note">The forecast is fetched the first time somebody opens the front page.</div>';
+    }
+    const notes = [];
+    if (status.deprecated) {
+      notes.push(`<div class="note note-warn">MET Norway has said this version of its forecast will
+        be withdrawn. This system needs an update before then.</div>`);
+    }
+    if (status.state !== 'ok') {
+      notes.push(`<div class="note note-warn">${esc(status.message || 'The forecast could not be fetched.')}</div>`);
+    }
+    const parts = [];
+    if (status.fetched_at) parts.push(`Fetched ${esc(Nobo.fmtWhen(status.fetched_at))}`);
+    if (status.updated_at) parts.push(`MET's forecast made ${esc(Nobo.fmtWhen(status.updated_at))}`);
+    if (status.next_at) parts.push(`not asked again before ${esc(Nobo.fmtWhen(status.next_at))}`);
+    return `${notes.join('')}${parts.length ? `<p class="fc-status"><span class="dot${
+      status.state === 'ok' && !status.stale ? '' : ' is-old'}" aria-hidden="true"></span>${parts.join(' \u00B7 ')}</p>` : ''}`;
+  }
+
+  function forecastPlaceBlock(settings) {
+    const place = settings.place;
+    const searching = forecastSearch.open || !place;
+    const chosen = place ? `
+      <div class="fc-place">
+        <span class="pin">${PIN_ICON}</span>
+        <span><strong>${esc(place.name)}</strong><small>${esc([
+          place.detail, place.altitude != null ? `${place.altitude} m above sea level` : '',
+          `${place.lat.toFixed(4)}, ${place.lon.toFixed(4)}`,
+        ].filter(Boolean).join(' \u00B7 '))}</small></span>
+        ${searching ? '' : '<button class="btn btn-ghost" type="button" data-act="fc-change">Change</button>'}
+      </div>` : '';
+    if (!searching) return chosen;
+    const results = forecastSearch.results;
+    return `
+      ${chosen}
+      <form class="fc-search" data-act="fc-search">
+        <label class="field"><span>Place for the forecast</span>
+          <span class="fc-search-row">
+            <input id="fcQuery" type="text" maxlength="80" autocomplete="off" enterkeyhint="search"
+              placeholder="Place name, or lat, lon" value="${esc(forecastSearch.query)}">
+            <button class="btn btn-primary" type="submit" ${forecastSearch.busy ? 'disabled' : ''}>${
+              forecastSearch.busy ? 'Searching\u2026' : 'Search'}</button>
+          </span>
+          <small>Place names are searched in Kartverket's register. Anywhere else, type
+          its coordinates as latitude, longitude.</small>
+        </label>
+      </form>
+      ${forecastSearch.error ? `<div class="note note-warn">${esc(forecastSearch.error)}</div>` : ''}
+      ${results && !results.length ? '<div class="note">Nothing found by that name.</div>' : ''}
+      ${results && results.length ? `
+        <ul class="fc-results">${results.map((found, i) => `
+          <li><button type="button" data-fc-pick="${i}">
+            <strong>${esc(found.name)}</strong><small>${esc(found.detail || '')}</small>
+          </button></li>`).join('')}</ul>
+        <small class="fc-credit">Place names \u00A9 Kartverket (CC BY 4.0).</small>` : ''}
+      ${place ? '<div class="sheet-actions"><button class="btn btn-ghost" type="button" data-act="fc-keep">Keep '
+        + `${esc(place.name)}</button></div>` : ''}`;
+  }
+
+  function renderForecastSettingsCard(isAdmin) {
+    if (!isAdmin || !state.me || !state.forecastSettings) return '';
+    const settings = state.forecastSettings;
+    const status = settings.status;
+    const failing = settings.enabled && status && !['ok', 'starting', 'no_place'].includes(status.state);
+    const summary = !settings.enabled ? '<b>Off</b>'
+      : !settings.place ? '<b>On</b> \u00B7 choose a place'
+      : `<b>${esc(settings.place.name)}</b>${failing ? ' \u00B7 not fetched' : ''}`;
+    const onOff = settingRow('Show a weather forecast',
+      'A week of weather on the front page, from MET Norway.',
+      segControl('fc-enabled', [['off', 'Off'], ['on', 'On']],
+        settings.enabled ? 'on' : 'off', { label: 'Show a weather forecast' }));
+    const body = !settings.enabled
+      ? '<div class="note">Nothing about a forecast is shown, and MET is never asked, while this is off.</div>'
+      : `
+        ${forecastPlaceBlock(settings)}
+        ${forecastStatusLine(status)}
+        ${settings.place ? settingRow('On the front page',
+          'Under the top card, under the rooms, or not at all. Off still leaves it under the weather station and here.',
+          segControl('fc-front', FC_FRONT_PAGE, settings.front_page, { label: 'Where the forecast goes' })) : ''}
+        ${forecastReady() ? `<div class="sheet-actions">
+          <button class="btn btn-ghost" type="button" data-act="fc-show">Show the forecast</button></div>` : ''}
+        <label class="field fc-contact"><span>Contact email for MET Norway (optional)</span>
+          <span class="fc-search-row">
+            <input id="fcContact" type="email" maxlength="120" autocomplete="email"
+              placeholder="you@example.com" value="${esc(settings.contact || '')}">
+            <button class="btn btn-ghost" type="button" data-act="fc-contact">Save</button>
+          </span>
+          <small>Sent with each request so MET can write before blocking this system.
+          Their terms encourage it; nothing else is done with it.</small>
+        </label>
+        <details class="fc-how">
+          <summary>How MET Norway is asked</summary>
+          <ul>
+            <li>Only this system asks; phones are given its copy.</li>
+            <li>Only when somebody opens the app and the copy has expired \u2014 usually
+              about an hour \u2014 and never in the background or more than once in ten minutes.</li>
+            <li>A few minutes later than strictly allowed, picked at random, so that
+              installations do not all ask at once.</li>
+            <li>Identified as <code>${esc(settings.user_agent || '')}</code>.</li>
+            <li>Waits at least an hour, then longer, whenever MET says to slow down.</li>
+          </ul>
+          <small>Forecast data from MET Norway under CC BY 4.0. Place names and heights
+          \u00A9 Kartverket. MET's and Kartverket's own terms apply.</small>
+        </details>`;
+    return settingsSection('forecast', 'Weather Forecast', summary, `
+      ${secIntro(`Optional. A forecast for one place, from the Norwegian
+      Meteorological Institute. It is for reading only: the heating does not depend on it.`)}
+      ${onOff}
+      ${body}
+    `, { icon: 'wx-cloud', alert: !!failing });
+  }
+
+  function wireForecastSettings(root) {
+    const settings = state.forecastSettings;
+    if (!settings) return;
+    const guarded = (fn) => async (...args) => {
+      try { await fn(...args); } catch (e) { Nobo.toast(e.message, 'error'); }
+    };
+    const save = async (changes) => {
+      state.forecastSettings = await Nobo.api.setForecastSettings(changes);
+      state.forecast = null;
+      await refresh(true);
+      renderSettings();
+    };
+
+    root.querySelectorAll('[data-seg="fc-enabled"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const on = button.dataset.value === 'on';
+        await save({ enabled: on });
+        Nobo.toast(on ? 'Weather forecast on' : 'Weather forecast off');
+      });
+    });
+    root.querySelectorAll('[data-seg="fc-front"]').forEach(button => {
+      button.onclick = guarded(async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        await save({ front_page: button.dataset.value });
+      });
+    });
+
+    const change = root.querySelector('[data-act="fc-change"]');
+    if (change) change.onclick = () => {
+      Object.assign(forecastSearch, { open: true, results: null, error: '' });
+      renderSettings();
+      const input = document.querySelector('#fcQuery');
+      if (input) input.focus();
+    };
+    const keep = root.querySelector('[data-act="fc-keep"]');
+    if (keep) keep.onclick = () => {
+      Object.assign(forecastSearch, { open: false, results: null, error: '', query: '' });
+      renderSettings();
+    };
+
+    const form = root.querySelector('form[data-act="fc-search"]');
+    if (form) form.onsubmit = guarded(async (e) => {
+      e.preventDefault();
+      const query = root.querySelector('#fcQuery').value.trim();
+      if (!query || forecastSearch.busy) return;
+      Object.assign(forecastSearch, { query, busy: true, error: '' });
+      renderSettings();
+      try {
+        forecastSearch.results = await Nobo.api.forecastPlaces(query);
+      } catch (err) {
+        forecastSearch.results = null;
+        forecastSearch.error = err.message;
+      } finally {
+        forecastSearch.busy = false;
+        renderSettings();
+      }
+    });
+
+    root.querySelectorAll('[data-fc-pick]').forEach(button => {
+      button.onclick = guarded(async () => {
+        const found = (forecastSearch.results || [])[Number(button.dataset.fcPick)];
+        if (!found) return;
+        button.disabled = true;
+        await save({ place: {
+          name: found.name, detail: found.detail || '', lat: found.lat, lon: found.lon,
+          altitude: found.altitude ?? null,
+        } });
+        Object.assign(forecastSearch, { open: false, results: null, error: '', query: '' });
+        renderSettings();
+        Nobo.toast(`Forecast for ${found.name}`);
+      });
+    });
+
+    const contact = root.querySelector('[data-act="fc-contact"]');
+    if (contact) contact.onclick = guarded(async () => {
+      await save({ contact: root.querySelector('#fcContact').value.trim() });
+      Nobo.toast('Saved');
+    });
+
+    const show = root.querySelector('[data-act="fc-show"]');
+    if (show) show.onclick = () => forecastSheet(0);
+  }
+
   function renderWeatherSettingsCard(isAdmin) {
     if (!isAdmin || !state.me || !state.weatherSettings) return '';
     const settings = state.weatherSettings;
@@ -7645,6 +8150,7 @@
       ${renderAlarmSettingsCard(isAdmin)}
 
       ${renderWeatherSettingsCard(isAdmin)}
+      ${renderForecastSettingsCard(isAdmin)}
 
       ${renderDisplaySettingsCard(isAdmin)}
 
@@ -7776,6 +8282,7 @@
     wireSensorSettings(root);
     wireAlarmSettings(root);
     wireWeatherSettings(root);
+    wireForecastSettings(root);
     wireDisplaySettings(root);
     wireZoneGroups(root);
   }
@@ -8309,6 +8816,7 @@
   function renderHome() {
     renderTrip();
     renderWeather();
+    renderForecast();
     renderModes();
     renderZones();
     renderSystem();
@@ -8325,6 +8833,7 @@
     if (!force && held()) return;
     await loadAll();
     renderCurrent();
+    refreshForecast();
   }
 
   /* ------------------------------------------------------------------
@@ -8350,6 +8859,11 @@
     showHome();
     renderLink();
     announceWeatherReturn();
+    refreshForecast();
+    // A phone left in a pocket asks for nothing; picked up again, it catches up.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshForecast();
+    });
 
     Nobo.subscribe(
       (zones) => {
@@ -8381,8 +8895,9 @@
       if (held() || !sheetEl.hidden) return;
       try {
         state.status = await Nobo.api.status();
-        if (state.view === 'home') { renderTrip(); renderWeather(); renderSystem(); }
+        if (state.view === 'home') { renderTrip(); renderWeather(); renderForecast(); renderSystem(); }
         renderLink();
+        refreshForecast();
       } catch (_) { /* the connection pill already reports this */ }
     }, 30000);
 

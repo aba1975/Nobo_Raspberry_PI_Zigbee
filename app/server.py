@@ -40,6 +40,7 @@ import sensor_persistence
 import sensor_verisure
 import sensor_weather
 import weather_persistence
+import forecast
 import alarm_automation
 import alarm_persistence
 import dataclasses
@@ -4751,6 +4752,8 @@ async def get_status():
         "alarm": _alarm_public(),
         # The same for the weather station.
         "weather": _weather_public(),
+        # And for the forecast: only enough to know whether to ask for it.
+        "forecast": forecast_service.brief(),
     }
 
 
@@ -8683,6 +8686,137 @@ async def simulate_weather(request: Request, body: WeatherSimulation):
         raise HTTPException(status_code=400, detail=str(exc)) from None
     await weather_poll_once()
     return _weather_settings_response(request)
+
+
+# ===== Weather forecast (MET Norway) =====
+#
+# For reading only: nothing here may change the heating. MET's terms are kept
+# in forecast.py — above all, MET is asked only when a browser asks for the
+# forecast *and* the copy held has expired, so there is no background poll.
+
+forecast_service = forecast.ForecastService()
+_forecast_task: Optional[asyncio.Task] = None
+# A browser waits this long for a due request before it is given the copy
+# held; the request carries on and the next look gets its answer.
+FORECAST_WAIT_SECONDS = 12
+
+
+async def _forecast_refresh(wait: float = FORECAST_WAIT_SECONDS) -> None:
+    global _forecast_task
+    if _forecast_task is None or _forecast_task.done():
+        if not forecast_service.due():
+            return
+        _forecast_task = asyncio.create_task(forecast_service.refresh_if_due())
+    try:
+        # Shielded: a browser giving up must not cancel a request that has
+        # already gone out, or its answer — and the time it was asked — is lost.
+        await asyncio.wait_for(asyncio.shield(_forecast_task), timeout=wait)
+    except asyncio.TimeoutError:
+        pass
+
+
+def _forecast_settings_response() -> Dict[str, Any]:
+    settings = forecast_service.settings
+    place = settings.place
+    return {
+        "enabled": settings.enabled,
+        "place": None if place is None else dataclasses.asdict(place),
+        "contact": settings.contact,
+        "front_page": settings.front_page,
+        "front_page_choices": list(forecast.FRONT_PAGE_CHOICES),
+        "user_agent": forecast.user_agent(settings.contact),
+        "status": forecast_service.status() if settings.enabled else None,
+    }
+
+
+class ForecastPlace(BaseModel):
+    name: str = Field(default="", max_length=forecast.MAX_NAME_LENGTH)
+    detail: str = Field(default="", max_length=160)
+    lat: float
+    lon: float
+    altitude: Optional[float] = None
+
+
+class ForecastSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    place: Optional[ForecastPlace] = None
+    contact: Optional[str] = Field(default=None, max_length=forecast.MAX_CONTACT_LENGTH)
+    front_page: Optional[str] = None
+
+
+@app.get("/api/forecast")
+async def get_forecast():
+    """The forecast for any signed-in user. Asks MET only when that is due."""
+    if not forecast_service.settings.enabled:
+        return {"enabled": False}
+    await _forecast_refresh()
+    payload = forecast_service.payload()
+    payload["refreshing"] = _forecast_task is not None and not _forecast_task.done()
+    return payload
+
+
+@app.get("/api/forecast/settings")
+async def get_forecast_settings(request: Request):
+    _require_admin(_get_session_or_401(request))
+    return _forecast_settings_response()
+
+
+@app.put("/api/forecast/settings")
+async def update_forecast_settings(request: Request, body: ForecastSettingsUpdate):
+    _require_admin(_get_session_or_401(request))
+    changes = body.model_dump(exclude_unset=True)
+    previous = forecast_service.settings
+    updated = previous
+    try:
+        if changes.get("enabled") is not None:
+            updated = dataclasses.replace(updated, enabled=changes["enabled"])
+        if "contact" in changes:
+            updated = dataclasses.replace(updated, contact=forecast.parse_contact(changes["contact"]))
+        if changes.get("front_page") is not None:
+            updated = dataclasses.replace(
+                updated, front_page=forecast.parse_front_page(changes["front_page"]),
+            )
+        if "place" in changes:
+            place = forecast.parse_place(changes["place"])
+            if place is not None and place.altitude is None:
+                # Kartverket's height for a point in Norway, so MET can correct
+                # the temperature for a cabin up a hill. Without it MET uses
+                # its own terrain, which is coarser.
+                altitude = await asyncio.to_thread(
+                    forecast_service.places.elevation, place.lat, place.lon, updated.contact,
+                )
+                place = dataclasses.replace(place, altitude=altitude)
+            updated = dataclasses.replace(updated, place=place)
+    except forecast.InvalidForecastData as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if updated == previous:
+        return _forecast_settings_response()
+    forecast_service.apply_settings(updated)
+    add_log_entry(
+        "sent",
+        "Weather forecast turned on" if updated.enabled and not previous.enabled
+        else "Weather forecast turned off" if previous.enabled and not updated.enabled
+        else f"Weather forecast place set to {updated.place.name}"
+        if updated.place is not None and updated.place != previous.place
+        else "Weather forecast settings changed",
+        source="api",
+    )
+    return _forecast_settings_response()
+
+
+@app.get("/api/forecast/places")
+async def search_forecast_places(request: Request, q: str = ""):
+    """Places by name from Kartverket, or typed coordinates. Asked on Search only."""
+    _require_admin(_get_session_or_401(request))
+    if len(q) > 200:
+        raise HTTPException(status_code=400, detail="That is too long to be a place name")
+    try:
+        places = await asyncio.to_thread(
+            forecast_service.places.search, q, forecast_service.settings.contact,
+        )
+    except forecast.PlaceSearchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    return {"places": places}
 
 
 @app.get("/api/week_profiles")

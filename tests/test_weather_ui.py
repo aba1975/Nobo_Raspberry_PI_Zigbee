@@ -105,7 +105,7 @@ def test_connecting_leaves_for_netatmo_and_the_return_is_announced_once():
 def test_a_station_change_is_picked_up_without_waiting_for_the_poll():
     boot = CABIN[CABIN.index("(async function boot()"):]
     assert "if (state.status && (state.status.alarm || state.status.weather)) {" in boot[:1500]
-    assert "renderTrip(); renderWeather(); renderSystem();" in CABIN
+    assert "renderTrip(); renderWeather(); renderForecast(); renderSystem();" in CABIN
 
 
 def test_the_top_card_has_a_place_for_the_weather_and_it_starts_hidden():

@@ -2012,3 +2012,172 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .display-preview { order: -1; }
   .display-preview img { margin: 0 auto; width: 120px; }
 }
+
+/* ===================================================================
+   Weather forecast (MET Norway)
+
+   One quiet row on the front page, never taller than it has to be: it
+   is there to glance at, below or above the things that heat the house.
+   Everything else is in the sheet, laid out for a phone held in one hand.
+   =================================================================== */
+.wx-ico { display: block; width: 2rem; height: 2rem; flex: none; }
+.wx-ico.sm { width: 1.6rem; height: 1.6rem; }
+.wx-ico.lg { width: 3rem; height: 3rem; }
+.fc-warm { color: var(--danger); }
+.fc-cold { color: var(--frost); }
+.fc-strip .mm, .fc-sheet .mm, .fc-period .mm, .fc-hours .mm {
+  color: var(--frost); font-variant-numeric: tabular-nums;
+}
+
+.fc-strip {
+  margin: 0 0 1.4rem;
+  padding: .75rem 0 .6rem .85rem;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.fc-strip[hidden] { display: none; }
+.fc-strip-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: .6rem;
+  padding-right: .85rem; margin-bottom: .35rem;
+}
+.fc-strip-head h2 {
+  margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: .74rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.fc-strip-head small { flex: none; font-size: .74rem; color: var(--ink-faint); }
+.fc-strip-head small.is-old { color: var(--amber); }
+.fc-days {
+  display: flex; gap: .15rem; overflow-x: auto; scrollbar-width: none;
+  padding-right: .6rem; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
+}
+.fc-days::-webkit-scrollbar { display: none; }
+.fc-day {
+  flex: 0 0 auto; width: 3.55rem; scroll-snap-align: start;
+  display: grid; justify-items: center; gap: .1rem; padding: .3rem .1rem;
+  border: 1px solid transparent; border-radius: 12px;
+  background: none; color: var(--ink); font: inherit; cursor: pointer;
+}
+.fc-day:hover, .fc-day:focus-visible { border-color: var(--rule); background: var(--paper); }
+.fc-d { font-size: .76rem; font-weight: 650; color: var(--ink-soft); }
+.fc-day .hl, .fc-tab .hl {
+  font-size: .84rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.fc-day .hl > span:last-child:not(:first-child) { color: var(--ink-faint); font-weight: 500; }
+.fc-day .mm { font-size: .72rem; min-height: 1.1em; }
+
+/* The sheet: day tabs, then one day. */
+.fc-tabs {
+  display: flex; gap: .3rem; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -1rem .9rem; padding: .1rem 1rem .2rem; -webkit-overflow-scrolling: touch;
+}
+.fc-tabs::-webkit-scrollbar { display: none; }
+.fc-tab {
+  flex: 0 0 auto; min-width: 3.4rem; min-height: 44px;
+  display: grid; justify-items: center; gap: .05rem; padding: .3rem .35rem;
+  border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--card); color: var(--ink); font: inherit; cursor: pointer;
+}
+.fc-tab[aria-selected="true"] {
+  border-color: var(--pine); background: var(--pine-wash);
+  box-shadow: inset 0 0 0 1px var(--pine);
+}
+.fc-tab[aria-selected="true"] .fc-d { color: var(--pine); }
+.fc-panel { touch-action: pan-y; }
+.fc-dayhead { display: flex; align-items: center; gap: .75rem; margin: 0 0 .9rem; }
+.fc-dayhead .big {
+  font-size: 2.4rem; font-weight: 700; letter-spacing: -.03em; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.fc-dayhead .copy { display: grid; gap: .05rem; min-width: 0; color: var(--ink-soft); font-size: .86rem; }
+.fc-dayhead .copy strong { color: var(--ink); font-size: 1rem; }
+.fc-dayhead .copy strong small { color: var(--ink-faint); font-weight: 500; font-size: .82rem; }
+.fc-periods { display: grid; grid-template-columns: repeat(4, 1fr); gap: .35rem; margin: 0 0 .9rem; }
+.fc-period {
+  display: grid; justify-items: center; gap: .1rem; padding: .45rem .2rem .35rem;
+  border: 1px solid var(--rule); border-radius: 12px; background: var(--paper);
+}
+.fc-period.is-past { opacity: .45; align-content: start; }
+.fc-pname { font-size: .7rem; font-weight: 650; color: var(--ink-soft); }
+.fc-period .hl { font-size: .95rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.fc-period .mm { font-size: .72rem; }
+.fc-chart { display: block; width: 100%; height: 110px; overflow: visible; }
+.fc-chart .line {
+  fill: none; stroke: var(--danger); stroke-width: 2;
+  vector-effect: non-scaling-stroke; stroke-linejoin: round;
+}
+.fc-chart .bar { fill: var(--frost); opacity: .55; }
+.fc-chart .zero { stroke: var(--rule); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.fc-axis {
+  display: flex; justify-content: space-between; margin: .1rem 0 .6rem;
+  font-size: .7rem; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+.fc-six { margin: 0 0 .5rem; }
+.fc-hours { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.fc-hours li {
+  display: grid; grid-template-columns: 3.3rem 1.8rem 1fr 3.4rem 4.6rem;
+  align-items: center; gap: .4rem; padding: .32rem .1rem;
+  border-bottom: 1px solid var(--rule); font-size: .9rem; font-variant-numeric: tabular-nums;
+}
+.fc-hours .tt { font-weight: 700; }
+.fc-hours .tt small { display: block; font-weight: 500; font-size: .68rem; color: var(--ink-faint); }
+.fc-hours .tv { font-weight: 650; }
+.fc-hours .mm { text-align: right; font-size: .82rem; }
+.fc-hours .w { text-align: right; font-size: .82rem; color: var(--ink-soft); white-space: nowrap; }
+.fc-hours .w i { display: inline-block; font-style: normal; }
+.fc-credit { display: block; margin: .8rem 0 0; font-size: .74rem; color: var(--ink-faint); }
+.fc-credit a { color: var(--pine); }
+
+/* Settings */
+.fc-place {
+  display: grid; grid-template-columns: auto 1fr auto; gap: .7rem; align-items: center;
+  margin: .3rem 0 .8rem; padding: .7rem .8rem;
+  border: 1px solid var(--rule); border-radius: 12px;
+}
+.fc-place .pin {
+  display: grid; place-items: center; width: 2rem; height: 2rem;
+  border-radius: 10px; background: var(--pine-wash); color: var(--pine);
+}
+.fc-place strong { display: block; }
+.fc-place small { color: var(--ink-soft); font-size: .78rem; }
+.fc-search { margin: 0; }
+.fc-contact { margin-top: 1rem; }
+.field > .fc-search-row {
+  display: flex; gap: .5rem; align-items: stretch; margin: 0;
+  font-size: inherit; font-weight: inherit;
+}
+.fc-search-row input { flex: 1 1 auto; min-width: 0; }
+.field > .fc-search-row .btn { flex: none; width: auto; min-width: 0; padding-inline: 1.1rem; }
+.fc-results {
+  list-style: none; margin: 0 0 .3rem; padding: 0;
+  border: 1px solid var(--rule); border-radius: 12px; overflow: hidden;
+}
+.fc-results li + li { border-top: 1px solid var(--rule); }
+.fc-results button {
+  display: block; width: 100%; min-height: 44px; padding: .55rem .8rem;
+  border: 0; background: var(--card); color: var(--ink);
+  font: inherit; font-size: .9rem; text-align: left; cursor: pointer;
+}
+.fc-results button:hover, .fc-results button:focus-visible { background: var(--paper); }
+.fc-results small { display: block; color: var(--ink-faint); font-size: .76rem; }
+.fc-status {
+  display: flex; gap: .5rem; align-items: baseline; margin: .2rem 0 .9rem;
+  font-size: .82rem; color: var(--ink-soft);
+}
+.fc-status .dot {
+  flex: none; width: .55rem; height: .55rem; border-radius: 99px;
+  background: var(--pine); transform: translateY(-.05rem);
+}
+.fc-status .dot.is-old { background: var(--amber); }
+.fc-how { margin: .8rem 0 0; font-size: .84rem; color: var(--ink-soft); }
+.fc-how summary { cursor: pointer; font-weight: 650; color: var(--ink); }
+.fc-how ul { margin: .4rem 0 .5rem; padding-left: 1.1rem; list-style: disc; }
+.fc-how li { margin: .2rem 0; }
+.fc-how code { font-size: .76rem; word-break: break-all; }
+
+@media (max-width: 380px) {
+  .fc-hours li { grid-template-columns: 3rem 1.6rem 1fr 3.1rem 4.2rem; gap: .3rem; font-size: .86rem; }
+  .fc-dayhead .big { font-size: 2.1rem; }
+}
