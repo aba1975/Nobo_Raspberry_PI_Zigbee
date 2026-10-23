@@ -138,7 +138,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Zones** | Add, rename, re-icon and delete zones. |
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
-| **Alerts by email** | Optional, and off by default. Can tell you when the hub goes offline and when settings are changed from another app, and — with contact sensors — when a window is left open, when one is still open a day later, and when a sensor goes quiet or runs low on battery. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
+| **Alerts on your phone and by email** | Optional, and off by default. Sent to the lock screen of any phone that has Cabin on its Home Screen (Web Push, no app or account needed, works away from home without the VPN — see [docs/PUSH.md](docs/PUSH.md)), by email, or both. Can tell you when the hub goes offline and when settings are changed from another app, and — with contact sensors — when a window is left open, when one is still open a day later, and when a sensor goes quiet or runs low on battery. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
 | **Contact sensors** | Optional and hidden until an administrator enables it. Real Zigbee door and window sensors, or simulated ones in demo mode, with prominent left-open warnings and conservative delayed heating actions. See [Contact sensors](#contact-sensors). |
 
 Some devices — plain on/off receivers such as the R80 RSC 700 — have no
@@ -662,7 +662,7 @@ and `GET /api/global-mode/away-exceptions` reports it under `unknown_zone_ids`.
 
 ### Alerts
 
-Optional email alerts. **Everything here is off by default, including the
+Optional alerts, to phones, by email, or both. **Everything here is off by default, including the
 feature itself**, and that is a deliberate judgement rather than caution: the
 Nobø hub reports so little about individual heaters that the honest set of
 alerts is small, and none of it is urgent enough to mail somebody unasked. It is
@@ -672,9 +672,16 @@ Read [What it can and cannot know](#what-it-can-and-cannot-know) **before**
 relying on this for anything. In particular, there is no frost alarm, and there
 cannot be one.
 
-Turn it on under **Settings → Telling you when something is wrong**. The
-settings stay hidden until you press the switch, and nothing is sent until you
-press **Save alerts**. Use **Send a test email** first — if the mail server
+Turn it on under **Settings → Alerts**. The settings stay hidden until you
+press the switch, and nothing is sent until you press **Save alerts**.
+
+**On a phone:** open Cabin from its Home Screen icon and choose **Settings →
+Alerts → Turn on alerts on this device**. Each person does that on their own
+phone, and the alert then reaches the lock screen wherever the phone is, with
+no VPN. Email can be left empty when phones are enough. The step-by-step setup
+for iPhone, and how it works, is in [docs/PUSH.md](docs/PUSH.md).
+
+**By email:** use **Send a test email** first — if the mail server
 refuses, you get its actual words back, because "authentication failed" and "no
 such host" need different fixes.
 
@@ -871,10 +878,12 @@ until you want them. Turning the switch on reveals the form; nothing is sent
 until you press **Save alerts**, because the server refuses to enable a
 configuration that could not deliver.
 
-All three notification endpoints are **admin only** — the settings decide where
+All three notification endpoints are **admin only**. The phone endpoints
+under `/api/push` are not: anyone signed in may turn alerts on for their own
+phone, but only an administrator decides whether anything is sent — the settings decide where
 alerts about your building are sent, and who can silence them.
 
-A mail server that is down, slow or misconfigured can never affect the heating:
+A mail server or push service that is down, slow or misconfigured can never affect the heating:
 sending happens on a worker thread with a timeout, and every failure is logged
 and swallowed rather than raised.
 
@@ -2193,6 +2202,11 @@ restore, press **Connect to Netatmo** under Settings → Weather Station (and
 enter the app's client ID and secret again if you had turned it off). The
 weather settings and which modules are used in which rooms are kept.
 
+**Phones that receive alerts are not backed up**: `data/webpush/` holds the
+key that signs every alert and each phone's push address. After a restore,
+open Cabin on each phone and press **Turn on alerts on this device** again
+under Settings → Alerts. See [docs/PUSH.md](docs/PUSH.md#storage).
+
 The optional volumes, `backup/caddy-data` and `backup/zigbee2mqtt-data`, are
 restored into their Docker volumes with the service stopped. For Zigbee, follow
 *Moving the dongle to another installation* in [docs/SENSORS.md](docs/SENSORS.md):
@@ -2338,6 +2352,7 @@ Note that `/auth/login` takes form fields, not JSON.
 | `PUT /api/notifications` | Change alert settings. Admin only. Partial: omitted fields keep their value, and an omitted password keeps the stored one. Refuses to enable alerts that could not be delivered. |
 | `POST /api/log/clear` | Discard the command log. Changes no setting and no zone — it only throws away the record. |
 | `POST /api/notifications/test` | Send a test email, optionally using settings in the body that have not been saved yet. Admin only. Returns the mail server's own error on failure. |
+| `POST /api/push/subscriptions` | Turn alerts on for this browser. Body is the browser's `PushSubscription`. Any signed-in user; see [docs/PUSH.md](docs/PUSH.md#api) for the rest of `/api/push` |
 | `POST /api/zones/{zone_id}/schedule` | Replace a zone's whole week. Optional `apply_to`: `"zone"` (default) copies a shared schedule so only this zone changes; `"profile"` changes the schedule itself and therefore every zone using it. See [Weekly schedule rules](#weekly-schedule-rules). |
 
 ### Schedules
@@ -2571,6 +2586,12 @@ overrides the mounted files, which is exactly the bug this avoids.
   station. The token and the app's secret are in a folder only the application
   can read, never in a backup, and only two Netatmo endpoints may be called.
   See [docs/WEATHER.md](docs/WEATHER.md#how-your-netatmo-account-is-protected).
+- **Phone alerts go only to a browser's push service**, encrypted to the phone
+  so the service carrying them cannot read them, and signed with a key that
+  never leaves the Pi or enters a backup. A subscription that points anywhere
+  but Apple's, Google's, Mozilla's or Microsoft's push service is refused, so
+  it cannot be used to make the Pi call into your network.
+  See [docs/PUSH.md](docs/PUSH.md#what-is-sent-and-to-where).
 
 ## Reference documents
 

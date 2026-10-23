@@ -34,6 +34,7 @@ import away_schedule
 import config_persistence
 import demo_week
 import notifications
+import webpush
 import notify_watch
 import setpoint_guard as setpoint_guard_mod
 import sensor_persistence
@@ -386,6 +387,8 @@ log_lock = threading.Lock()  # Lock for thread-safe command log access
 # are created here so every code path can reach them, and both are harmless
 # until the user turns notifications on in Settings.
 notifier = notifications.Notifier()
+# Every alert also goes to the phones that turned notifications on (docs/PUSH.md).
+notifier.push_impl = webpush.deliver_all
 zone_watcher = notify_watch.ZoneWatcher(notifier=notifier)
 
 # The temperatures this system means each zone to have. Unlike the notifier this
@@ -5649,10 +5652,18 @@ async def update_notifications(request: Request, body: NotificationUpdate):
     # Turning it on with settings that cannot deliver would look like it worked
     # and then quietly never send anything, which is the worst outcome for a
     # feature whose entire job is to speak up.
+    #
+    # Email may be left empty when a phone receives the alerts instead. Half a
+    # mail setup is still refused, phones or not: it would fail every time.
     if merged.get("enabled"):
         problems = notifications.validate_email_config(merged)
-        if problems:
+        if problems and notifications.email_started(merged):
             raise HTTPException(status_code=400, detail=" ".join(problems))
+        if problems and not webpush.subscriptions():
+            raise HTTPException(status_code=400, detail=(
+                "No mail server is set, and no phone has turned notifications on. "
+                "Add an email address, or turn on notifications on a phone first."
+            ))
 
     saved = notifications.save_settings(merged)
     notifier.reload(saved)
@@ -5711,6 +5722,121 @@ async def test_notification(request: Request, body: Optional[NotificationUpdate]
 
     add_log_entry("sent", "Test notification sent", command="notifications test", source="api")
     return {"status": "success", "sent_to": cfg["email"]["to_addrs"]}
+
+
+# ---------------------------------------------------------------------------
+# Web Push: alerts on phones (docs/PUSH.md)
+# ---------------------------------------------------------------------------
+# Any signed-in user may turn alerts on for their own phone; what is sent, and
+# whether anything is, stays an administrator's choice under Alerts. Each user
+# sees and removes their own devices, and an administrator sees all of them.
+
+def _is_admin(session: dict) -> bool:
+    return auth.load_users().get(session["username"], {}).get("role") == "admin"
+
+
+def _push_device_or_404(session: dict, sub_id: str) -> dict:
+    sub = webpush.get_subscription(sub_id)
+    # Somebody else's phone is "not found" rather than "forbidden", so the
+    # answer does not confirm that the id exists.
+    if sub is None or (sub["username"] != session["username"] and not _is_admin(session)):
+        raise HTTPException(status_code=404, detail="No such device")
+    return sub
+
+
+@app.get("/api/push")
+async def get_push(request: Request):
+    """This installation's public key, and the devices this user may see."""
+    session = _get_session_or_401(request)
+    admin = _is_admin(session)
+    key = await asyncio.get_running_loop().run_in_executor(None, webpush.public_key)
+    devices = [
+        webpush.public_device(sub) for sub in webpush.subscriptions()
+        if admin or sub["username"] == session["username"]
+    ]
+    return {
+        "public_key": key,
+        "devices": devices,
+        "username": session["username"],
+        "is_admin": admin,
+        "notifications_enabled": bool(notifier.settings.get("enabled")),
+    }
+
+
+@app.post("/api/push/subscriptions")
+async def add_push_subscription(request: Request):
+    """Remember the subscription this browser was just given."""
+    session = _get_session_or_401(request)
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Expected a push subscription")
+    keys = data.get("keys") if isinstance(data, dict) else None
+    if not isinstance(keys, dict):
+        raise HTTPException(status_code=400, detail="Expected a push subscription")
+    try:
+        sub = webpush.add_subscription(
+            session["username"], data.get("endpoint"), keys.get("p256dh"), keys.get("auth"),
+            label=webpush.label_from_user_agent(request.headers.get("user-agent", "")),
+        )
+    except webpush.InvalidSubscription as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    add_log_entry("sent", f"Notifications turned on for {sub['label']} ({session['username']})",
+                  command="push subscribe", source="api")
+    return webpush.public_device(sub)
+
+
+@app.delete("/api/push/subscriptions/{sub_id}")
+async def remove_push_subscription(request: Request, sub_id: str):
+    session = _get_session_or_401(request)
+    sub = _push_device_or_404(session, sub_id)
+    webpush.remove_subscription(sub_id)
+    add_log_entry("sent", f"Notifications turned off for {sub['label']} ({sub['username']})",
+                  command="push unsubscribe", source="api")
+    return {"status": "removed"}
+
+
+@app.post("/api/push/subscriptions/{sub_id}/test")
+async def test_push_subscription(request: Request, sub_id: str):
+    """Send one test alert to one device, and say plainly if it did not arrive."""
+    session = _get_session_or_401(request)
+    sub = _push_device_or_404(session, sub_id)
+    payload = webpush.build_payload(
+        "Test alert",
+        f"Alerts from {notifier.site_name} will arrive on this {sub['label']} like this one.",
+        "info",
+        tag="push-test",
+    )
+    result = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: webpush.send(sub, payload, severity="info", tag="push-test"),
+    )
+    if result == "gone":
+        raise HTTPException(status_code=410, detail=(
+            "This device no longer accepts notifications and has been removed. "
+            "Turn notifications on again from the device."
+        ))
+    if result != "sent":
+        latest = webpush.get_subscription(sub_id) or {}
+        detail = (latest.get("last_error") or {}).get("detail") or "no answer"
+        raise HTTPException(status_code=502, detail=f"The push service refused it: {detail}")
+    add_log_entry("sent", f"Test alert sent to {sub['label']} ({sub['username']})",
+                  command="push test", source="api")
+    return {"status": "sent"}
+
+
+@app.get("/sw.js")
+async def service_worker():
+    """Cabin's service worker, which shows the alerts a phone receives.
+
+    Served from the root because a worker only controls pages at or below its
+    own path, and behind sign-in like every other script. A phone that has
+    been signed out keeps the worker it already has; only an update waits.
+    """
+    return FileResponse(
+        CABIN_DIR / "sw.js",
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/manifest.webmanifest")
@@ -10878,6 +11004,7 @@ async def auth_rename(request: Request):
     # Every session of this user, not only this one: another phone left
     # signed in would otherwise carry on under a name that no longer exists.
     auth.rename_sessions(old_name, new_name)
+    webpush.rename_user(old_name, new_name)
     session["username"] = new_name
     return {"status": "renamed", "username": new_name}
 
@@ -10959,6 +11086,7 @@ async def admin_update_user(request: Request, username: str):
     auth.save_users(users)
     if username != old_name:
         auth.rename_sessions(old_name, username)
+        webpush.rename_user(old_name, username)
     return {"status": "updated", "username": username}
 
 
@@ -10978,6 +11106,8 @@ async def admin_delete_user(request: Request, username: str):
     del users[username]
     auth.save_users(users)
     auth.end_sessions_for(username)
+    # Their phones stop receiving alerts too.
+    webpush.remove_user(username)
     return {"status": "deleted"}
 
 

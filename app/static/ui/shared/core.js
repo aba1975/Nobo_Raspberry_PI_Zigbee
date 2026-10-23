@@ -101,6 +101,15 @@ const Nobo = (() => {
     testNotification: (body) => req('/api/notifications/test', {
                                  method: 'POST', body: JSON.stringify(body || {}) }),
 
+    // Alerts on phones (Web Push). Any signed-in user, for their own devices.
+    push:       ()    => req('/api/push'),
+    addPush:    (sub) => req('/api/push/subscriptions', {
+                           method: 'POST', body: JSON.stringify(sub) }),
+    removePush: (id)  => req(`/api/push/subscriptions/${encodeURIComponent(id)}`, {
+                           method: 'DELETE' }),
+    testPush:   (id)  => req(`/api/push/subscriptions/${encodeURIComponent(id)}/test`, {
+                           method: 'POST' }),
+
     sensorSettings:    ()     => req('/api/sensors/settings'),
     setSensorSettings: (body) => req('/api/sensors/settings', {
                                   method: 'PUT', body: JSON.stringify(body) }),

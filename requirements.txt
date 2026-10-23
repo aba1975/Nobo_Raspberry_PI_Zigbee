@@ -14,3 +14,6 @@ aiomqtt>=2.0.0
 vsure==2.10.1
 # Draws the wall display's picture (app/display_render.py).
 Pillow>=10.1
+# Web Push to phones (app/webpush.py): the VAPID signature and the message
+# encryption. Prebuilt wheels exist for the Pi's aarch64.
+cryptography>=42

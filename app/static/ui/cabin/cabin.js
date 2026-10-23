@@ -8440,15 +8440,21 @@
       ${renderSensorSettingsCard(isAdmin)}
       ${renderAlarmSettingsCard(isAdmin)}
       ${settingsSection('alerts', 'Alerts', '<span id="notifyState"></span>', `
-        ${secIntro(`Optional email when something needs attention: a door left
-        open, the hub going away, settings changed from another app. Nothing is
-        sent unless you turn it on.`)}
+        ${secIntro(`Optional alerts when something needs attention: a door left
+        open, the hub going away, settings changed from another app. On your
+        phone, by email, or both. Nothing is sent unless you turn it on.`)}
 
-        ${settingRow('Send alerts', 'By email, once a mail server and a recipient are set.',
-          segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
-            { label: 'Send alerts', disabled: !isAdmin }))}
+        <div class="notify-admin" ${isAdmin ? '' : 'hidden'}>
+          ${settingRow('Send alerts', 'To the phones below, and by email if a mail server is set.',
+            segControl('notify-enabled', [['off', 'Off'], ['on', 'On']], 'off',
+              { label: 'Send alerts', disabled: !isAdmin }))}
 
-        <div id="notifyBox" class="notify-box">
+          <div id="notifyBox" class="notify-box">
+            <p class="zd-sub">Loading…</p>
+          </div>
+        </div>
+
+        <div id="pushBox" class="push-box">
           <p class="zd-sub">Loading…</p>
         </div>
 
@@ -8456,7 +8462,7 @@
         heaters. It cannot see a cold room, a heater without power, or a
         thermostat switched off at the wall \u2014 so neither can these alerts.</div>
 
-        ${isAdmin ? '' : '<div class="note">Only an administrator can change these.</div>'}
+        ${isAdmin ? '' : '<div class="note">Only an administrator can choose what is sent.</div>'}
       `, { icon: 'bell' })}
 
       ${settingsGroup('Weather and displays')}
@@ -8542,6 +8548,7 @@
       };
     });
     loadNotifications(isAdmin);
+    loadPush();
     wireSensorSettings(root);
     wireAlarmSettings(root);
     wireWeatherSettings(root);
@@ -8678,11 +8685,10 @@
       renderNotifications(isAdmin);
     } catch (e) {
       // An ordinary user is not allowed to read these, which is not an error
-      // worth shouting about - just hide the panel. The topic is a <details>
-      // now rather than a .card, so this looks for either and tolerates
-      // neither being there.
-      const panel = box.closest('.sec, .card');
-      if (panel) panel.hidden = true;
+      // worth shouting about - just hide the administrator's part. The rest
+      // of the topic stays: anybody may turn alerts on for their own phone.
+      const admin = box.closest('.notify-admin');
+      if (admin) admin.hidden = true;
     }
   }
 
@@ -8701,12 +8707,8 @@
     });
     /* Written here rather than in renderSettings, because the configuration
        arrives after the page does. */
-    const summary = $('#notifyState');
-    if (summary) {
-      summary.innerHTML = n.enabled
-        ? `<b>On</b>${n.to ? ' · ' + esc(n.to) : ''}`
-        : '<b>Off</b>';
-    }
+    renderNotifyState();
+    if (state.push) renderPush();
 
     const types = n.event_types || {};
 
@@ -8746,7 +8748,8 @@
           </label>`).join('')}
       </div>
 
-      <h3 class="notify-head">Where to send it</h3>
+      <h3 class="notify-head">Email</h3>
+      <p class="field-hint">Leave these empty to send alerts to phones only.</p>
       <div class="notify-grid">
         <label class="field">
           <span>Send to</span>
@@ -8928,6 +8931,270 @@
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Send a test email'; }
     }
+  }
+
+  /** The Alerts summary: on or off, and where alerts go. */
+  function renderNotifyState() {
+    const summary = $('#notifyState');
+    if (!summary) return;
+    const n = state.notify;
+    const p = state.push;
+    const enabled = n ? !!n.enabled : !!(p && p.notifications_enabled);
+    if (!enabled) { summary.innerHTML = '<b>Off</b>'; return; }
+    const parts = [];
+    const count = p ? p.devices.length : 0;
+    if (count) parts.push(`${count} ${count === 1 ? 'device' : 'devices'}`);
+    if (n && n.email && (n.email.to_addrs || []).length) parts.push('email');
+    summary.innerHTML = `<b>On</b>${parts.length ? ' · ' + esc(parts.join(' and ')) : ''}`;
+  }
+
+  /* ------------------------------------------------------------------
+   * Alerts on phones (Web Push). docs/PUSH.md is the design.
+   *
+   * An iPhone or iPad can only receive these in Cabin on the Home Screen,
+   * never in a Safari tab, and permission has to be asked inside the tap
+   * itself - iOS refuses a request made after anything has been awaited.
+   *
+   * Nothing here subscribes on its own. A device somebody removed stays
+   * removed until somebody on it presses the button again.
+   * ---------------------------------------------------------------- */
+
+  const isAppleTouch = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isStandalone = () => navigator.standalone === true
+    || (!!window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+
+  function pushSupport() {
+    if (!window.isSecureContext) return 'insecure';
+    if (isAppleTouch() && !isStandalone()) return 'home-screen';
+    if (!('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window)) {
+      return 'unsupported';
+    }
+    if (Notification.permission === 'denied') return 'denied';
+    return 'ready';
+  }
+
+  function pushHelp(support) {
+    const apple = isAppleTouch();
+    switch (support) {
+      case 'home-screen':
+        return `On iPhone and iPad, alerts come only to Cabin on the Home Screen.
+          In Safari, tap <b>Share</b> and then <b>Add to Home Screen</b>, open
+          Cabin from the new icon, and come back here.`;
+      case 'denied':
+        return apple
+          ? `Notifications are blocked for Cabin. Allow them under
+             <b>Settings \u2192 Notifications \u2192 Cabin</b>, then come back here.`
+          : `Notifications are blocked for this site. Allow them in the
+             browser\u2019s site settings, then come back here.`;
+      case 'insecure':
+        return `Alerts need Cabin to be opened over HTTPS, with a certificate this
+          device trusts.`;
+      default:
+        return apple
+          ? 'Alerts need iOS or iPadOS 16.4 or later.'
+          : 'This browser cannot receive notifications.';
+    }
+  }
+
+  function pushKeyBytes(b64url) {
+    const padded = b64url + '='.repeat((4 - b64url.length % 4) % 4);
+    const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  }
+
+  function samePushKey(buffer, b64url) {
+    if (!buffer) return false;
+    const a = new Uint8Array(buffer);
+    const b = pushKeyBytes(b64url);
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+  }
+
+  async function sha256Hex(text) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function localPushSubscription() {
+    if (!('serviceWorker' in navigator)) return null;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    return reg && reg.pushManager ? reg.pushManager.getSubscription() : null;
+  }
+
+  async function loadPush() {
+    const box = $('#pushBox');
+    if (!box) return;
+    try {
+      state.push = await Nobo.api.push();
+    } catch (e) {
+      box.innerHTML = `<p class="zd-sub">${esc(e.message)}</p>`;
+      return;
+    }
+    // Which listed device is this one: the server shows only a hash of each
+    // push address, so this browser hashes its own and compares.
+    state.pushHere = null;
+    if (pushSupport() === 'ready') {
+      try {
+        const sub = await localPushSubscription();
+        if (sub) {
+          const hash = await sha256Hex(sub.endpoint);
+          const mine = state.push.devices.find(d => d.endpoint_hash === hash);
+          state.pushHere = mine ? mine.id : null;
+        }
+      } catch (_) { /* unknown is shown as "not on yet", which is safe */ }
+    }
+    renderPush();
+  }
+
+  function pushDeviceFailing(d) {
+    const err = d.last_error;
+    return !!err && (!d.last_success || new Date(err.at) > new Date(d.last_success));
+  }
+
+  function pushDeviceStatus(d) {
+    if (pushDeviceFailing(d)) {
+      const err = d.last_error;
+      return `Not reached ${esc(Nobo.fmtAgo(err.at))}${err.detail ? ': ' + esc(err.detail) : ''}`;
+    }
+    if (d.last_success) return `Last alert ${esc(Nobo.fmtAgo(d.last_success))}`;
+    return `Added ${esc(Nobo.fmtAgo(d.created))}`;
+  }
+
+  function renderPush() {
+    const box = $('#pushBox');
+    const p = state.push;
+    if (!box || !p) return;
+    renderNotifyState();
+    const support = pushSupport();
+    const here = state.pushHere;
+    const enabled = state.notify ? !!state.notify.enabled : !!p.notifications_enabled;
+
+    let thisDevice;
+    if (here) {
+      thisDevice = `
+        <p class="push-here"><span class="push-mark" aria-hidden="true">${Nobo.icon('bell')}</span>
+          <b>This device gets alerts.</b></p>
+        <div class="sheet-actions">
+          <button class="btn" type="button" data-push-test="${esc(here)}">Send a test</button>
+          <button class="btn" type="button" data-push-remove="${esc(here)}">Turn off here</button>
+        </div>`;
+    } else if (support === 'ready') {
+      thisDevice = `
+        <div class="sheet-actions">
+          <button class="btn btn-primary" type="button" data-act="push-on">Turn on alerts on this device</button>
+        </div>`;
+    } else {
+      thisDevice = `<div class="note">${pushHelp(support)}</div>`;
+    }
+
+    box.innerHTML = `
+      <h3 class="notify-head">Phones and tablets</h3>
+      <p class="field-hint">Alerts arrive on the lock screen wherever the phone is,
+      with no VPN. Each person turns them on from Cabin on their own phone.</p>
+      ${thisDevice}
+      ${p.devices.length ? `
+        <ul class="acct-list push-list">
+          ${p.devices.map(d => `
+            <li class="push-row">
+              <span class="acct-name">${esc(d.label)}${d.id === here ? ' <small>(this device)</small>' : ''}${
+                p.is_admin ? ` <small>\u00B7 ${esc(d.username)}</small>` : ''}
+                <small class="push-seen${pushDeviceFailing(d) ? ' is-bad' : ''}">${pushDeviceStatus(d)}</small>
+              </span>
+              <button class="btn btn-small" type="button" data-push-test="${esc(d.id)}"
+                aria-label="Send a test to ${esc(d.label)}">Test</button>
+              <button class="btn btn-danger btn-small" type="button" data-push-remove="${esc(d.id)}"
+                aria-label="Remove ${esc(d.label)}">Remove</button>
+            </li>`).join('')}
+        </ul>` : ''}
+      ${enabled ? '' : `<div class="note">${p.is_admin
+        ? 'Alerts are off, so nothing is sent yet. Turn on <b>Send alerts</b> above and choose what to report.'
+        : 'Alerts are off for now. An administrator turns them on and chooses what they report.'}</div>`}`;
+
+    const on = box.querySelector('[data-act="push-on"]');
+    if (on) on.onclick = () => enablePushHere(on);
+    box.querySelectorAll('[data-push-test]').forEach(btn => {
+      btn.onclick = () => testPush(btn);
+    });
+    box.querySelectorAll('[data-push-remove]').forEach(btn => {
+      btn.onclick = () => removePushDevice(btn.dataset.pushRemove);
+    });
+  }
+
+  function enablePushHere(btn) {
+    // First, and synchronously inside the tap: see the note above.
+    const asked = Notification.requestPermission();
+    btn.disabled = true;
+    btn.textContent = 'Turning on\u2026';
+    (async () => {
+      try {
+        const permission = await asked;
+        if (permission !== 'granted') {
+          Nobo.toast(permission === 'denied'
+            ? 'Notifications were not allowed on this device'
+            : 'Notifications were not turned on', 'error');
+          renderPush();
+          return;
+        }
+        await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        // Subscribed under a key this installation no longer has (restored
+        // from a backup, say): that subscription can never be delivered to.
+        if (sub && !samePushKey(sub.options && sub.options.applicationServerKey, state.push.public_key)) {
+          await sub.unsubscribe();
+          sub = null;
+        }
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: pushKeyBytes(state.push.public_key),
+          });
+        }
+        await Nobo.api.addPush(sub.toJSON());
+        Nobo.toast('Alerts are on for this device. Send a test to see one.');
+      } catch (e) {
+        Nobo.toast(e.message || 'Could not turn on alerts here', 'error');
+      }
+      await loadPush();
+    })();
+  }
+
+  async function testPush(btn) {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending\u2026';
+    try {
+      await Nobo.api.testPush(btn.dataset.pushTest);
+      Nobo.toast('Sent. It should appear in a few seconds.');
+    } catch (e) {
+      Nobo.toast(e.message, 'error');
+    }
+    await loadPush();
+    if (btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+  }
+
+  function removePushDevice(id) {
+    const device = (state.push.devices || []).find(d => d.id === id);
+    if (!device) return;
+    const local = id === state.pushHere;
+    const go = async () => {
+      try {
+        await Nobo.api.removePush(id);
+        if (local) {
+          const sub = await localPushSubscription();
+          if (sub) await sub.unsubscribe();
+        }
+        Nobo.toast(local ? 'Alerts are off for this device' : 'Device removed');
+      } catch (e) {
+        Nobo.toast(e.message, 'error');
+      }
+      await loadPush();
+    };
+    if (local) { go(); return; }
+    const whose = device.username === state.push.username ? '' : ` (${device.username})`;
+    confirmSheet('Remove this device?',
+      `${device.label}${whose} will stop receiving alerts until somebody turns them on again from it.`,
+      'Remove', go, true);
   }
 
   /* ------------------------------------------------------------------
@@ -9123,6 +9390,12 @@
     renderLink();
     announceWeatherReturn();
     refreshForecast();
+    /* The worker only shows alerts; it has no fetch handler, so it caches
+       nothing. Registered on every start, after the page is up, so an update
+       to it is picked up. */
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+    }
     // A phone left in a pocket asks for nothing; picked up again, it catches up.
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) refreshForecast();

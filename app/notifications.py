@@ -82,6 +82,11 @@ Design rules
   state that persists is reported when it starts and when it clears, never
   repeatedly in between.
 - **Never log or return the password.**
+- **Two channels, one decision.** Email goes out only when a mail server is
+  set; every alert is also handed to ``push_impl`` (``webpush.deliver_all`` in
+  the server, see ``docs/PUSH.md``), which sends to whatever phones are
+  subscribed. Events, quiet hours and the gap between alerts apply to both, and each channel
+  fails on its own without stopping the other.
 """
 
 from __future__ import annotations
@@ -631,6 +636,17 @@ def send_test(cfg: Dict[str, Any], site_name: str = "Nobø Control") -> None:
     )
 
 
+def email_configured(cfg: Dict[str, Any]) -> bool:
+    """Whether the mail settings are complete enough to try."""
+    return not validate_email_config(cfg)
+
+
+def email_started(cfg: Dict[str, Any]) -> bool:
+    """Whether anybody has begun filling in the mail settings."""
+    email = cfg.get("email", {})
+    return any(email.get(k) for k in ("host", "to_addrs", "username", "from_addr", "password"))
+
+
 def validate_email_config(cfg: Dict[str, Any]) -> List[str]:
     """Human-readable reasons the mail settings cannot work yet."""
     email = cfg.get("email", {})
@@ -673,6 +689,9 @@ class Notifier:
     log_hook: Optional[Any] = None
     # Overridden in tests so nothing tries to reach a mail server.
     send_impl: Optional[Any] = None
+    # Set by the server to webpush.deliver_all(title, body, severity, tag), so
+    # every alert also reaches the phones that have turned notifications on.
+    push_impl: Optional[Any] = None
 
     # -- configuration ----------------------------------------------------
 
@@ -707,7 +726,8 @@ class Notifier:
     def notify(self, event_type: str, subject: str, body: str,
                severity: str = "info", key: Optional[str] = None,
                highlight: Sequence[str] = (),
-               facts: Sequence[tuple] = ()) -> bool:
+               facts: Sequence[tuple] = (),
+               tag: Optional[str] = None) -> bool:
         """
         A one-off thing happened. Send it, unless it is muted or too soon.
 
@@ -732,7 +752,7 @@ class Notifier:
                 return False
             cond.last_sent = now
 
-        self._dispatch(subject, body, severity, event_type, highlight, facts)
+        self._dispatch(subject, body, severity, event_type, highlight, facts, tag)
         return True
 
     def set_condition(self, event_type: str, key: str, raised: bool,
@@ -761,8 +781,11 @@ class Notifier:
             cond.active = raised
 
         if raised:
+            # The same tag both ways, so on a phone "closed again" replaces
+            # "left open" rather than sitting beneath it.
             return self.notify(event_type, subject, body, severity=severity,
-                               key=key + ":on", highlight=highlight, facts=facts)
+                               key=key + ":on", highlight=highlight, facts=facts,
+                               tag=key)
         if recovery_subject:
             # The recovery carries the same names but not the facts: those
             # described the fault, and repeating them beside "it is fixed"
@@ -770,7 +793,7 @@ class Notifier:
             return self.notify(recovery_event_type or event_type,
                                recovery_subject, recovery_body,
                                severity="info", key=key + ":off",
-                               highlight=highlight)
+                               highlight=highlight, tag=key)
         return False
 
     def is_raised(self, key: str) -> bool:
@@ -788,13 +811,14 @@ class Notifier:
 
     def _dispatch(self, subject: str, body: str, severity: str, event_type: str,
                   highlight: Sequence[str] = (),
-                  facts: Sequence[tuple] = ()) -> None:
+                  facts: Sequence[tuple] = (),
+                  tag: Optional[str] = None) -> None:
         prefix = {"critical": "⚠ ", "warning": "", "info": ""}.get(severity, "")
         full_subject = f"[{self.site_name}] {prefix}{subject}"
         footer = (
             "\n\n---\n"
             f"Sent by your Nobø heating system ({self.site_name}).\n"
-            "Turn this off or change what it reports under Settings → Notifications.\n"
+            "Turn this off or change what it reports under Settings → Alerts.\n"
         )
         if facts:
             width = max(len(str(label)) for label, _ in facts)
@@ -814,21 +838,38 @@ class Notifier:
 
         sender = self.send_impl or _send_email_blocking
         cfg = json.loads(json.dumps(self.settings))
+        pusher = self.push_impl
+        # A phone shows a few lines, so it gets the facts as plain lines and
+        # the prose after them, without the email's footer.
+        push_title = f"{prefix}{subject}"
+        push_body = "\n".join(
+            [f"{label}: {value}" for label, value in facts] + [body.strip()]
+        ).strip()
+
+        def failed(channel: str, exc: Exception) -> None:
+            # Deliberately swallowed. A mail server or a push service being
+            # down must never become a heating fault.
+            logger.error("Could not send %s notification %r: %s", channel, subject, exc)
+            if self.log_hook:
+                try:
+                    self.log_hook("error", f"Notification failed ({channel}): {exc}",
+                                  command=f"notify {event_type}", source="api")
+                except Exception:
+                    pass
 
         def run():
-            try:
-                sender(cfg, full_subject, full_body, full_html)
-                logger.info("Notification sent: %s", subject)
-            except Exception as exc:
-                # Deliberately swallowed. A mail server being down must never
-                # become a heating fault.
-                logger.error("Could not send notification %r: %s", subject, exc)
-                if self.log_hook:
-                    try:
-                        self.log_hook("error", f"Notification failed: {exc}",
-                                      command=f"notify {event_type}", source="api")
-                    except Exception:
-                        pass
+            # Email only when it is set up: phones alone are a valid choice.
+            if email_configured(cfg):
+                try:
+                    sender(cfg, full_subject, full_body, full_html)
+                    logger.info("Notification sent: %s", subject)
+                except Exception as exc:
+                    failed("email", exc)
+            if pusher is not None:
+                try:
+                    pusher(push_title, push_body, severity, tag)
+                except Exception as exc:
+                    failed("push", exc)
 
         threading.Thread(target=run, name="nobo-notify", daemon=True).start()
 

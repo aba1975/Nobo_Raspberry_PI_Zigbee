@@ -25,6 +25,7 @@ import sensor_verisure
 import sensor_weather
 import weather_netatmo
 import weather_persistence
+import webpush
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +237,8 @@ def redirect_persistence(tmp_path, monkeypatch):
     if server_module is not None and hasattr(server_module, "forecast_service"):
         monkeypatch.setattr(server_module, "forecast_service", forecast.ForecastService())
         monkeypatch.setattr(server_module, "_forecast_task", None)
+    # Web Push: no key and no phones, and nowhere real to keep either.
+    monkeypatch.setattr(webpush, "DATA_DIR", tmp_path)
     # Display keys: none, and nowhere real to write one.
     monkeypatch.setattr(display_tokens, "DATA_DIR", tmp_path)
     monkeypatch.setattr(display_tokens, "DISPLAYS_FILE", tmp_path / "displays.json")
@@ -273,6 +276,24 @@ _REAL_FORECAST_HTTP_GET = forecast.http_get
 @pytest.fixture
 def real_forecast_http_get():
     return _REAL_FORECAST_HTTP_GET
+
+
+# Captured before any test replaces it, for the tests of the guard itself.
+_REAL_WEBPUSH_HTTP_POST = webpush.http_post
+
+
+@pytest.fixture
+def real_webpush_http_post():
+    return _REAL_WEBPUSH_HTTP_POST
+
+
+@pytest.fixture(autouse=True)
+def push_services_never_reached(monkeypatch):
+    """No test may reach Apple's, Google's or anybody's push service."""
+    def refuse(url, body, headers):
+        raise AssertionError(f"A test tried to reach a push service: {url}")
+
+    monkeypatch.setattr(webpush, "http_post", refuse)
 
 
 @pytest.fixture(autouse=True)

@@ -25,7 +25,7 @@ def sent(monkeypatch):
     )
 
     def fake_notify(event_type, subject, body, severity="warning", key=None,
-                    highlight=(), facts=()):
+                    highlight=(), facts=(), tag=None):
         # Other alerts (a pinned schedule reads as a change made elsewhere)
         # are not this file's subject.
         if event_type in ours:

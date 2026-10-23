@@ -25,7 +25,7 @@ def sent(monkeypatch):
     posted = []
 
     def fake_notify(event_type, subject, body, severity="warning", key=None,
-                    highlight=(), facts=()):
+                    highlight=(), facts=(), tag=None):
         posted.append({
             "type": event_type, "subject": subject, "body": body,
             "severity": severity, "highlight": list(highlight),

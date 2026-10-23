@@ -1751,6 +1751,18 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
 }
 .notify-head .badge-need { text-transform: none; letter-spacing: 0; }
 
+/* Phones and tablets that receive alerts. The same row as the users list,
+   with the device's last delivery under its name. */
+.push-box { margin-top: .4rem; }
+.push-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .6rem;
+  padding: .5rem 0; border-bottom: 1px solid var(--rule);
+}
+.push-row .push-seen { display: block; margin-top: .1rem; }
+.push-row .push-seen.is-bad { color: var(--amber); }
+.push-here { display: flex; align-items: center; gap: .5rem; margin: .7rem 0 0; }
+.push-mark { display: inline-flex; color: var(--pine); }
+
 /* ---------------------------------------------------------------------------
    Pairing status
 

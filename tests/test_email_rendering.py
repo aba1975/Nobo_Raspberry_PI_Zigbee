@@ -190,6 +190,9 @@ def test_the_plain_part_carries_the_facts_too():
     n.settings["enabled"] = True
     n.settings["events"]["hub_offline"] = True
     n.settings["min_minutes_between"] = 0
+    # Email is sent only to a mail server that has been set up.
+    n.settings["email"].update(host="smtp.example.invalid", from_addr="pi@example.invalid",
+                               to_addrs=["owner@example.invalid"])
     n.send_impl = lambda cfg, subject, body, html=None: sent.append((body, html))
 
     n.notify("hub_offline", "Subject", "Prose.", severity="critical",

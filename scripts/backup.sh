@@ -84,6 +84,11 @@ rm -rf "$TMPDIR/backup/data/verisure"
 # them costs one "Connect to Netatmo".
 rm -rf "$TMPDIR/backup/data/netatmo"
 
+# The Web Push key and the phones subscribed with it. The key signs every
+# alert this Pi sends, so it is kept out for the same reason. Restoring
+# without it costs each phone one "Turn on alerts on this device".
+rm -rf "$TMPDIR/backup/data/webpush"
+
 # Back up Caddy's certificate store, if HTTPS is in use.
 #
 # This matters more than it looks. With Caddy's own CA, the private root lives
