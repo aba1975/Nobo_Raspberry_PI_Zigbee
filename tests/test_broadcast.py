@@ -173,10 +173,14 @@ class TestPolicyShape:
           new zones have actually loaded. Broadcasting here as well would push
           the *old* hub's zones.
         * ``/api/site`` — renames the installation. No zone card shows it.
+        * ``/api/notifications/test`` and ``/api/push/…`` — send a message or
+          register a phone. A broadcast rebuilt the settings page of every
+          open browser, and threw the one that pressed the button to the top.
         """
         assert server.NO_BROADCAST_PATHS == frozenset(
-            {"/api/log/clear", "/api/hub/config", "/api/site"}
+            {"/api/log/clear", "/api/hub/config", "/api/site", "/api/notifications/test"}
         )
+        assert server.NO_BROADCAST_PREFIXES == ("/api/push/",)
 
     def test_all_write_methods_are_covered(self):
         assert server.MUTATING_METHODS == frozenset({"POST", "PUT", "PATCH", "DELETE"})

@@ -656,6 +656,48 @@ def test_permission_is_asked_before_anything_is_awaited():
     assert body.index("Notification.requestPermission()") < body.index("await")
 
 
+def test_this_device_has_one_test_button_not_two():
+    # "This device gets alerts" carries Send a test and Turn off; its row in
+    # the list used to carry Test and Remove as well.
+    start = CABIN.index("function renderPush(")
+    body = CABIN[start:CABIN.index("\n  }\n", start)]
+    row = body[body.index("p.devices.map("):]
+    assert "d.id === here ? ''" in row
+    assert row.index("d.id === here ? ''") < row.index("data-push-test")
+
+
+def test_rebuilding_settings_keeps_the_page_where_it_was():
+    start = CABIN.index("function renderSettings(")
+    body = CABIN[start:CABIN.index("function renderScheduleSettings(", start)]
+    assert "const keepY = shown.hidden ? null : window.scrollY;" in body
+    assert "shown.style.minHeight" in body
+    assert body.index("innerHTML") < body.index("window.scrollTo(0, keepY)")
+
+
+def test_settings_is_not_rebuilt_for_rooms_it_already_has():
+    start = CABIN.index("Nobo.subscribe(")
+    handler = CABIN[start:CABIN.index("renderCurrent();", start)]
+    assert "state.view === 'settings'" in handler
+    assert "JSON.stringify(zones) === JSON.stringify(state.zones)) return;" in handler
+
+
+def test_push_writes_do_not_rebuild_every_open_browser(client, push_service):
+    """A broadcast redraws the settings page of every open browser, so a
+    write that changes no room must not send one."""
+    with client.websocket_connect("/ws") as watcher:
+        assert json.loads(watcher.receive_text())["type"] == "zones_update"
+        device = client.post("/api/push/subscriptions", json=Phone().subscription()).json()
+        assert client.post(f"/api/push/subscriptions/{device['id']}/test").status_code == 200
+        assert client.delete(f"/api/push/subscriptions/{device['id']}").status_code == 200
+
+        # Prove nothing is queued by causing a real one: it must come first.
+        assert client.post("/api/zones/2/override/eco").status_code == 200
+        msg = json.loads(watcher.receive_text())
+        zone = next(z for z in msg["data"] if z["zone_id"] == "2")
+        assert zone["current_mode"] == "eco"
+        client.post("/api/zones/2/override/normal")
+
+
 def test_the_worker_is_registered_for_the_whole_site():
     assert "serviceWorker.register('/sw.js'" in CABIN
 

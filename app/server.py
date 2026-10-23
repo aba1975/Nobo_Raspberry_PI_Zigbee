@@ -1187,7 +1187,13 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # /api/hub/config is excluded because switching hub or demo mode already
 # broadcasts from apply_hub_config once the new zones are actually loaded.
 # /api/site only changes what the place is called, which no zone card shows.
-NO_BROADCAST_PATHS = frozenset({"/api/log/clear", "/api/hub/config", "/api/site"})
+# /api/notifications/test and everything under /api/push/ send a message or
+# register a phone; no zone changes, and broadcasting rebuilt the settings page
+# of every open browser for nothing.
+NO_BROADCAST_PATHS = frozenset({
+    "/api/log/clear", "/api/hub/config", "/api/site", "/api/notifications/test",
+})
+NO_BROADCAST_PREFIXES = ("/api/push/",)
 
 
 class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
@@ -1201,6 +1207,7 @@ class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
             request.method in MUTATING_METHODS
             and path.startswith("/api/")
             and path not in NO_BROADCAST_PATHS
+            and not path.startswith(NO_BROADCAST_PREFIXES)
             and response.status_code < 400
         ):
             if sensor_settings.enabled:

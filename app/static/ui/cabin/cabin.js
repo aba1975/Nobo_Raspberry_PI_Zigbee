@@ -8335,12 +8335,26 @@
     });
   }
 
+  let settingsHeightTimer = null;
+
   function renderSettings(me = state.me) {
     const hub = state.hub || {};
     const site = state.site || {};
     const isAdmin = !me || me.role === undefined || me.role === 'admin';
     $('#topTitle').textContent = 'Settings';
     $('#topSub').textContent = 'Heating, sensors, weather and system';
+
+    /* Rebuilt in place after a save, or when another browser changes a
+       room, so it must not move. The loaders below fill their boxes a moment
+       later; until they have, the page would be shorter than where it was
+       scrolled to and the browser would pull it up to the top. */
+    const shown = $('#viewSettings');
+    const keepY = shown.hidden ? null : window.scrollY;
+    if (keepY !== null) {
+      shown.style.minHeight = `${shown.offsetHeight}px`;
+      clearTimeout(settingsHeightTimer);
+      settingsHeightTimer = setTimeout(() => { shown.style.minHeight = ''; }, 2000);
+    }
 
     $('#viewSettings').innerHTML = `
       ${settingsSection('place', 'My Home',
@@ -8502,6 +8516,7 @@
         `<div id="aboutBody">${aboutBody(state.about)}</div>`, { icon: 'info' })}`;
 
     const root = $('#viewSettings');
+    if (keepY !== null) window.scrollTo(0, keepY);
     dropEmptySettingsGroups(root);
     wireSettingsSections(root);
     wireSettingsSegments(root, hub);
@@ -9095,15 +9110,15 @@
       ${p.devices.length ? `
         <ul class="acct-list push-list">
           ${p.devices.map(d => `
-            <li class="push-row">
+            <li class="push-row${d.id === here ? ' is-here' : ''}">
               <span class="acct-name">${esc(d.label)}${d.id === here ? ' <small>(this device)</small>' : ''}${
                 p.is_admin ? ` <small>\u00B7 ${esc(d.username)}</small>` : ''}
                 <small class="push-seen${pushDeviceFailing(d) ? ' is-bad' : ''}">${pushDeviceStatus(d)}</small>
-              </span>
+              </span>${d.id === here ? '' /* its buttons are the ones above */ : `
               <button class="btn btn-small" type="button" data-push-test="${esc(d.id)}"
                 aria-label="Send a test to ${esc(d.label)}">Test</button>
               <button class="btn btn-danger btn-small" type="button" data-push-remove="${esc(d.id)}"
-                aria-label="Remove ${esc(d.label)}">Remove</button>
+                aria-label="Remove ${esc(d.label)}">Remove</button>`}
             </li>`).join('')}
         </ul>` : ''}
       ${enabled ? '' : `<div class="note">${p.is_admin
@@ -9405,6 +9420,10 @@
       (zones) => {
         if (held()) return;              // never redraw mid-gesture
         if (!sheetEl.hidden) return;     // or while a sheet is open
+        // Settings loads its own data, so the same rooms again change nothing
+        // on it; rebuilding it only made the page flicker.
+        if (state.view === 'settings'
+            && JSON.stringify(zones) === JSON.stringify(state.zones)) return;
         state.zones = zones;
         renderCurrent();
         /* Only zones travel over the socket. The alarm's state lives in the

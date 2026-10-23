@@ -1759,6 +1759,7 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   padding: .5rem 0; border-bottom: 1px solid var(--rule);
 }
 .push-row .push-seen { display: block; margin-top: .1rem; }
+.push-row.is-here .acct-name { grid-column: 1 / -1; }
 .push-row .push-seen.is-bad { color: var(--amber); }
 .push-here { display: flex; align-items: center; gap: .5rem; margin: .7rem 0 0; }
 .push-mark { display: inline-flex; color: var(--pine); }
