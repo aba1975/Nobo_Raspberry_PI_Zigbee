@@ -899,6 +899,8 @@ def test_the_light_level_rides_on_every_answer_and_starts_dim(client, device):
 def test_the_dim_level_is_dimmer_than_the_old_fixed_one():
     levels = display_tokens.LIGHT_LEVELS
     assert levels["dim"] < levels["medium"] < levels["bright"] <= 48
+    # The one level above it is the most the WS2812 can be driven.
+    assert levels["bright"] < levels["maximum"] == 255
     assert all(1 <= level <= 255 for level in levels.values())
 
 
