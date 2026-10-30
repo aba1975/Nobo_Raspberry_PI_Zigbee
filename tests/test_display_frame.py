@@ -875,7 +875,7 @@ def test_settings_offers_the_light_switch():
 def test_settings_offers_exactly_the_light_levels_the_server_accepts():
     root = server.Path(server.__file__).resolve().parent / "static" / "ui"
     cabin = (root / "cabin" / "cabin.js").read_text()
-    offered = ", ".join(f"['{key}', '{key.capitalize()}']" for key in display_tokens.LIGHT_LEVELS)
+    offered = ", ".join(f"['{key}', '{key.replace('_', ' ').capitalize()}']" for key in display_tokens.LIGHT_LEVELS)
     assert f"const DISPLAY_LIGHT_LEVELS = [{offered}];" in cabin
 
 
@@ -900,7 +900,7 @@ def test_the_dim_level_is_dimmer_than_the_old_fixed_one():
     levels = display_tokens.LIGHT_LEVELS
     assert levels["dim"] < levels["medium"] < levels["bright"] <= 48
     # The one level above it is the most the WS2812 can be driven.
-    assert levels["bright"] < levels["maximum"] == 255
+    assert levels["bright"] < levels["very_bright"] < levels["maximum"] == 255
     assert all(1 <= level <= 255 for level in levels.values())
 
 

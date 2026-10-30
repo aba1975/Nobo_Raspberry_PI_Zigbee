@@ -136,10 +136,10 @@ Displays** (admins only, shown only with sensors on).
   carries it in `X-Display-Interval`, and the device keeps it, so a change
   reaches the display at its next check without touching the device.
 - **Its lights on USB** are set per display on the same card: Dim (the
-  default), Medium, Bright, Maximum or Off. That is `PATCH /api/displays/{id}` with
-  `{"light_level": "dim" | "medium" | "bright" | "maximum"}` and `{"light": false}` or
+  default), Medium, Bright, Very bright, Maximum or Off. That is `PATCH /api/displays/{id}` with
+  `{"light_level": "dim" | "medium" | "bright" | "very_bright" | "maximum"}` and `{"light": false}` or
   `true`, admins only; `light` is a real JSON boolean, and a level that is
-  not one of the four changes nothing, not even the rest of the request.
+  not one of the five changes nothing, not even the rest of the request.
 - **Ski wax** is chosen per display on the same card: Grip wax (the
   default), Glide wax or Off. That is `PATCH /api/displays/{id}` with
   `{"wax": "grip" | "glide" | "off"}`, admins only; anything else is a `400`.
@@ -326,7 +326,8 @@ within a tenth of a second of the answer, not at the end of a blink.
 
 How bright is the Pi's too, in `X-Display-Light-Level`, a WS2812 drive level
 of 255 (`LIGHT_LEVELS` in `display_tokens.py`): dim 6, medium 18, bright 48,
-maximum 255 (added 30 October 2026, for a light that has to be seen in daylight).
+very bright 110 and maximum 255 (both added 30 October 2026, for a light that
+has to be seen in daylight; 110 is the geometric middle of 48 and 255).
 The LEDs are far brighter than the scale suggests — 48, the only level before
 firmware 1.3.0, was too bright in a dark hall — so it is set on the Pi, where
 it can be tuned without reflashing. A Pi too old to send the header leaves the

@@ -54,8 +54,10 @@ POWER_SOURCES = ("usb", "battery")
 # How bright the lights are, as the WS2812 drive level (of 255) sent in
 # X-Display-Light-Level, so it can be tuned here without reflashing. The LEDs
 # are far brighter than the scale suggests: 48 was too bright in a dark hall.
-# Maximum is the full drive, for a bright room or a light seen from afar.
-LIGHT_LEVELS = {"dim": 6, "medium": 18, "bright": 48, "maximum": 255}
+# Maximum is the full drive, for a bright room or a light seen from afar;
+# very bright is the geometric middle of bright and maximum, since the eye
+# judges brightness by ratio.
+LIGHT_LEVELS = {"dim": 6, "medium": 18, "bright": 48, "very_bright": 110, "maximum": 255}
 DEFAULT_LIGHT_LEVEL = "dim"
 
 # Which ski wax the picture recommends for the outdoor temperature, if any.

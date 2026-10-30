@@ -69,7 +69,7 @@ and blink yellow when one is open, red once it has been left open (firmware
 1.4.0; before that, red for both) and blue when it cannot reach the Pi; a door
 or window sensor that cannot be heard from is listed on the panel but leaves the
 light green. On battery they
-are always off. Settings → Wall Displays sets them Dim, Medium, Bright, Maximum or Off
+are always off. Settings → Wall Displays sets them Dim, Medium, Bright, Very bright, Maximum or Off
 per display. See
 [`docs/DISPLAY.md`](../../docs/DISPLAY.md#its-lights-on-usb-power).
 

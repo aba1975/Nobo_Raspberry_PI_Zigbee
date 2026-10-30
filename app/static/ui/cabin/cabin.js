@@ -6827,7 +6827,7 @@
   // Must match BATTERY_MINUTES_CHOICES in display_tokens.py.
   const DISPLAY_BATTERY_MINUTES = [2, 5, 10, 15, 30, 60];
   // Must match LIGHT_LEVELS in display_tokens.py.
-  const DISPLAY_LIGHT_LEVELS = [['dim', 'Dim'], ['medium', 'Medium'], ['bright', 'Bright'], ['maximum', 'Maximum']];
+  const DISPLAY_LIGHT_LEVELS = [['dim', 'Dim'], ['medium', 'Medium'], ['bright', 'Bright'], ['very_bright', 'Very bright'], ['maximum', 'Maximum']];
   // Must match DISPLAY_WAX_CHOICES in display_tokens.py.
   const DISPLAY_WAX = [['grip', 'Grip wax'], ['glide', 'Glide wax'], ['off', 'Off']];
 
