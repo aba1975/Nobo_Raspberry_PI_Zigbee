@@ -19,8 +19,8 @@
 //
 // On USB its two lights show what the Pi says in X-Display-Light: steady green
 // when every door and window is closed, blinking yellow when one is open but
-// not yet left open, blinking red once it has been, blinking blue when a sensor cannot be heard from, or when this display can
-// no longer reach the Pi. How bright is the Pi's too (X-Display-Light-Level,
+// not yet left open, blinking red once it has been, and blinking blue when
+// this display can no longer reach the Pi. How bright is the Pi's too (X-Display-Light-Level,
 // set in Settings). Never on battery: the board sleeps between asks, and the
 // lights are put out before it does.
 //

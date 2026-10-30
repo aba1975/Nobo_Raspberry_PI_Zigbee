@@ -6815,7 +6815,7 @@
           <li><span class="led led-green" aria-hidden="true"></span><span><b>Steady green</b> \u2014 everything is closed</span></li>
           <li><span class="led led-yellow led-blink" aria-hidden="true"></span><span><b>Blinking yellow</b> \u2014 something is open</span></li>
           <li><span class="led led-red led-blink" aria-hidden="true"></span><span><b>Blinking red</b> \u2014 something has been left open</span></li>
-          <li><span class="led led-blue led-blink" aria-hidden="true"></span><span><b>Blinking blue</b> \u2014 a sensor cannot be heard from</span></li>
+          <li><span class="led led-blue led-blink" aria-hidden="true"></span><span><b>Blinking blue</b> \u2014 the display cannot reach the Pi</span></li>
         </ul>
         <small class="field-hint">On battery the lights stay off, to save power.</small>
       </div>

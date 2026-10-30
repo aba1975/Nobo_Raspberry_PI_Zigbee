@@ -496,6 +496,15 @@ def test_display_calls_go_through_the_shared_client_and_names_are_escaped():
     assert "localStorage" not in cabin.split("function showDisplayKey")[1].split("function ")[0]
 
 
+def test_the_light_legend_matches_what_the_lights_now_mean():
+    # Blue is no longer a sensor nobody hears from; the firmware still shows
+    # it, but only when the display itself cannot reach the Pi.
+    legend = _static("ui/cabin/cabin.js").split('class="light-legend"')[1].split("</div>")[0]
+    assert "a sensor cannot be heard from" not in legend
+    assert "<b>Blinking blue</b> \\u2014 the display cannot reach the Pi" in legend
+    assert "on battery the lights stay off" in legend.lower()
+
+
 # -- redrawn only when a sensor changes ---------------------------------------
 
 
