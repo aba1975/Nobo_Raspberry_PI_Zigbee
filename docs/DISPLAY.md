@@ -23,8 +23,8 @@ That split is deliberate:
   firmware flash on a device screwed to a wall.
 - **The panel is redrawn only when a sensor changes.** The ETag is not a hash
   of the picture but `display_render.sensor_fingerprint`: which doors and
-  windows are open and since when, which are left open, which cannot be heard
-  from, the alarm's left-open warning, frost, the number of sensors, and
+  windows are open and since when, which are left open, which door and window
+  sensors cannot be heard from (never thermometers), the alarm's left-open warning, frost, the number of sensors, and
   whether the display's own battery is low, plus `DESIGN_VERSION`, which is
   bumped whenever the drawing changes so an update reaches the wall without
   waiting for a door. The device asks with
@@ -52,9 +52,18 @@ pixel lands on the ink it was drawn in.
 | --- | --- | --- |
 | Red | **Left open** | A contact has been open past its room's delay, or the alarm is on with something open |
 | Yellow | **N open** | Something is open, not yet for long |
-| Blue | **Check sensors** | Nothing open, but a sensor has gone unheard |
-| Green | **All closed** | Every door and window that counts is closed |
+| Green | **All closed** | Every door and window that counts and can be heard is closed |
 | Blue | **No sensors** | Sensors are off, or none is in a room |
+
+**A sensor that cannot be heard from does not colour the header.** Until
+30 October 2026 it turned the whole panel and the LEDs blue ("Check
+sensors"), and after weeks on the wall that proved more disruptive than
+useful: a thermometer dropping out repainted the panel and hid the one thing
+it is for, whether a door or window has been left open. Now a silent door or
+window sensor is a row with a blue mark under a green **All closed**, whose
+subline says so ("19 closed · 1 not heard from"). Thermometers are not on the
+display at all, except as **Near freezing**; the app and the alerts still
+report them.
 
 Below the headline, one row per thing that needs a look, the longest-left-open
 first: the room, the sensor and how long ago it opened (`21:15`, or
@@ -327,7 +336,7 @@ firmware at 18.
 | green | every door and window is closed, and every sensor is heard from |
 | yellow | a door or window is open, but not yet left open (the panel's yellow band) |
 | red | a door or window has been left open, or the alarm is on with one open |
-| blue | nothing is open, but a sensor cannot be heard from; or this display has not reached the Pi for 30 minutes (when it draws **Not up to date**) |
+| blue | this display has not reached the Pi for 30 minutes (when it draws **Not up to date**). The Pi itself never sends blue: a silent sensor leaves the light green |
 | off | sensors turned off, no door or window sensor assigned, the light turned off in Settings, or a Pi too old to send the header |
 
 Yellow came with firmware 1.4.0 (20 October 2026), so the lights match the
@@ -337,8 +346,9 @@ yellow as red with three fifths as much green. An older firmware would read
 sends it `red` instead (`light_for_firmware`), as it always did.
 
 The colour is the Pi's, as the picture is: the firmware never guesses one.
-Green is only ever shown when it is known, because green is what lets
-somebody walk out without looking. Every input to the light is also in the
+Green means every door and window that can be heard is closed; one that
+cannot is listed on the panel, not signalled by the light, so look at the
+panel before relying on green with a sensor known to be failing. Every input to the light is also in the
 ETag fingerprint, so a held ask ends the moment the light should change. A
 Settings change does not move the ETag and arrives with the next answer,
 within 25 seconds.

@@ -27,8 +27,11 @@ never pass for a current one.
 
 *Doors and windows first.* The header is what can be read from across the
 room: red when something has been left open (or the alarm is on with
-something open), yellow when something is open, blue when a sensor cannot be
-heard from, green when every one is closed.
+something open), yellow when something is open, green when every one it can
+hear is closed. A door or window sensor that cannot be heard from is listed
+with a blue mark but never colours the header: it is a chore, not an alarm,
+and a whole blue panel hid the one thing the display is for. Thermometers are
+left off entirely, apart from a room near freezing.
 """
 
 import hashlib
@@ -68,7 +71,7 @@ TONES = {
 SHADED_TONES = {"green"}
 
 # Bump when the drawing changes, so displays redraw without waiting for a door.
-DESIGN_VERSION = 4
+DESIGN_VERSION = 5
 BAND_BOTTOM = 148
 
 OUTLOOK_WORDS = {
@@ -203,6 +206,18 @@ class Frame:
     wax_kind: str = "grip"
 
 
+def _silent_contacts(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The door and window sensors that cannot be heard from.
+
+    Thermometers come in the same list, marked ``climate``, and are left out.
+    An entry with no kind is a contact, as every one was before kinds came.
+    """
+    return [
+        item for item in payload.get("unavailable_sensors") or []
+        if item.get("kind") != "climate"
+    ]
+
+
 def _since(value: Optional[str], now: datetime) -> str:
     if not value:
         return ""
@@ -258,7 +273,7 @@ def build_frame(
         key=lambda item: (not item.get("left_open"), item.get("since") or ""),
     )
     left = [item for item in contacts if item.get("left_open")]
-    unavailable = payload.get("unavailable_sensors") or []
+    unavailable = _silent_contacts(payload)
     alarm = payload.get("alarm") or {}
     alarm_open = bool(alarm.get("left_open"))
 
@@ -292,15 +307,15 @@ def build_frame(
         tone = "yellow"
         headline = f"{len(contacts)} open"
         subline = _plural(len(contacts), "door or window open", "doors and windows open")
-    elif unavailable:
-        tone = "blue"
-        headline = "Check sensors"
-        subline = _plural(len(unavailable), "sensor not heard from", "sensors not heard from")
     elif count == 0:
         tone = "blue"
         headline = "No sensors"
         subline = "No door or window sensor is assigned to a room"
         calm = "Add them under Settings → Sensors."
+    elif unavailable:
+        tone = "green"
+        headline = "All closed"
+        subline = f"{max(0, count - len(unavailable))} closed · {len(unavailable)} not heard from"
     else:
         tone = "green"
         headline = "All closed"
@@ -326,10 +341,9 @@ def status_light(payload: Dict[str, Any]) -> str:
 
     The band's colour, as far as a light can say it: yellow while something
     is open but not yet left open, red once it has been (or the alarm is on
-    with something open); green only when every door and window is closed
-    *and* heard from, because a green light is what lets somebody walk out
-    without looking; blue, as on the panel, when a sensor cannot be heard
-    from; off when there is nothing to watch. Built from the same fields as
+    with something open); green when every door and window it can hear is
+    closed, as the panel's header is; off when there is nothing to watch. A
+    sensor that cannot be heard from is the panel's to list, not the light's. Built from the same fields as
     ``sensor_fingerprint``, so a change of light is always a change of ETag
     and a waiting display hears it at once.
     """
@@ -341,8 +355,6 @@ def status_light(payload: Dict[str, Any]) -> str:
         return "red"
     if contacts:
         return "yellow"
-    if payload.get("unavailable_sensors"):
-        return "blue"
     if not int(payload.get("contact_count") or 0):
         return "off"
     return "green"
@@ -390,7 +402,7 @@ def sensor_fingerprint(
         ),
         "unavailable": sorted(
             [str(item.get("zone")), str(item.get("sensor"))]
-            for item in payload.get("unavailable_sensors") or []
+            for item in _silent_contacts(payload)
         ),
         "alarm": [bool(alarm.get("left_open")), alarm.get("reason")],
         "frost": sorted(

@@ -4913,9 +4913,18 @@ def _display_payload() -> Dict[str, Any]:
             climate_sensors = [
                 item for item in zone.get("climate_sensors") or [] if item.get("counts", True)
             ]
-            for sensor in contacts + climate_sensors:
+            # Thermometers are listed as "climate" whatever they report as, so
+            # the panel can leave them out without knowing every provider.
+            for sensor in contacts:
                 if not sensor["available"]:
-                    unavailable.append({"zone": zone["name"], "sensor": sensor["name"]})
+                    unavailable.append({
+                        "zone": zone["name"], "sensor": sensor["name"], "kind": sensor["kind"],
+                    })
+            for sensor in climate_sensors:
+                if not sensor["available"]:
+                    unavailable.append({
+                        "zone": zone["name"], "sensor": sensor["name"], "kind": "climate",
+                    })
         # What the room is running, worked out as both interfaces do: its own
         # override if it has one, otherwise what its week says right now.
         override = zone.get("current_mode") or "normal"

@@ -313,12 +313,63 @@ def test_an_open_day_old_contact_shows_its_date():
     assert frame.rows[0].tag.startswith("Sat ") and frame.rows[0].tag.endswith("21:15")
 
 
-def test_unavailable_sensors_are_blue_and_never_counted_as_closed():
+SILENT_DOOR = {"zone": "Loft", "sensor": "Hatch", "kind": "door"}
+SILENT_THERMOMETER = {"zone": "Loft", "sensor": "Loft Temp", "kind": "climate"}
+
+
+def test_a_silent_door_is_listed_in_blue_but_does_not_turn_the_panel_blue():
+    frame = display_render.build_frame(payload(unavailable_sensors=[SILENT_DOOR]), now=NOW)
+    assert frame.tone == "green" and frame.headline == "All closed"
+    # Never counted as closed: the subline says how many cannot be heard.
+    assert frame.subline == "3 closed · 1 not heard from"
+    assert [(row.colour, row.detail) for row in frame.rows] == [("blue", "Hatch · no signal")]
+    assert frame.calm is None
+
+
+def test_an_entry_without_a_kind_is_still_a_door_or_window():
     frame = display_render.build_frame(
         payload(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]), now=NOW,
     )
-    assert frame.tone == "blue" and frame.headline != "All closed"
-    assert frame.rows[0].colour == "blue"
+    assert [row.colour for row in frame.rows] == ["blue"]
+
+
+def test_a_silent_thermometer_is_not_on_the_display_at_all():
+    quiet = display_render.build_frame(payload(), now=NOW)
+    frame = display_render.build_frame(payload(unavailable_sensors=[SILENT_THERMOMETER]), now=NOW)
+    assert frame == quiet
+    assert fingerprint(unavailable_sensors=[SILENT_THERMOMETER]) == fingerprint()
+    assert light(unavailable_sensors=[SILENT_THERMOMETER]) == "green"
+
+
+def test_the_payload_marks_a_silent_thermometer_so_the_panel_can_leave_it_out(client):
+    enable(client)
+    door = add_sensor(client, name="Hatch", kind="door")
+    thermometer = add_sensor(client, name="Loft Temp", kind="climate")
+    simulate(client, door["sensor_id"], available=False)
+    simulate(client, thermometer["sensor_id"], available=False)
+    body = client.get("/api/display").json()
+    kinds = {item["sensor"]: item["kind"] for item in body["unavailable_sensors"]}
+    assert kinds == {"Hatch": "door", "Loft Temp": "climate"}
+    frame = display_render.build_frame(body)
+    assert [row.detail for row in frame.rows if row.colour == "blue"] == ["Hatch · no signal"]
+    assert frame.tone == "green" and display_render.status_light(body) == "green"
+
+
+def test_a_room_near_freezing_still_shows_without_its_thermometer_row():
+    frame = display_render.build_frame(payload(
+        unavailable_sensors=[SILENT_THERMOMETER],
+        rooms=[{"name": "Loft", "warnings": ["frost"]}],
+    ), now=NOW)
+    assert [(row.colour, row.detail) for row in frame.rows] == [("red", "Near freezing")]
+
+
+def test_an_open_window_comes_before_a_silent_door_and_keeps_its_colour():
+    frame = display_render.build_frame(
+        payload(open_contacts=[contact()], unavailable_sensors=[SILENT_DOOR, SILENT_THERMOMETER]),
+        now=NOW,
+    )
+    assert frame.tone == "yellow"
+    assert [row.colour for row in frame.rows] == ["yellow", "blue"]
 
 
 def test_the_alarm_left_open_warning_is_red_even_with_nothing_else():
@@ -482,7 +533,7 @@ def test_the_fingerprint_follows_every_sensor_change():
     changed = {
         "open": fingerprint(open_contacts=[contact()]),
         "left open": fingerprint(open_contacts=[contact(left_open=True)]),
-        "unavailable": fingerprint(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]),
+        "unavailable": fingerprint(unavailable_sensors=[SILENT_DOOR]),
         "alarm": fingerprint(alarm={"left_open": True, "reason": "armed_away"}),
         "frost": fingerprint(rooms=[{"name": "Loft", "warnings": ["frost"]}]),
         "count": fingerprint(contact_count=5),
@@ -684,11 +735,9 @@ def test_the_light_is_the_headline_from_afar():
     assert light(open_contacts=[contact(), contact(zone="Loft", left_open=True)]) == "red"
     assert light(alarm={"left_open": True, "reason": "armed_away"}) == "red"
     assert light(open_contacts=[contact()], alarm={"left_open": True, "reason": "armed_away"}) == "red"
-    assert light(unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}]) == "blue"
-    # Open outranks unheard-from: something is known to be open.
-    assert light(
-        open_contacts=[contact()], unavailable_sensors=[{"zone": "Loft", "sensor": "Hatch"}],
-    ) == "yellow"
+    # A silent sensor is listed on the panel, never signalled by the light.
+    assert light(unavailable_sensors=[SILENT_DOOR]) == "green"
+    assert light(open_contacts=[contact()], unavailable_sensors=[SILENT_DOOR]) == "yellow"
     assert light(contact_count=0) == "off"
     assert light(sensors_enabled=False, open_contacts=[contact()]) == "off"
     assert set(display_render.LIGHTS) == {"green", "yellow", "red", "blue", "off"}
@@ -722,7 +771,7 @@ def test_the_light_never_changes_without_the_etag_changing():
     cases = [
         {}, {"open_contacts": [contact()]}, {"open_contacts": [contact(left_open=True)]},
         {"alarm": {"left_open": True, "reason": "armed_away"}},
-        {"unavailable_sensors": [{"zone": "Loft", "sensor": "Hatch"}]},
+        {"unavailable_sensors": [SILENT_DOOR]}, {"unavailable_sensors": [SILENT_THERMOMETER]},
         {"contact_count": 0}, {"sensors_enabled": False},
     ]
     seen = {}
