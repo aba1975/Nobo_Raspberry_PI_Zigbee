@@ -2155,6 +2155,9 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
   (`sensor_heating_links.json`), what the automation is currently holding
   (`sensor_automation_state.json`), room climate and pressure history, and the
   demo's simulated sensors
+- The house view: the floor plan and where each heater and sensor is drawn
+  (`house.json`, and `house_demo.json` for demo mode), and each user's own
+  choice of front page (`user_prefs.json`). See [docs/HOUSE.md](docs/HOUSE.md)
 - `zigbee2mqtt-data` volume — the Zigbee network key and the database of paired
   devices. Only present when the Zigbee stack is switched on. It is what saves
   re-pairing every sensor, at every window, after moving to another Pi
@@ -2404,6 +2407,8 @@ route for those, and needs nothing done at the heater.
 | `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
 | `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
 | `PUT /api/site` | Rename the installation, or set its date format (admins only). Body `{"name": "Lakeside", "show_on_login": true, "locale": "nb-NO"}` — any field may be omitted to leave it unchanged. |
+| `GET /api/house`, `PUT/DELETE /api/house`, `PUT/DELETE /api/house/placements/{heaters\|sensors}/{id}` | The house view's floor plan and where each device is drawn. Reading needs a session; changing needs an admin. See [docs/HOUSE.md](docs/HOUSE.md) |
+| `GET/PUT /api/me/preferences` | Your own display choices, such as `{"rooms_view": "house"}`. Never anyone else's |
 
 ### If a request fails
 
@@ -2415,8 +2420,9 @@ kind of problem it is:
 | `400` | The request itself was wrong — for example an eco temperature above the comfort temperature |
 | `401` | Not logged in, or the session expired |
 | `403` | Logged in, but this needs an admin |
-| `404` | No such zone or device |
+| `404` | No such zone or device, or no floor plan loaded |
 | `409` | The request conflicts with the current state — for example deleting a zone that still contains devices |
+| `413` | The upload is too large (a floor plan is capped at 256 KB) |
 | `501` | The feature is not available in the current mode. In practice this is only device discovery in demo mode. |
 | `502` | The hub answered, but not in a way the request could be completed with |
 | `503` | The hub is not reachable right now |

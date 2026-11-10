@@ -176,11 +176,17 @@ class TestPolicyShape:
         * ``/api/notifications/test`` and ``/api/push/…`` — send a message or
           register a phone. A broadcast rebuilt the settings page of every
           open browser, and threw the one that pressed the button to the top.
+        * ``/api/house`` and ``/api/house/…`` — the house view's floor plan
+          and where devices are drawn. A placement never changes which room a
+          device acts for, so no zone changes (docs/HOUSE.md).
+        * ``/api/me/…`` — one user's own display choices. Nobody else's screen
+          should change because of them.
         """
         assert server.NO_BROADCAST_PATHS == frozenset(
-            {"/api/log/clear", "/api/hub/config", "/api/site", "/api/notifications/test"}
+            {"/api/log/clear", "/api/hub/config", "/api/site", "/api/notifications/test",
+             "/api/house"}
         )
-        assert server.NO_BROADCAST_PREFIXES == ("/api/push/",)
+        assert server.NO_BROADCAST_PREFIXES == ("/api/push/", "/api/house/", "/api/me/")
 
     def test_all_write_methods_are_covered(self):
         assert server.MUTATING_METHODS == frozenset({"POST", "PUT", "PATCH", "DELETE"})

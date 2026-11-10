@@ -42,6 +42,8 @@ import sensor_verisure
 import sensor_weather
 import weather_persistence
 import forecast
+import house_model
+import user_prefs
 import alarm_automation
 import alarm_persistence
 import dataclasses
@@ -1189,11 +1191,13 @@ MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # /api/site only changes what the place is called, which no zone card shows.
 # /api/notifications/test and everything under /api/push/ send a message or
 # register a phone; no zone changes, and broadcasting rebuilt the settings page
-# of every open browser for nothing.
+# of every open browser for nothing. The floor plan under /api/house/ and a
+# user's own display choices under /api/me/ only change what is drawn.
 NO_BROADCAST_PATHS = frozenset({
     "/api/log/clear", "/api/hub/config", "/api/site", "/api/notifications/test",
+    "/api/house",
 })
-NO_BROADCAST_PREFIXES = ("/api/push/",)
+NO_BROADCAST_PREFIXES = ("/api/push/", "/api/house/", "/api/me/")
 
 
 class ZoneBroadcastMiddleware(BaseHTTPMiddleware):
@@ -11021,6 +11025,7 @@ async def auth_rename(request: Request):
     # signed in would otherwise carry on under a name that no longer exists.
     auth.rename_sessions(old_name, new_name)
     webpush.rename_user(old_name, new_name)
+    user_prefs.rename_user(old_name, new_name)
     session["username"] = new_name
     return {"status": "renamed", "username": new_name}
 
@@ -11103,6 +11108,7 @@ async def admin_update_user(request: Request, username: str):
     if username != old_name:
         auth.rename_sessions(old_name, username)
         webpush.rename_user(old_name, username)
+        user_prefs.rename_user(old_name, username)
     return {"status": "updated", "username": username}
 
 
@@ -11124,7 +11130,203 @@ async def admin_delete_user(request: Request, username: str):
     auth.end_sessions_for(username)
     # Their phones stop receiving alerts too.
     webpush.remove_user(username)
+    user_prefs.remove_user(username)
     return {"status": "deleted"}
+
+
+# ===== House view: the floor plan, and each user's display choices =====
+#
+# The optional house view draws the building and shows where every heater and
+# sensor is. The plan is this installation's own data (house_model.py and
+# docs/HOUSE.md). Nothing here reaches the hub or changes the heating: a
+# placement says where a device is drawn, never which room it acts for.
+#
+# Reading is open to anyone signed in, like the rest of /api/. Changing the
+# plan is for an administrator, because it changes what every user sees.
+
+def _house_known_devices() -> Dict[str, Any]:
+    """The heaters, sensors and zones a placement may refer to right now.
+
+    Each part is None while it is not known, never an empty list: an empty
+    list would report every placed device as gone. Heaters and zones come from
+    the hub, so they are unknown while it is disconnected. Sensors are unknown
+    while the sensor feature is off or has not listed anything yet.
+    """
+    with connection_lock:
+        connected = hub_connected
+    heaters = zones = None
+    if connected:
+        hub_zones = _build_zones_data()
+        heaters = [str(serial) for zone in hub_zones for serial in zone.get("components") or []]
+        zones = {str(zone["zone_id"]) for zone in hub_zones}
+    counted = standby = None
+    if sensor_settings.enabled and sensor_provider is not None and sensor_snapshots:
+        counted, standby = [], []
+        for snapshot in sensor_snapshots:
+            # A Verisure sensor standing by behind a Zigbee one is the same
+            # door. It exists, and may be placed, but is never asked for.
+            if _sensor_source_fields(snapshot)["counts"]:
+                counted.append(snapshot.sensor_id)
+            else:
+                standby.append(snapshot.sensor_id)
+    return {"heaters": heaters, "zones": zones, "sensors": counted, "standby_sensors": standby}
+
+
+def _house_response(model: dict, source: str, **extra: Any) -> Dict[str, Any]:
+    known = _house_known_devices()
+    status = house_model.placement_status(
+        model, known["heaters"], known["sensors"], known["standby_sensors"] or ())
+    # A room pointing at a zone the hub no longer has is drawn without
+    # heating, and listed so whoever placed it can see why.
+    status["stale"]["rooms"] = None if known["zones"] is None else [
+        room["id"] for room in model["rooms"]
+        if room.get("zone_id") is not None and room["zone_id"] not in known["zones"]
+    ]
+    return {"house": model, "source": source, "status": status, **extra}
+
+
+def _require_house() -> tuple:
+    model, source = house_model.load(DEMO_MODE)
+    if model is None:
+        raise HTTPException(status_code=404, detail="No floor plan has been loaded")
+    return model, source
+
+
+async def _house_request_body(request: Request) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > house_model.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="The floor plan is too large")
+    body = await request.body()
+    if len(body) > house_model.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="The floor plan is too large")
+    return body
+
+
+@app.get("/api/house")
+async def get_house():
+    """The floor plan, with which devices are still to be placed.
+
+    404 until an administrator has loaded one. In demo mode a generic demo
+    building stands in, so the house view can be tried without one.
+    """
+    model, source = _require_house()
+    return _house_response(model, source)
+
+
+@app.put("/api/house")
+async def put_house(request: Request):
+    """Load or replace the floor plan (admin only).
+
+    Placements in the uploaded file are used. Devices placed before keep their
+    place wherever it still exists in the new plan; the rest are listed in
+    ``dropped`` rather than lost silently.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    body = await _house_request_body(request)
+    try:
+        new_model = house_model.parse(body)
+    except house_model.HouseModelError as exc:
+        raise HTTPException(status_code=400, detail=f"Floor plan not accepted: {exc}")
+    old_model, old_source = house_model.load(DEMO_MODE)
+    # Only a plan somebody saved carries its placements forward; the demo
+    # building's would land on walls that merely share its ids.
+    try:
+        model, dropped = house_model.replace_geometry(
+            new_model, old_model if old_source == "file" else None)
+    except house_model.HouseModelError as exc:
+        raise HTTPException(status_code=400, detail=f"Floor plan not accepted: {exc}")
+    house_model.save(model, DEMO_MODE)
+    return _house_response(model, "file", dropped=dropped)
+
+
+@app.delete("/api/house")
+async def delete_house(request: Request):
+    """Remove the floor plan (admin only). The house view then falls back to the room list."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    if not house_model.delete(DEMO_MODE):
+        raise HTTPException(status_code=404, detail="No floor plan has been loaded")
+    return {"status": "deleted"}
+
+
+@app.put("/api/house/placements/{kind}/{device_id}")
+async def put_house_placement(request: Request, kind: str, device_id: str):
+    """Place one heater or sensor on the plan (admin only).
+
+    Only a device that exists can be placed, so a typing mistake does not
+    leave a placement waiting for a device that will never come.
+
+    The body is read before the plan is loaded, and nothing is awaited
+    between loading and saving. On the one event loop that makes each change
+    whole: two placements sent together both land, and one sent while the
+    plan is replaced or deleted cannot write the old plan back.
+    """
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    if kind not in house_model.PLACEMENT_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown kind of device")
+    try:
+        placement = json.loads((await _house_request_body(request)).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Send the placement as JSON")
+
+    model, _ = _require_house()
+    known = _house_known_devices()
+    if kind == "heaters":
+        existing = known["heaters"]
+        if existing is None:
+            raise HTTPException(status_code=503, detail="Hub not connected")
+    else:
+        existing = known["sensors"]
+        if existing is None:
+            raise HTTPException(status_code=503, detail="The sensor list is not available yet")
+        existing = existing + known["standby_sensors"]
+    if device_id not in existing:
+        what = "heater" if kind == "heaters" else "sensor"
+        raise HTTPException(status_code=404, detail=f"There is no {what} with that id")
+    try:
+        model = house_model.set_placement(model, kind, device_id, placement)
+    except house_model.HouseModelError as exc:
+        raise HTTPException(status_code=400, detail=f"Placement not accepted: {exc}")
+    house_model.save(model, DEMO_MODE)
+    return _house_response(model, "file")
+
+
+@app.delete("/api/house/placements/{kind}/{device_id}")
+async def delete_house_placement(request: Request, kind: str, device_id: str):
+    """Unplace one device (admin only). Works for devices that no longer exist too."""
+    session = _get_session_or_401(request)
+    _require_admin(session)
+    if kind not in house_model.PLACEMENT_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown kind of device")
+    model, _ = _require_house()
+    model, existed = house_model.remove_placement(model, kind, device_id)
+    if not existed:
+        raise HTTPException(status_code=404, detail="That device is not placed")
+    house_model.save(model, DEMO_MODE)
+    return _house_response(model, "file")
+
+
+@app.get("/api/me/preferences")
+async def get_my_preferences(request: Request):
+    """The signed-in user's own display choices. Never anyone else's."""
+    session = _get_session_or_401(request)
+    return user_prefs.get(session["username"])
+
+
+@app.put("/api/me/preferences")
+async def put_my_preferences(request: Request):
+    """Change the signed-in user's own display choices."""
+    session = _get_session_or_401(request)
+    try:
+        changes = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Send the preferences as JSON")
+    try:
+        return user_prefs.update(session["username"], changes)
+    except user_prefs.PreferenceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ===== Static Files =====

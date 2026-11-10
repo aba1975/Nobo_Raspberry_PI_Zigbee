@@ -19,10 +19,12 @@ import auth
 import config_persistence
 import display_tokens
 import forecast
+import house_model
 import sensor_persistence
 import alarm_persistence
 import sensor_verisure
 import sensor_weather
+import user_prefs
 import weather_netatmo
 import weather_persistence
 import webpush
@@ -242,6 +244,10 @@ def redirect_persistence(tmp_path, monkeypatch):
     # Display keys: none, and nowhere real to write one.
     monkeypatch.setattr(display_tokens, "DATA_DIR", tmp_path)
     monkeypatch.setattr(display_tokens, "DISPLAYS_FILE", tmp_path / "displays.json")
+    # The house view's floor plan and each user's display choices. Both modules
+    # resolve their files from DATA_DIR when used, so this one name is enough.
+    monkeypatch.setattr(house_model, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(user_prefs, "DATA_DIR", tmp_path)
     if server_module is not None and hasattr(server_module, "display_registry"):
         monkeypatch.setattr(server_module, "display_registry", display_tokens.DisplayRegistry())
     if server_module is not None and hasattr(server_module, "pressure_history"):

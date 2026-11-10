@@ -106,7 +106,7 @@ hub reached the hardware; everything else proves a message reached the hub.
 - **Deployment:** Docker container with `network_mode: host` (required for LAN hub access)
 - **Auto-start:** systemd service (`deploy/systemd/nobo-control.service`)
 - **Configuration:** `.env` — see `.env.example` for the full list. Hub (`NOBO_SERIAL`, `NOBO_IP`, `NOBO_DEMO`), binding (`NOBO_BIND`, `NOBO_PORT`), optional HTTPS (`NOBO_DOMAIN`, `COMPOSE_PROFILES`) and the optional Zigbee stack (`NOBO_ZIGBEE_ADAPTER`, `NOBO_ZIGBEE_CHANNEL`, `NOBO_ZIGBEE_TRANSMIT_POWER`, `NOBO_MQTT_URL`, `ZIGBEE2MQTT_TAG`, `NOBO_TZ`)
-- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json`, `simulated_weather.json`, `forecast.json`, `forecast_cache.json` and `webpush/`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, `data/netatmo/`, the weather station's tokens, and `data/webpush/`, the push signing key and phones, all left out on purpose
+- **Data persistence:** Docker named volumes — `nobo-data` at `/app/data` (accounts, schedules, demo state, `site.json`, `notifications.json`, room groups, rooms without a schedule, every `sensor_*`/`zigbee_*`/climate file, `alarm_*.json`, `verisure_sensors.json`, `weather_*.json`, `simulated_weather.json`, `forecast.json`, `forecast_cache.json`, `house.json`, `house_demo.json`, `user_prefs.json` and `webpush/`), `caddy-data` (TLS certificates and, with the internal CA, its private root), `zigbee2mqtt-data` (the Zigbee network key and paired devices) and `mosquitto-data` (retained messages only, deliberately not backed up). `/app/data` is the whole of the application's own state; `backup.sh` copies it entire except `data/verisure/`, the alarm account's session, `data/netatmo/`, the weather station's tokens, and `data/webpush/`, the push signing key and phones, all left out on purpose
 
 ## Key Files
 
@@ -185,6 +185,16 @@ hub reached the hardware; everything else proves a message reached the hub.
   device is a 404. `sw.js` is served at `/sw.js` **behind sign-in**, must show
   a notification for every push (iOS revokes push otherwise), and has no fetch
   handler. `tests/conftest.py` makes every test unable to reach a push service
+- `app/house_model.py`, `app/user_prefs.py` and `app/demo_house.json` — the
+  optional house view (`docs/HOUSE.md`). The floor plan
+  (`data/house.json`, `data/house_demo.json` in demo mode) says where each
+  heater and sensor is **drawn**, never which room it acts for: nothing that
+  heats, warns or writes to the hub may read it. Rooms point at zones by
+  `zone_id` and take the zone's name. It is the owner's building, so it stays
+  behind sign-in, off `/login`, out of `DISPLAY_TOKEN_PATHS` and **out of the
+  repository**; the committed `demo_house.json` is a made-up building.
+  `user_prefs.json` holds each user's display choices only (the front page
+  is `list` unless they chose `house`), follows a rename, and goes with the user
 - `app/static/ui/cabin/` — the interface. The classic one was removed entirely in October 2026 (tag `classic-ui-final`); there is no `/classic` and no `NOBO_UI`. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01
