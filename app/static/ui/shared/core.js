@@ -93,6 +93,14 @@ const Nobo = (() => {
     site:    ()     => req('/api/site'),
     setSite: (body) => req('/api/site', { method: 'PUT', body: JSON.stringify(body) }),
 
+    /* The house view (docs/HOUSE.md). The floor plan is sent as the file
+       itself, so what is checked is exactly what the admin chose. */
+    house:       ()     => req('/api/house'),
+    setHouse:    (text) => req('/api/house', { method: 'PUT', body: text }),
+    removeHouse: ()     => req('/api/house', { method: 'DELETE' }),
+    myPrefs:     ()     => req('/api/me/preferences'),
+    setMyPrefs:  (body) => req('/api/me/preferences', { method: 'PUT', body: JSON.stringify(body) }),
+
     // Alerts. Admin only, and the mail password is never returned - the server
     // sends `password_set: true` instead, so it cannot leak back through here.
     notifications:    ()     => req('/api/notifications'),

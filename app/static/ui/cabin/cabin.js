@@ -66,6 +66,16 @@
        updates must not redraw the control out from under them. */
     pending: new Set(),
     holdUntil: 0,
+    /* The optional house view (docs/HOUSE.md). prefs is this user's own
+       choice; house is GET /api/house, or null when there is no plan. */
+    prefs: null,
+    house: null,
+    houseLoaded: false,
+    houseCtl: null,          // the drawing, once house.js has loaded
+    houseLoading: false,
+    houseFailed: null,       // why it could not be drawn, if it could not
+    houseLevel: null,
+    roomsView: null,         // 'list' or 'house' on this screen, if changed here
   };
 
   const hold = (ms = 2500) => { state.holdUntil = Date.now() + ms; };
@@ -209,6 +219,8 @@
     state.weekProfiles = weekProfiles || [];
     if (site) state.site = site;
     if (!state.me) state.me = await Nobo.api.me().catch(() => null);
+    if (!state.prefs) state.prefs = await Nobo.api.myPrefs().catch(() => null);
+    if (state.prefs && state.prefs.rooms_view === 'house' && !state.houseLoaded) await loadHouse();
     if (state.me && state.me.role === 'admin') {
       state.alarmSettings = await Nobo.api.alarmSettings().catch(() => state.alarmSettings);
       state.weatherSettings = await Nobo.api.weatherSettings().catch(() => state.weatherSettings);
@@ -4459,6 +4471,23 @@
 
   function renderZones() {
     const list = $('#zoneList');
+    renderRoomsViewSwitch();
+    if (showingHouse()) {
+      list.hidden = true;
+      $('#houseView').hidden = false;
+      const count = state.zones.length;
+      $('#roomsNote').textContent = `${count} ${count === 1 ? 'room' : 'rooms'}`;
+      if (state.houseCtl) {
+        state.houseCtl.setActive(true);
+        state.houseCtl.update(state.zones);
+      } else {
+        mountHouse();
+      }
+      return;
+    }
+    list.hidden = false;
+    $('#houseView').hidden = true;
+    if (state.houseCtl) state.houseCtl.setActive(false);
     if (!state.zones.length) {
       list.innerHTML = `<li class="zone"><div class="zone-meta">No rooms yet.
         Add one under Settings, in Rooms and Groups, then put its heaters in it.</div></li>`;
@@ -4476,6 +4505,9 @@
     note.textContent = manual
       ? `${zoneCount} · ${manual} with a dial-only heater`
       : zoneCount;
+    if (state.houseFailed && wantsHouse()) {
+      note.insertAdjacentHTML('beforeend', ` · <span class="house-fail">${esc(state.houseFailed)}</span>`);
+    }
     /* One quiet way in, and only while it would help: enough rooms to want
        grouping and not one of them grouped yet. It goes the moment the first
        group exists, so it can never settle into being furniture. */
@@ -4495,6 +4527,214 @@
     list.querySelectorAll('[data-setpoint-action]').forEach(b => {
       b.onclick = () => handleSetpointDecision(b.dataset.zone, b.dataset.setpointAction);
     });
+  }
+
+  /* ------------------------------------------------------------------
+   * The house view (docs/HOUSE.md)
+   *
+   * Optional, per user. Somebody who never turns it on gets exactly the
+   * room list above and never downloads house.js or three.js. For someone
+   * who did, it takes the list's place, and the list is one tap away.
+   *
+   * It only ever shows. Every change is made where it always was: tapping a
+   * room opens a sheet whose button goes to that room's own page.
+   * ---------------------------------------------------------------- */
+
+  /** This user chose the house view, and there is a plan to draw. */
+  function wantsHouse() {
+    return !!(state.prefs && state.prefs.rooms_view === 'house'
+      && state.house && state.house.house);
+  }
+
+  function showingHouse() {
+    return wantsHouse() && !state.houseFailed && state.roomsView !== 'list';
+  }
+
+  async function loadHouse() {
+    try {
+      state.house = await Nobo.api.house();
+    } catch (e) {
+      // 404 is "no plan loaded yet", which is not an error to anybody.
+      state.house = null;
+    }
+    state.houseLoaded = true;
+    if (state.houseCtl && state.house && state.house.house) setHouseModel(state.house.house);
+  }
+
+  /** A new plan for a drawing already on screen: its floors may differ. */
+  function setHouseModel(model) {
+    state.houseCtl.setModel(model);
+    state.houseLevel = state.houseCtl.level;
+    renderHouseLevels();
+  }
+
+  function renderRoomsViewSwitch() {
+    const box = $('#roomsView');
+    if (!wantsHouse()) { box.hidden = true; box.innerHTML = ''; return; }
+    const current = showingHouse() ? 'house' : 'list';
+    box.hidden = false;
+    box.innerHTML = [['list', 'List'], ['house', 'House']].map(([value, label]) => `
+      <button type="button" class="choice-btn" data-rooms-view="${value}"
+        aria-pressed="${value === current}">${label}</button>`).join('');
+    box.querySelectorAll('[data-rooms-view]').forEach(button => {
+      button.onclick = () => {
+        // This screen only. The lasting choice is under Settings.
+        state.roomsView = button.dataset.roomsView;
+        if (state.roomsView === 'house') state.houseFailed = null;
+        renderZones();
+      };
+    });
+  }
+
+  async function mountHouse() {
+    if (state.houseCtl || state.houseLoading) return;
+    state.houseLoading = true;
+    try {
+      const mod = await import('/static/ui/cabin/house.js');
+      if (!mod.canRender()) {
+        throw new Error('This browser cannot draw the house, so the rooms are shown as a list.');
+      }
+      state.houseCtl = mod.mountHouse($('#houseStage'), {
+        model: state.house.house,
+        zones: state.zones,
+        level: state.houseLevel,
+        onSelect: openHouseRoom,
+        onError: houseFailed,
+        // The import can outlast a tap to Settings or to List.
+        active: state.view === 'home' && showingHouse(),
+      });
+      renderHouseLevels();
+    } catch (e) {
+      houseFailed(e && e.message && !/import|module|fetch/i.test(e.message)
+        ? e.message : 'The house view could not be loaded, so the rooms are shown as a list.');
+    } finally {
+      state.houseLoading = false;
+    }
+  }
+
+  function houseFailed(message) {
+    state.houseFailed = message;
+    if (state.houseCtl) { state.houseCtl.destroy(); state.houseCtl = null; }
+    setHouseFull(false);
+    if (state.view === 'home') renderZones();
+  }
+
+  function renderHouseLevels() {
+    const box = $('#houseLevels');
+    const ctl = state.houseCtl;
+    const levels = ctl ? ctl.levels : [];
+    box.hidden = levels.length < 2;
+    box.innerHTML = levels.map(level => `
+      <button type="button" class="choice-btn" data-house-level="${esc(level.id)}"
+        aria-pressed="${level.id === ctl.level}">${esc(level.name || level.id)}</button>`).join('');
+    box.querySelectorAll('[data-house-level]').forEach(button => {
+      button.onclick = () => {
+        state.houseLevel = button.dataset.houseLevel;
+        ctl.setLevel(state.houseLevel);
+        renderHouseLevels();
+      };
+    });
+  }
+
+  function setHouseFull(on) {
+    const card = $('#houseView');
+    const was = card.classList.contains('is-full');
+    if (on === was) return;
+    card.classList.toggle('is-full', on);
+    document.body.classList.toggle('house-full-open', on);
+    card.style.top = on ? `${$('.topbar').getBoundingClientRect().bottom}px` : '';
+    const button = $('#btnHouseFull');
+    button.setAttribute('aria-label', on ? 'Leave full screen' : 'Show the house full screen');
+    button.classList.toggle('is-on', on);
+    if (state.houseCtl) requestAnimationFrame(() => state.houseCtl && state.houseCtl.reframe());
+  }
+
+  $('#btnHouseFull').addEventListener('click', () => {
+    setHouseFull(!$('#houseView').classList.contains('is-full'));
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sheetEl.hidden) setHouseFull(false);
+  });
+
+  /** Where a heater is, in words, from the floor plan. */
+  function heaterWhere(serial) {
+    const model = state.house && state.house.house;
+    const placement = model && model.placements.heaters[String(serial)];
+    if (!placement) return 'Not placed yet';
+    if (placement.floor) return 'Floor heating';
+    if (placement.point) return 'On the wall';
+    const wall = model.walls.find(w => w.id === placement.wall);
+    const under = wall && (wall.openings || []).find(o => o.code && o.kind === 'window'
+      && o.at < placement.at + placement.length && placement.at < o.at + o.width);
+    return under ? `Under ${under.code}` : 'On the wall';
+  }
+
+  function sensorWhere(sensorId) {
+    const model = state.house && state.house.house;
+    const placement = model && model.placements.sensors[String(sensorId)];
+    if (!placement) return 'Not placed yet';
+    if (placement.opening) {
+      return placement.sash && placement.sash !== 'whole'
+        ? `${placement.opening} · ${placement.sash} sash` : placement.opening;
+    }
+    return '';
+  }
+
+  function openHouseRoom(selection) {
+    if (!selection) return;
+    const { room, zone } = selection;
+    const name = (zone && zone.name) || room.name || 'Room';
+    const row = (icon, title, sub, value, open = false) => `
+      <li class="${open ? 'is-open' : ''}">
+        <span class="hr-ic">${Nobo.icon(icon, '16px')}</span>
+        <span class="hr-main">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+        <span class="hr-val">${esc(value)}</span>
+      </li>`;
+
+    let body;
+    if (!zone) {
+      body = `<p class="zd-sub">${room.zone_id == null
+        ? 'No heating in this room.'
+        : 'This room points at a room the hub no longer has.'}</p>`;
+    } else {
+      const mode = Nobo.effectiveMode(zone);
+      const scheduled = (zone.current_mode || 'normal') === 'normal';
+      const modeLabel = (Nobo.MODES[mode] || {}).label || mode;
+      const heated = (zone.components || []).length > 0 && zone.no_schedule !== true;
+      const target = Nobo.targetTemp(zone);
+      const heaters = state.devices.filter(d => String(d.zone_id) === String(zone.zone_id));
+      const contacts = (zone.sensors || []).filter(s => s.counts !== false);
+      const thermometers = (zone.climate_sensors || []).filter(s => s.counts !== false);
+      body = `
+        ${heated ? `<div class="zone-meta"><span class="badge badge-mode-${esc(mode)}">${scheduled ? 'Schedule &middot; ' : ''}${esc(modeLabel)}</span></div>` : ''}
+        <div class="hr-temps">
+          ${heated ? `<div class="zt-cell"><span class="set-label">Set to</span>${target == null
+            ? '<span class="set-none">Not set</span>'
+            : `<span class="set-value">${Nobo.bigTemp(target)}</span>`}</div>` : ''}
+          ${zone.current_temperature != null ? `<div class="zt-cell"><span class="set-label">Actual</span><span class="set-value set-value-actual">${Nobo.bigTemp(zone.current_temperature)}</span></div>` : ''}
+        </div>
+        <ul class="hr-list">
+          ${heaters.map(d => row('hub', d.display_name || d.name || 'Heater',
+            `${d.device_type || ''}${d.device_type ? ' · ' : ''}${heaterWhere(d.serial)}`, '')).join('')}
+          ${contacts.map(s => {
+            const open = s.available !== false && s.state === 'open';
+            const value = s.available === false ? 'Not reporting' : open ? 'Open' : 'Closed';
+            return row(s.kind === 'door' ? 'door' : 'window', s.name, sensorWhere(s.sensor_id), value, open);
+          }).join('')}
+          ${thermometers.map(s => row('thermo', s.name, s.source === 'verisure' ? 'Verisure' : '',
+            typeof s.temperature === 'number' ? `${s.temperature.toFixed(1)}°` : '')).join('')}
+        </ul>`;
+    }
+    openSheet(name, `${body}
+      <div class="sheet-actions">
+        <button class="btn" type="button" data-act="cancel">Close</button>
+        ${zone ? `<button class="btn btn-primary" type="button" data-act="open-room">Open ${esc(name)}</button>` : ''}
+      </div>`, (root) => {
+      root.querySelector('[data-act="cancel"]').onclick = closeSheet;
+      const open = root.querySelector('[data-act="open-room"]');
+      if (open) open.onclick = () => { closeSheet(); setHouseFull(false); showZone(zone.zone_id); };
+    });
+    onSheetClose(() => { if (state.houseCtl) state.houseCtl.select(null); });
   }
 
   /* Which set points have been changed but not yet sent, per zone.
@@ -6784,6 +7024,120 @@
       </div>`;
   }
 
+  /* The house view (docs/HOUSE.md). Each person's own choice, so it is shown
+     to everyone; loading or removing the floor plan is for an admin. */
+  function renderHouseSettingsCard(isAdmin) {
+    const chosen = (state.prefs && state.prefs.rooms_view) || 'list';
+    return settingsSection('house', 'House View',
+      chosen === 'house' ? '<b>On</b> for you' : 'Off', `
+      ${secIntro(`A 3D cutaway of the building on the front page, one floor at a
+        time, showing where every heater and sensor is. Rooms are coloured by
+        their mode, and a door or window that is open is drawn open. It is your
+        choice alone: everybody else keeps the room list until they turn it on.`)}
+      ${settingRow('Rooms on the front page', 'Only changes what you see',
+        segControl('rooms-view', [['list', 'List'], ['house', 'House']], chosen,
+          { label: 'Show the rooms on the front page as' }))}
+      <div id="houseSettingsBox"><p class="zd-sub">Loading…</p></div>
+      ${isAdmin ? `
+        <div class="sheet-actions">
+          <label class="btn" for="stHouseFile">Load floor plan…</label>
+          <input type="file" id="stHouseFile" accept=".json,application/json" hidden>
+          <button class="btn" type="button" data-act="remove-house" hidden>Remove floor plan</button>
+        </div>
+        <div class="note">The floor plan stays on this Pi, behind sign-in, and is
+        never shown on the sign-in page.</div>
+        <a class="setup-link" href="https://github.com/aba1975/Nobo_Raspberry_PI_Zigbee/blob/main/docs/HOUSE.md"
+          target="_blank" rel="noopener noreferrer">${Nobo.icon('external', '1.05em')}How to write a floor plan</a>`
+        : '<div class="note">Only an administrator can load the floor plan.</div>'}
+    `, { icon: 'rooms' });
+  }
+
+  function houseStatusHtml(house) {
+    if (!house || !house.house) {
+      return settingRow('Floor plan', 'None loaded yet. The room list is shown until there is one.', '');
+    }
+    const model = house.house;
+    const levels = new Set(model.rooms.map(r => r.level)).size;
+    const placed = model.placements;
+    const status = house.status || {};
+    const count = (list, placedCount) => list == null
+      ? `${placedCount} placed`
+      : `${placedCount} placed, ${list.length} not yet`;
+    const heaters = count(status.unplaced && status.unplaced.heaters,
+      Object.keys(placed.heaters).length);
+    const sensors = count(status.unplaced && status.unplaced.sensors,
+      Object.keys(placed.sensors).length);
+    return `
+      ${settingRow('Floor plan', `${house.source === 'demo' ? 'The demo building' : 'Loaded'} · ${model.rooms.length} rooms · ${levels} ${levels === 1 ? 'floor' : 'floors'}`, '')}
+      ${settingRow('Heaters', heaters, '')}
+      ${settingRow('Sensors', sensors, '')}`;
+  }
+
+  async function wireHouseSettings(root, isAdmin) {
+    const box = root.querySelector('#houseSettingsBox');
+    const removeBtn = root.querySelector('[data-act="remove-house"]');
+    const fileInput = root.querySelector('#stHouseFile');
+
+    const show = (house) => {
+      if (!box.isConnected) return;
+      box.innerHTML = houseStatusHtml(house);
+      if (removeBtn) removeBtn.hidden = !(house && house.source === 'file');
+    };
+    Nobo.api.house().then(show).catch(() => show(null));
+
+    root.querySelectorAll('[data-seg="rooms-view"]').forEach(button => {
+      button.onclick = async () => {
+        if (button.getAttribute('aria-pressed') === 'true') return;
+        const value = button.dataset.value;
+        try {
+          state.prefs = await Nobo.api.setMyPrefs({ rooms_view: value });
+        } catch (e) { Nobo.toast(e.message, 'error'); return; }
+        state.roomsView = null;
+        state.houseFailed = null;
+        if (value === 'house') await loadHouse();
+        root.querySelectorAll('[data-seg="rooms-view"]').forEach(b => {
+          b.setAttribute('aria-pressed', String(b.dataset.value === value));
+        });
+        const summary = root.querySelector('[data-section="house"] .sec-state');
+        if (summary) summary.innerHTML = value === 'house' ? '<b>On</b> for you' : 'Off';
+        Nobo.toast(value === 'house'
+          ? (state.house ? 'The front page shows the house' : 'On. The house appears once a floor plan is loaded')
+          : 'The front page shows the room list');
+      };
+    });
+
+    if (!isAdmin) return;
+    fileInput.onchange = async () => {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = '';
+      if (!file) return;
+      try {
+        const result = await Nobo.api.setHouse(await file.text());
+        const dropped = result.dropped ? result.dropped.heaters.length + result.dropped.sensors.length : 0;
+        Nobo.toast(dropped
+          ? `Floor plan loaded. ${dropped} placed ${dropped === 1 ? 'device no longer fits' : 'devices no longer fit'} and must be placed again`
+          : 'Floor plan loaded');
+        state.house = result;
+        state.houseLoaded = true;
+        if (state.houseCtl) setHouseModel(result.house);
+        show(result);
+      } catch (e) {
+        Nobo.toast(e.message, 'error');
+      }
+    };
+    removeBtn.onclick = () => confirmSheet('Remove the floor plan?',
+      'The house view goes back to the room list for everybody, and every heater and sensor will need placing again if a plan is loaded later.',
+      'Remove', async () => {
+        try {
+          await Nobo.api.removeHouse();
+        } catch (e) { Nobo.toast(e.message, 'error'); return; }
+        if (state.houseCtl) { state.houseCtl.destroy(); state.houseCtl = null; }
+        await loadHouse();
+        Nobo.toast('Floor plan removed');
+        renderSettings();
+      }, true);
+  }
+
   /* Wall displays: an e-paper panel by the door that shows what is open.
      Only with sensors on, since open doors and windows are all it shows. The
      list is fetched when the card is drawn, not with every refresh. */
@@ -8427,6 +8781,7 @@
         reloads cleanly against the new source.</div>
       `, { icon: 'hub' })}
       ${renderZoneGroupsCard(isAdmin)}
+      ${renderHouseSettingsCard(isAdmin)}
       ${settingsSection('schedules', 'Schedules',
         `<b>${(state.weekProfiles || []).length}</b> weekly`, `
         ${secIntro(`A schedule is a week of Comfort and Eco. Several rooms can share
@@ -8570,6 +8925,7 @@
     wireForecastSettings(root);
     wireDisplaySettings(root);
     wireZoneGroups(root);
+    wireHouseSettings(root, isAdmin);
   }
 
   function renderScheduleSettings() {
@@ -9338,6 +9694,11 @@
     $('#viewLog').hidden      = state.view !== 'log';
     $('#viewSettings').hidden = state.view !== 'settings';
     $('#btnBack').hidden      = state.view === 'home';
+    if (state.view !== 'home') {
+      // Nothing is drawn behind another page.
+      setHouseFull(false);
+      if (state.houseCtl) state.houseCtl.setActive(false);
+    }
     window.scrollTo(0, 0);
   }
 

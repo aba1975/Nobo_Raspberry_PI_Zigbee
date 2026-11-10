@@ -19,6 +19,13 @@
 
 <link rel="stylesheet" href="/static/ui/shared/base.css">
 <link rel="stylesheet" href="/static/ui/cabin/cabin.css">
+
+<!-- Only the optional house view uses this, and only once somebody turns it
+     on: house.js is fetched with import() then, and three.js with it. Both
+     are served from this Pi; nothing is ever loaded from the internet. -->
+<script type="importmap">
+{ "imports": { "three": "/static/ui/shared/vendor/three/three.module.min.js" } }
+</script>
 </head>
 <body class="d">
 
@@ -103,8 +110,24 @@
       <div class="section-head">
         <h2 class="section-title" id="roomsHeading">Rooms</h2>
         <span class="section-note" id="roomsNote"></span>
+        <!-- List or house, for someone who turned the house view on. -->
+        <span class="choice rooms-view" id="roomsView" role="group" aria-label="Show the rooms as" hidden></span>
       </div>
       <ul class="zone-list" id="zoneList"></ul>
+
+      <!-- The house view (docs/HOUSE.md), for those who chose it. -->
+      <div class="house-card" id="houseView" hidden>
+        <div class="house-tools">
+          <span class="choice" id="houseLevels" role="group" aria-label="Floor"></span>
+          <button class="house-btn" id="btnHouseFull" type="button" aria-label="Show the house full screen">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+        </div>
+        <div class="house-stage" id="houseStage"></div>
+        <div class="house-legend" aria-hidden="true">
+          <span><i class="lg-comfort"></i>Comfort</span><span><i class="lg-eco"></i>Eco</span><span><i class="lg-away"></i>Away</span><span><i class="lg-open"></i>Open</span>
+        </div>
+      </div>
     </section>
 
     <!-- The same forecast, for those who would rather have it under the rooms. -->

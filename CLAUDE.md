@@ -195,6 +195,16 @@ hub reached the hardware; everything else proves a message reached the hub.
   repository**; the committed `demo_house.json` is a made-up building.
   `user_prefs.json` holds each user's display choices only (the front page
   is `list` unless they chose `house`), follows a rename, and goes with the user
+- `app/static/ui/cabin/house.js` and `house_logic.js` — the house view itself,
+  the Dollhouse: walls cut at 1.35 m, one floor at a time. `house_logic.js` is
+  every rule about *what* is shown (tint is mode, never "on"; Actual only from
+  `current_temperature`; open only when a contact that `counts` says so), has
+  no imports, and is tested in node. `house.js` only draws. `cabin.js` loads it
+  with `import()` on first use, so nobody who keeps the list downloads it or
+  three.js. three.js r160 is vendored under `app/static/ui/shared/vendor/three/`
+  (not `ui/vendor`, which `test_concept_wiring` would take for an interface)
+  and pinned by the hashes in its `VERSION`. The addons import the bare
+  `'three'`, so the import map in `index.html` is required
 - `app/static/ui/cabin/` — the interface. The classic one was removed entirely in October 2026 (tag `classic-ui-final`); there is no `/classic` and no `NOBO_UI`. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01

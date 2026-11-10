@@ -1,0 +1,3 @@
+# Vendored files are kept byte for byte: their sha256 is checked by a test
+# (tests/test_house_ui.py), and a CRLF checkout would change it.
+app/static/ui/shared/vendor/** -text

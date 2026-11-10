@@ -8,10 +8,56 @@ This document is the design. It is being delivered in stages:
 
 | Stage | What | State |
 | --- | --- | --- |
-| 1 | The floor-plan model, its API, each user's display choice, a demo building | **This change** |
-| 2 | The Dollhouse view in Cabin: vendored three.js, live updates, room sheet | Planned |
+| 1 | The floor-plan model, its API, each user's display choice, a demo building | Done |
+| 2 | The Dollhouse view in Cabin: vendored three.js, live updates, room sheet | **This change** |
 | 3 | Placing heaters and sensors from a top-down plan (admin) | Planned |
 | 4 | Loading the real building's plan on the Pi | Planned. The plan is never committed |
+
+## The view
+
+**Turning it on.** Settings → House View → *Rooms on the front page* →
+**House**. That is this user's choice alone, kept on the Pi, so it follows
+them to every phone. Everyone else keeps the list. On the front page a
+List/House switch beside **Rooms** changes only what is on screen now; the
+lasting choice stays the one in Settings. An administrator loads or removes
+the plan on the same card.
+
+**What it draws.** The *Dollhouse*: the roof off and the walls cut at 1.35 m,
+one floor at a time, seen from above at an angle. It can be turned, tilted
+and pinched, and opened full screen.
+
+- Each room's floor is washed in its mode's colour (Comfort, Eco, Away, Off)
+  and labelled with the zone's name, the set point it is aiming for and, only
+  where something measured it, **Actual**. A room with no heater is plain.
+- Heaters are drawn where they hang. Floor heating is drawn as a striped
+  floor. A heater is never shown as "on", because the hub cannot say so.
+- A door or window with a contact on it is drawn **open** when the contact
+  says open, sash by sash, with a red "Open · 4 min" label. A closed contact
+  is a small dot. A contact that is unavailable, or set aside behind a Zigbee
+  one, never opens anything.
+- Labels that would cover each other give way. Open doors and windows always
+  show. Rooms are shortened to their name, then hidden, smallest first. Any
+  room is still one tap away.
+- Tapping a room opens a sheet listing its heaters and sensors and where they
+  are ("Under W7", "Floor heating", "W7 · left sash"). Its one button goes to
+  the room's own page. **Nothing is changed from the house view itself.**
+
+**How it is delivered.** `house.js` draws and `house_logic.js` decides what
+is drawn. The second is a plain module with no imports, so every rule above
+is tested in node (`tests/test_house_ui.py`). three.js r160 is vendored,
+unmodified, under `app/static/ui/shared/vendor/three/`, with the hashes in
+`VERSION` checked by a test. An import map in `index.html` resolves `three`
+to it. Nothing is fetched from the internet. `cabin.js` loads `house.js` with
+`import()` the first time the view is shown, so someone who never turns it on
+never downloads either file.
+
+It draws only when something changes, and stops while another screen is
+showing. Colours come from the interface's own palette and follow dark mode.
+Doors and windows swing open unless the phone asks for reduced motion.
+
+**When it cannot draw** (no WebGL, or the files fail to load), the room list
+is shown, with one line beside **Rooms** saying why. Nothing else is
+affected.
 
 ## What it must never do
 

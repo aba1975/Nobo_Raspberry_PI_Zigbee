@@ -279,6 +279,12 @@ Do these when you have time to undo them, not five minutes before leaving.
 | 7.8 | Rooms with sensors | 👤 | If you own one | Measured temperature shown |
 | 7.9 | Login required | 🤖 | Open the API logged out | Redirected to login |
 | 7.10 | Old page after an update | 👤 | Update, then reload | New version loads — no stale buttons that do nothing |
+| 7.11 | House view stays opt-in | 👤 | Sign in as a user who never chose it | The room list, as before. No house switch. Browser dev tools show `house.js` and `three.module.min.js` were never fetched |
+| 7.12 | House view on a phone | 👤 | Settings → House View → House, then the front page on a real phone | Drawing turns and pinches with a finger, and the page still scrolls outside it. Floor switch, full screen and back, tapping a room opens its sheet |
+| 7.13 | House view is live | 👤 | Open a contact placed on a window, then change a room's mode from another phone | The sash opens with "Open · now" within seconds, and the room's colour follows the mode, without a reload |
+| 7.14 | House view in dark mode | 👤 | Switch the phone to dark mode with the view showing | Redrawn in the dark palette, labels readable |
+| 7.15 | House view per user | 👤 | Two users on two phones; only one chooses House | Each keeps their own front page. The front-page List/House switch changes only that screen |
+| 7.16 | No 3D in the browser | 👤 | A browser with WebGL turned off | The room list, with one line saying why. Nothing else is affected |
 
 ---
 
