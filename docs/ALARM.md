@@ -93,16 +93,26 @@ from a browser on the Pi.
 and every `/api/alarm/*` endpoint, return nothing to anyone else.
 
 **Nothing Verisure's servers say is shown or logged.** Their error messages can
-include account details. So only the kind of error is logged, and you see one
-of this application's own sentences. The library's logger is turned down to
-errors only, because at its normal level it logs your email address and, when
-signing out, a URL containing the sign-in token. Your email address is shown in
-Settings masked, as `a***@example.no`.
+include account details. So only the kind of error, and its `AUT_00008`-style
+code, are logged, and you see one of this application's own sentences. The
+library's logger is turned down to errors only, because at its normal level it
+logs your email address and, when signing out, a URL containing the sign-in
+token. Your email address is shown in Settings masked, as `a***@example.no`.
 
 **Attempts are limited.** Five sign-in attempts in ten minutes, then a wait.
 That is well inside anything Verisure would treat as abuse — a locked Verisure
 account is a much worse outcome than a pause here. If Verisure itself asks for
 fewer requests, polling backs off: 5, 15, 30 and then 60 minutes.
+
+**Verisure blocks a place that keeps failing**, and says so with `AUT_00008`,
+"blacklisted due to subsequent failed attempts". It sends that with HTTP 401 —
+the same status as a wrong password — and vsure's own rate-limit check does not
+look for it. Taken at face value it produces two wrong outcomes, both seen on
+the production Pi in November 2026: the user is told their password is wrong,
+so they try again and extend the block; and a *read* that hits it looks like a
+lapsed session, so the stored session is thrown away and a fresh code demanded,
+for something that clears itself. Both are now recognised as a wait — a 429
+when signing in, and **asked to wait** with the session kept when reading.
 
 ## Signing in
 

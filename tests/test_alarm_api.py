@@ -334,7 +334,8 @@ def test_the_demo_lock_refuses_an_unknown_method(client):
 
 
 class _FakeVerisureSession:
-    def __init__(self, username, password, cookie_file_name=None):
+    def __init__(self, username, password, cookie_file_name=None,
+                 request_timeout=None):
         self._username = username
         self._password = password
         self._cookies = None

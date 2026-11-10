@@ -24,9 +24,9 @@ How the account is protected (docs/ALARM.md has the full account):
   from here even by a bug. A test also fails if this module names any of
   vsure's commands.
 * Nothing from Verisure's servers is logged or shown: their error bodies can
-  contain account details, so only the error's type is logged and the user
-  sees one of our own sentences. vsure's own logger is turned down to ERROR,
-  because at INFO it logs the e-mail address.
+  contain account details, so only the error's type and its ``AUT_00008``-style
+  code are logged, and the user sees one of our own sentences. vsure's own
+  logger is turned down to ERROR, because at INFO it logs the e-mail address.
 """
 
 from __future__ import annotations
@@ -68,7 +68,33 @@ NAMES_RETRY_SECONDS = 10 * 60
 LOGIN_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 10 * 60
 
+# How long one call to Verisure may take: connect, then read. vsure's own
+# default is (10, 30) and it tries both of its base URLs before giving up, so a
+# single call could sit for eighty seconds. A browser gives up at about sixty
+# and shows a bare "Load failed" that says nothing and leaves nothing in the
+# log — which is how a Verisure block first presented here. This keeps the
+# worst case inside the browser's patience, so the user gets our sentence
+# instead. Verisure answers in well under a second when all is well.
+REQUEST_TIMEOUT = (5.0, 15.0)
+
 _CODE = re.compile(r"^\d{4,8}$")
+
+# Verisure's error codes look like "AUT_00008". Only the code is ever taken out
+# of an error body; the rest of it can carry account details.
+_ERROR_CODE = re.compile(r"\b([A-Z]{3}_\d{5})\b")
+
+# Codes that mean "you are being throttled", not "those credentials are wrong".
+# vsure recognises a few of these itself (AUT_00021, ACC_00002 and friends) but
+# not AUT_00008, "blacklisted due to subsequent failed attempts", which arrives
+# with HTTP 401 and so reaches us as AuthenticationError. Reporting that as a
+# bad password invites exactly the retry that extends the block, and throws
+# away a working session on the way.
+THROTTLE_CODES = frozenset({"AUT_00008"})
+
+THROTTLED_MESSAGE = (
+    "Verisure is refusing sign-ins from here for a while, after repeated failed "
+    "attempts. Wait before trying again: each further attempt extends it."
+)
 
 ARM_STATE_NAMES = {
     "DISARMED": "disarmed",
@@ -117,6 +143,21 @@ def mask_email(email: Optional[str]) -> Optional[str]:
         return None
     local, _, domain = email.partition("@")
     return f"{local[:1]}***@{domain}" if domain else "***"
+
+
+def verisure_error_code(exc: Exception) -> Optional[str]:
+    """The ``AUT_00008``-style code in a Verisure error, if it carries one.
+
+    Only the code is read. Nothing else from the body is logged or shown: it
+    can contain account details.
+    """
+    found = _ERROR_CODE.search(str(exc))
+    return found.group(1) if found else None
+
+
+def is_throttled(exc: Exception) -> bool:
+    """Is Verisure saying "too many attempts" rather than "wrong password"?"""
+    return verisure_error_code(exc) in THROTTLE_CODES
 
 
 def _installation_parts(response: Any) -> List[dict]:
@@ -319,7 +360,10 @@ class VerisureAlarm:
 
     def _new_session(self, email: str, password: str):
         alarm_persistence.secure_dir()
-        return self._session_class()(email, password, cookie_file_name=str(self._scratch))
+        return self._session_class()(
+            email, password, cookie_file_name=str(self._scratch),
+            request_timeout=REQUEST_TIMEOUT,
+        )
 
     def _clean_scratch(self) -> None:
         self._scratch.unlink(missing_ok=True)
@@ -399,7 +443,16 @@ class VerisureAlarm:
 
     def _map_login_error(self, exc: Exception, wrong: str) -> VerisureError:
         errors = self._errors()
-        logger.warning("Verisure sign-in failed: %s", type(exc).__name__)
+        code = verisure_error_code(exc)
+        # The code, never the body: it can name the account. Without it a block
+        # and a typo both read as "AuthenticationError" in the log, which is
+        # what made this hard to tell apart the first time.
+        logger.warning(
+            "Verisure sign-in failed: %s%s",
+            type(exc).__name__, f" [{code}]" if code else "",
+        )
+        if is_throttled(exc):
+            return VerisureError(429, THROTTLED_MESSAGE)
         if isinstance(exc, errors.RateLimitError):
             return VerisureError(429, "Verisure is limiting sign-ins. Try again later.")
         if isinstance(exc, (errors.RequestError, errors.ResponseError)):
@@ -616,6 +669,16 @@ class VerisureAlarm:
                         reading = parse_reading(response, self._clock())
                     return with_contact_names(reading, self._contact_names(session, stored["giid"], reading))
                 except (errors.AuthenticationError, errors.CookieReadError) as exc:
+                    if is_throttled(exc):
+                        # A block is temporary and the session is very likely
+                        # still good. Clearing the cookies here would force a
+                        # fresh sign-in, and another code from Verisure, for
+                        # what is only a wait — and every one of those attempts
+                        # extends the block.
+                        logger.warning(
+                            "Verisure is throttling reads [%s]", verisure_error_code(exc),
+                        )
+                        raise AlarmUnavailable("rate_limited", THROTTLED_MESSAGE) from None
                     logger.warning("Verisure session ended: %s", type(exc).__name__)
                     alarm_persistence.save_session({**stored, "cookies": {}, "trust_token": None})
                     raise AlarmUnavailable(

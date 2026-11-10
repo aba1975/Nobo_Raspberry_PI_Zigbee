@@ -64,7 +64,8 @@ class FakeSession:
     names_answer = None
     names_error = None
 
-    def __init__(self, username, password, cookie_file_name=None):
+    def __init__(self, username, password, cookie_file_name=None,
+                 request_timeout=None):
         self._username = username
         self._password = password
         self._cookie_file_name = cookie_file_name
@@ -72,6 +73,7 @@ class FakeSession:
         self._trust_token = None
         self._mfa_login_pending = False
         self._giid = None
+        self.request_timeout = request_timeout
         self.calls = []
         FakeSession.instances.append(self)
 
@@ -375,6 +377,74 @@ def test_verisure_rate_limit_on_sign_in(account):
     assert caught.value.status == 429
 
 
+# Verisure's answer when it has had enough sign-in attempts from one place. It
+# arrives with HTTP 401, so vsure raises AuthenticationError for it, and vsure's
+# own rate-limit check does not look for this code.
+BLACKLISTED = json.dumps({
+    "errorGroup": "UNAUTHORIZED",
+    "errorCode": "AUT_00008",
+    "errorMessage": "User has been blacklisted due to subsequent failed attempts",
+    "nextAttempt": "2026-11-10T07:17:41.101Z",
+    "nextAttemptDelay": "484",
+})
+
+
+def test_a_block_is_not_reported_as_a_wrong_password(account):
+    """Verisure says "too many attempts"; the user must not read "wrong password".
+
+    Telling somebody their password is wrong when it is not invites the retry
+    that extends the block. That is what happened on the production Pi in
+    November 2026.
+    """
+    FakeSession.login_error = verisure.AuthenticationError(BLACKLISTED, 401)
+    with pytest.raises(VerisureError) as caught:
+        run(account.begin_login("anders@example.com", PASSWORD))
+    assert caught.value.status == 429
+    assert "wait" in str(caught.value).lower()
+    assert "password" not in str(caught.value).lower()
+
+
+def test_a_block_on_the_code_step_is_also_a_wait(account):
+    assert run(account.begin_login("anders@example.com", PASSWORD)) == "code_sent"
+    FakeSession.code_error = verisure.AuthenticationError(BLACKLISTED, 401)
+    with pytest.raises(VerisureError) as caught:
+        run(account.submit_code("123456"))
+    assert caught.value.status == 429
+
+
+def test_a_block_never_repeats_what_verisure_said(account):
+    """Their bodies can name the account; ours never carry it through."""
+    body = BLACKLISTED.replace("User", "anders@example.com")
+    FakeSession.login_error = verisure.AuthenticationError(body, 401)
+    with pytest.raises(VerisureError) as caught:
+        run(account.begin_login("anders@example.com", PASSWORD))
+    assert "anders" not in str(caught.value)
+    assert "blacklisted" not in str(caught.value).lower()
+
+
+def test_the_error_code_is_logged_so_a_block_can_be_told_from_a_typo(account, caplog):
+    """Both are AuthenticationError. Without the code the log cannot separate
+    them, which is what made the first occurrence hard to diagnose."""
+    FakeSession.login_error = verisure.AuthenticationError(BLACKLISTED, 401)
+    with caplog.at_level("WARNING", logger="alarm_verisure"):
+        with pytest.raises(VerisureError):
+            run(account.begin_login("anders@example.com", PASSWORD))
+    logged = caplog.text
+    assert "AUT_00008" in logged
+    assert "anders@example.com" not in logged
+    assert "blacklisted" not in logged.lower()
+
+
+def test_calls_to_verisure_are_bounded(account):
+    """vsure tries both of its base URLs before giving up, so the worst case is
+    twice the timeout. It has to stay inside a browser's patience, or the user
+    gets the browser's own "Load failed" and the log gets nothing."""
+    assert run(account.begin_login("anders@example.com", PASSWORD)) == "code_sent"
+    assert FakeSession.instances[-1].request_timeout == alarm_verisure.REQUEST_TIMEOUT
+    connect, read = alarm_verisure.REQUEST_TIMEOUT
+    assert 2 * (connect + read) < 60
+
+
 # -- reading ------------------------------------------------------------------
 
 
@@ -422,6 +492,29 @@ def test_rate_limited_reads(account):
     with pytest.raises(AlarmUnavailable) as caught:
         run(account.read())
     assert caught.value.kind == "rate_limited"
+
+
+def test_a_block_while_reading_keeps_the_session(account):
+    """A block is a wait, not an ended session.
+
+    Verisure sends it with HTTP 401, which looks exactly like a lapsed
+    sign-in — and treating it as one threw away a working session and
+    demanded a fresh code, for what clears itself.
+    """
+    _sign_in(account)
+    FakeSession.read_error = verisure.AuthenticationError(BLACKLISTED, 401)
+    with pytest.raises(AlarmUnavailable) as caught:
+        run(account.read())
+    assert caught.value.kind == "rate_limited"
+
+    stored = json.loads(_stored_text())
+    assert stored["cookies"], "the session was thrown away over a wait"
+    assert stored["trust_token"] is not None
+    assert account.public_state()["signed_in"] is True
+
+    # And it reads again by itself once Verisure relents, with no new code.
+    FakeSession.read_error = None
+    assert run(account.read()).arm_state == "armed_away"
 
 
 def test_an_outage_says_nothing_of_verisures_own(account):
