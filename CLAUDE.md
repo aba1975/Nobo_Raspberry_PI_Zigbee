@@ -211,6 +211,13 @@ hub reached the hardware; everything else proves a message reached the hub.
   pure and tested in node; the geometry it and the placing sheets use lives
   in `house_logic.js`. A placement is confirmed in a sheet before it is saved,
   and one outside the device's own room is drawn, flagged, and never acted on
+- `scripts/make_house.py` — turns a floor-plan *template* (rooms, heaters and
+  sensors by name) into the `house.json` one Pi accepts: signs in, reads,
+  resolves, validates with `house_model`. Writes nothing to the Pi without
+  `--upload`, which asks. A real building's template is **never committed**
+  (`*.template.json` is ignored); `docs/house.template.example.json` is the
+  demo building, and `tests/test_make_house.py` proves it reproduces
+  `app/demo_house.json` exactly
 - `app/static/ui/cabin/` — the interface. The classic one was removed entirely in October 2026 (tag `classic-ui-final`); there is no `/classic` and no `NOBO_UI`. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01

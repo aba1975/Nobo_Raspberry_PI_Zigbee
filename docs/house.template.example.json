@@ -1,0 +1,925 @@
+{
+ "template": 1,
+ "levels": [
+  {
+   "id": "ground",
+   "elevation": 0.0,
+   "height": 2.5,
+   "name": "Ground floor"
+  },
+  {
+   "id": "loft",
+   "elevation": 2.7,
+   "height": 2.4,
+   "name": "Loft"
+  }
+ ],
+ "walls": [
+  {
+   "id": "s",
+   "level": "ground",
+   "a": [
+    0.0,
+    0.0
+   ],
+   "b": [
+    12.0,
+    0.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 0.9,
+     "width": 1.2,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W1"
+    },
+    {
+     "kind": "door",
+     "at": 4.05,
+     "width": 0.9,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D1",
+     "swing": "out"
+    },
+    {
+     "kind": "window",
+     "at": 8.0,
+     "width": 0.6,
+     "sill": 1.2,
+     "height": 0.8,
+     "code": "W2"
+    },
+    {
+     "kind": "window",
+     "at": 10.4,
+     "width": 0.6,
+     "sill": 1.2,
+     "height": 0.8,
+     "code": "W3"
+    }
+   ]
+  },
+  {
+   "id": "e",
+   "level": "ground",
+   "a": [
+    12.0,
+    0.0
+   ],
+   "b": [
+    12.0,
+    8.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 5.5,
+     "width": 1.2,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W4"
+    }
+   ]
+  },
+  {
+   "id": "n",
+   "level": "ground",
+   "a": [
+    12.0,
+    8.0
+   ],
+   "b": [
+    0.0,
+    8.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 1.2,
+     "width": 1.2,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W5"
+    },
+    {
+     "kind": "window",
+     "at": 4.0,
+     "width": 1.2,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W6"
+    },
+    {
+     "kind": "door",
+     "at": 7.0,
+     "width": 0.9,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D2",
+     "swing": "out"
+    },
+    {
+     "kind": "window",
+     "at": 8.8,
+     "width": 1.5,
+     "sill": 0.7,
+     "height": 1.3,
+     "code": "W7"
+    }
+   ]
+  },
+  {
+   "id": "w",
+   "level": "ground",
+   "a": [
+    0.0,
+    8.0
+   ],
+   "b": [
+    0.0,
+    0.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 2.0,
+     "width": 1.2,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W8"
+    },
+    {
+     "kind": "window",
+     "at": 5.6,
+     "width": 1.0,
+     "sill": 0.9,
+     "height": 1.2,
+     "code": "W9"
+    }
+   ]
+  },
+  {
+   "id": "i1",
+   "level": "ground",
+   "a": [
+    0.0,
+    4.0
+   ],
+   "b": [
+    12.0,
+    4.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 3.9,
+     "width": 0.9,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D3"
+    },
+    {
+     "kind": "door",
+     "at": 10.1,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D4"
+    }
+   ]
+  },
+  {
+   "id": "i2",
+   "level": "ground",
+   "a": [
+    3.0,
+    0.0
+   ],
+   "b": [
+    3.0,
+    4.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.8,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D5"
+    }
+   ]
+  },
+  {
+   "id": "i3",
+   "level": "ground",
+   "a": [
+    6.0,
+    0.0
+   ],
+   "b": [
+    6.0,
+    4.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.8,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D6"
+    }
+   ]
+  },
+  {
+   "id": "i4",
+   "level": "ground",
+   "a": [
+    7.5,
+    0.0
+   ],
+   "b": [
+    7.5,
+    4.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.7,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D7"
+    }
+   ]
+  },
+  {
+   "id": "i5",
+   "level": "ground",
+   "a": [
+    9.5,
+    0.0
+   ],
+   "b": [
+    9.5,
+    4.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.7,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D8"
+    }
+   ]
+  },
+  {
+   "id": "i6",
+   "level": "ground",
+   "a": [
+    7.5,
+    2.0
+   ],
+   "b": [
+    9.5,
+    2.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 0.6,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D9"
+    }
+   ]
+  },
+  {
+   "id": "i7",
+   "level": "ground",
+   "a": [
+    6.0,
+    4.0
+   ],
+   "b": [
+    6.0,
+    8.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "gap",
+     "at": 0.5,
+     "width": 3.0,
+     "sill": 0.0,
+     "height": 2.1
+    }
+   ]
+  },
+  {
+   "id": "i8",
+   "level": "ground",
+   "a": [
+    9.0,
+    4.0
+   ],
+   "b": [
+    9.0,
+    8.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 0.3,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D10"
+    }
+   ]
+  },
+  {
+   "id": "l1",
+   "level": "loft",
+   "a": [
+    0.0,
+    1.0
+   ],
+   "b": [
+    12.0,
+    1.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": []
+  },
+  {
+   "id": "l2",
+   "level": "loft",
+   "a": [
+    12.0,
+    7.0
+   ],
+   "b": [
+    0.0,
+    7.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": []
+  },
+  {
+   "id": "l3",
+   "level": "loft",
+   "a": [
+    0.0,
+    7.0
+   ],
+   "b": [
+    0.0,
+    1.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 2.6,
+     "width": 0.8,
+     "sill": 1.0,
+     "height": 1.0,
+     "code": "W10"
+    }
+   ]
+  },
+  {
+   "id": "l4",
+   "level": "loft",
+   "a": [
+    12.0,
+    1.0
+   ],
+   "b": [
+    12.0,
+    7.0
+   ],
+   "thickness": 0.15,
+   "exterior": true,
+   "openings": [
+    {
+     "kind": "window",
+     "at": 2.6,
+     "width": 0.8,
+     "sill": 1.0,
+     "height": 1.0,
+     "code": "W11"
+    }
+   ]
+  },
+  {
+   "id": "l5",
+   "level": "loft",
+   "a": [
+    4.0,
+    1.0
+   ],
+   "b": [
+    4.0,
+    7.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.6,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D11"
+    }
+   ]
+  },
+  {
+   "id": "l6",
+   "level": "loft",
+   "a": [
+    8.0,
+    1.0
+   ],
+   "b": [
+    8.0,
+    7.0
+   ],
+   "thickness": 0.1,
+   "exterior": false,
+   "openings": [
+    {
+     "kind": "door",
+     "at": 2.6,
+     "width": 0.8,
+     "sill": 0.0,
+     "height": 2.0,
+     "code": "D12"
+    }
+   ]
+  }
+ ],
+ "rooms": [
+  {
+   "id": "bunk-entrance",
+   "level": "ground",
+   "zone": "Bunk Room by Entrance",
+   "polygon": [
+    [
+     0.075,
+     0.075
+    ],
+    [
+     2.925,
+     0.075
+    ],
+    [
+     2.925,
+     3.925
+    ],
+    [
+     0.075,
+     3.925
+    ]
+   ]
+  },
+  {
+   "id": "hallway",
+   "level": "ground",
+   "zone": "Hallway",
+   "polygon": [
+    [
+     3.075,
+     0.075
+    ],
+    [
+     5.925,
+     0.075
+    ],
+    [
+     5.925,
+     3.925
+    ],
+    [
+     3.075,
+     3.925
+    ]
+   ]
+  },
+  {
+   "id": "small-bath",
+   "level": "ground",
+   "zone": "Small Bathroom",
+   "polygon": [
+    [
+     6.075,
+     0.075
+    ],
+    [
+     7.425,
+     0.075
+    ],
+    [
+     7.425,
+     3.925
+    ],
+    [
+     6.075,
+     3.925
+    ]
+   ]
+  },
+  {
+   "id": "laundry",
+   "level": "ground",
+   "zone": "Laundry Room",
+   "polygon": [
+    [
+     7.575,
+     0.075
+    ],
+    [
+     9.425,
+     0.075
+    ],
+    [
+     9.425,
+     1.925
+    ],
+    [
+     7.575,
+     1.925
+    ]
+   ]
+  },
+  {
+   "id": "tech",
+   "level": "ground",
+   "zone": "Tech Room",
+   "polygon": [
+    [
+     7.575,
+     2.075
+    ],
+    [
+     9.425,
+     2.075
+    ],
+    [
+     9.425,
+     3.925
+    ],
+    [
+     7.575,
+     3.925
+    ]
+   ]
+  },
+  {
+   "id": "large-bath",
+   "level": "ground",
+   "zone": "Large Bathroom",
+   "polygon": [
+    [
+     9.575,
+     0.075
+    ],
+    [
+     11.925,
+     0.075
+    ],
+    [
+     11.925,
+     3.925
+    ],
+    [
+     9.575,
+     3.925
+    ]
+   ]
+  },
+  {
+   "id": "living",
+   "level": "ground",
+   "zone": "Living Room",
+   "polygon": [
+    [
+     0.075,
+     4.075
+    ],
+    [
+     5.925,
+     4.075
+    ],
+    [
+     5.925,
+     7.925
+    ],
+    [
+     0.075,
+     7.925
+    ]
+   ]
+  },
+  {
+   "id": "kitchen",
+   "level": "ground",
+   "zone": "Kitchen",
+   "polygon": [
+    [
+     6.075,
+     4.075
+    ],
+    [
+     8.925,
+     4.075
+    ],
+    [
+     8.925,
+     7.925
+    ],
+    [
+     6.075,
+     7.925
+    ]
+   ]
+  },
+  {
+   "id": "master",
+   "level": "ground",
+   "zone": "Master Bedroom",
+   "polygon": [
+    [
+     9.075,
+     4.075
+    ],
+    [
+     11.925,
+     4.075
+    ],
+    [
+     11.925,
+     7.925
+    ],
+    [
+     9.075,
+     7.925
+    ]
+   ]
+  },
+  {
+   "id": "left-bedroom",
+   "level": "loft",
+   "zone": "Left Bedroom",
+   "polygon": [
+    [
+     0.075,
+     1.075
+    ],
+    [
+     3.925,
+     1.075
+    ],
+    [
+     3.925,
+     6.925
+    ],
+    [
+     0.075,
+     6.925
+    ]
+   ]
+  },
+  {
+   "id": "bunk-bath",
+   "level": "loft",
+   "zone": "Bunk Room by Large Bathroom",
+   "polygon": [
+    [
+     4.075,
+     1.075
+    ],
+    [
+     7.925,
+     1.075
+    ],
+    [
+     7.925,
+     6.925
+    ],
+    [
+     4.075,
+     6.925
+    ]
+   ]
+  },
+  {
+   "id": "right-bedroom",
+   "level": "loft",
+   "zone": "Right Bedroom",
+   "polygon": [
+    [
+     8.075,
+     1.075
+    ],
+    [
+     11.925,
+     1.075
+    ],
+    [
+     11.925,
+     6.925
+    ],
+    [
+     8.075,
+     6.925
+    ]
+   ]
+  }
+ ],
+ "fixtures": [
+  {
+   "level": "ground",
+   "box": [
+    3.15,
+    0.6,
+    3.95,
+    3.6
+   ],
+   "height": 2.7,
+   "label": "Stairs"
+  },
+  {
+   "level": "ground",
+   "box": [
+    6.1,
+    7.35,
+    8.9,
+    7.9
+   ],
+   "height": 0.9,
+   "label": "Kitchen counter"
+  },
+  {
+   "level": "ground",
+   "box": [
+    1.0,
+    5.0,
+    4.0,
+    5.8
+   ],
+   "height": 0.45,
+   "label": "Sofa"
+  },
+  {
+   "level": "ground",
+   "box": [
+    10.1,
+    5.6,
+    11.9,
+    7.9
+   ],
+   "height": 0.45,
+   "label": "Bed"
+  },
+  {
+   "level": "ground",
+   "box": [
+    0.1,
+    2.2,
+    0.9,
+    3.9
+   ],
+   "height": 1.6,
+   "label": "Bunk"
+  },
+  {
+   "level": "loft",
+   "box": [
+    0.6,
+    4.2,
+    2.2,
+    6.2
+   ],
+   "height": 0.45,
+   "label": "Bed"
+  },
+  {
+   "level": "loft",
+   "box": [
+    9.8,
+    4.2,
+    11.4,
+    6.2
+   ],
+   "height": 0.45,
+   "label": "Bed"
+  }
+ ],
+ "placements": {
+  "heaters": {
+   "Large Bathroom Heater": {
+    "floor": "large-bath"
+   },
+   "210000016248": {
+    "floor": "small-bath"
+   },
+   "Hallway Heater": {
+    "floor": "hallway"
+   },
+   "000000016250": {
+    "floor": "laundry"
+   },
+   "Left Bedroom Heater": {
+    "wall": "l3",
+    "at": 2.5,
+    "length": 1.0
+   },
+   "160004028114": {
+    "wall": "n",
+    "at": 4.1,
+    "length": 1.0
+   },
+   "Tech Room Heater": {
+    "wall": "i5",
+    "at": 2.05,
+    "length": 0.55
+   },
+   "160004028117": {
+    "wall": "e",
+    "at": 5.6,
+    "length": 1.0
+   },
+   "Bunk Room by Entrance Heater": {
+    "wall": "s",
+    "at": 0.9,
+    "length": 1.2
+   },
+   "160004028119": {
+    "wall": "l1",
+    "at": 5.5,
+    "length": 1.0
+   },
+   "Drying Area Controller": {
+    "wall": "s",
+    "at": 7.8,
+    "length": 0.9
+   },
+   "160004028112": {
+    "wall": "l4",
+    "at": 2.5,
+    "length": 1.0
+   },
+   "Living Room Heater": {
+    "wall": "n",
+    "at": 9.0,
+    "length": 1.2
+   },
+   "234000012006": {
+    "point": [
+     4.5,
+     4.15,
+     1.5
+    ],
+    "level": "ground"
+   }
+  },
+  "sensors": {}
+ }
+}

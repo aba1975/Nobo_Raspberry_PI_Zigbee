@@ -10,8 +10,8 @@ This document is the design. It is being delivered in stages:
 | --- | --- | --- |
 | 1 | The floor-plan model, its API, each user's display choice, a demo building | Done |
 | 2 | The Dollhouse view in Cabin: vendored three.js, live updates, room sheet | Done |
-| 3 | Placing heaters and sensors from a top-down plan (admin) | **This change** |
-| 4 | Loading the real building's plan on the Pi | Planned. The plan is never committed |
+| 3 | Placing heaters and sensors from a top-down plan (admin) | Done |
+| 4 | Loading a real building's plan on its Pi (`scripts/make_house.py`) | **This change**. The plan itself is never committed |
 
 ## The view
 
@@ -181,6 +181,51 @@ saves the cleaned copy it checked:
 
 A saved file that fails these checks is left where it is, for someone to fix,
 and the house view is simply unavailable. Nothing else depends on it.
+
+## Loading your own building
+
+A floor plan names rooms and sensors by id, and those ids exist only on one
+Pi. So a real building is written as a **template**: the same file, with
+names where the ids would go.
+
+| In `house.json` | In a template |
+| --- | --- |
+| `"schema": 1` | `"template": 1` |
+| a room's `"zone_id": "9"` | `"zone": "Kitchen"`, the room's name in the app |
+| `placements.heaters` keyed by serial | keyed by serial, or by the heater's name |
+| `placements.sensors` keyed by sensor id | keyed by the sensor's name, or its id |
+
+Everything else (levels, walls, openings, fixtures and the placements
+themselves) is written exactly as above. `docs/house.template.example.json`
+is the demo building as a template.
+
+`scripts/make_house.py` signs in to a Pi, reads its rooms, heaters and
+sensors, swaps every name for its id, checks the result with the same
+`house_model.validate` the Pi uses, and writes `house.json`:
+
+```bash
+# On the Pi itself, from the installation directory
+python3 scripts/make_house.py --template cabin.template.json
+# From another machine, with HTTPS on the Pi's own certificate authority
+python3 scripts/make_house.py --template cabin.template.json --pi https://cabin.local --insecure
+```
+
+It asks for the password (or reads `NOBO_PASSWORD`), and only reads. Load the
+file under Settings → House View, or add `--upload`, which asks before it
+replaces the plan on the Pi. Names are matched ignoring case and spacing. A
+name the Pi does not have, or has twice, stops it with a list of what to
+fix; `--allow-missing` instead leaves such a heater or sensor out, to be
+placed by hand afterwards. A room is never left out, because a room on the
+wrong zone would show the wrong heating.
+
+**Keep a real template out of this repository.** It says where every door,
+window and alarm sensor is, and the repository is public. `.gitignore` covers
+`*.template.json` and `house.json` wherever they are. A secret GitHub gist works well: give the
+script its raw link, which must be https.
+
+```bash
+python3 scripts/make_house.py --template https://gist.githubusercontent.com/<you>/<id>/raw/cabin.template.json
+```
 
 ## API
 

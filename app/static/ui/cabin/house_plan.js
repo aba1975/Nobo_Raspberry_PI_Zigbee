@@ -100,8 +100,6 @@ export function planSvg(model, level, opts = {}) {
   const s = b.size;
   const chipH = s / 21;
   const fs = s / 34;
-  const pad = Math.max(s * 0.07, chipH * 2.2);
-  const box = [b.minX - pad, -(b.maxY + pad), b.maxX - b.minX + 2 * pad, b.maxY - b.minY + 2 * pad];
   const isSel = (kind, id) => !!selected && selected.kind === kind && String(selected.id) === String(id);
 
   const rooms = (model.rooms || []).filter(r => r.level === level && r.polygon.length >= 3);
@@ -109,6 +107,35 @@ export function planSvg(model, level, opts = {}) {
   const placed = model.placements || { heaters: {}, sensors: {} };
   const floorHeated = new Set(Object.values(placed.heaters || {}).filter(p => p && p.floor).map(p => p.floor));
   const onOpening = L.sensorsOnOpenings(model);
+
+  const chips = [];
+  for (const wall of walls) {
+    for (const o of wall.openings || []) {
+      if (!o.code || o.kind === 'gap') continue;
+      const mid = o.at + o.width / 2;
+      const [cx, cy] = L.alongWall(wall, mid);
+      const [left, right] = L.roomsBeside(model, wall, mid);
+      const [nx, ny] = wallNormal(wall);
+      // Outside walls carry their code outside, so it does not cover a room.
+      const outward = left && !right ? -1 : right && !left ? 1 : 0;
+      chips.push({
+        opening: o,
+        at: [cx + nx * outward * chipH * 0.95, cy + ny * outward * chipH * 0.95],
+        dir: outward ? [nx * outward, ny * outward] : [nx, ny],
+        w: Math.max(chipH * 1.5, chipH * 0.55 * (o.code.length + 0.8)),
+      });
+    }
+  }
+  separateChips(chips, chipH);
+
+  // The frame takes in the building and every code, wherever it was moved to.
+  const margin = Math.max(s * 0.07, chipH * 0.5);
+  let [x0, y0, x1, y1] = [b.minX - margin, b.minY - margin, b.maxX + margin, b.maxY + margin];
+  for (const c of chips) {
+    x0 = Math.min(x0, c.at[0] - c.w / 2 - chipH * 0.3); x1 = Math.max(x1, c.at[0] + c.w / 2 + chipH * 0.3);
+    y0 = Math.min(y0, c.at[1] - chipH * 0.8); y1 = Math.max(y1, c.at[1] + chipH * 0.8);
+  }
+  const box = [x0, -y1, x1 - x0, y1 - y0];
 
   const out = [];
   out.push(`<svg class="plan-svg${target ? ` is-placing is-target-${target}` : ''}"`
@@ -204,31 +231,49 @@ export function planSvg(model, level, opts = {}) {
   }
 
   // Door and window codes last, so they are on top and take the tap.
-  for (const wall of walls) {
-    for (const o of wall.openings || []) {
-      if (!o.code || o.kind === 'gap') continue;
-      const mid = o.at + o.width / 2;
-      const [cx, cy] = L.alongWall(wall, mid);
-      const [left, right] = L.roomsBeside(model, wall, mid);
-      const [nx, ny] = wallNormal(wall);
-      // Outside walls carry their code outside, so it does not cover a room.
-      const outward = left && !right ? -1 : right && !left ? 1 : 0;
-      const at = [cx + nx * outward * chipH * 0.95, cy + ny * outward * chipH * 0.95];
-      const ids = onOpening.get(o.code) || [];
-      const w = Math.max(chipH * 1.5, chipH * 0.55 * (o.code.length + 0.8));
-      const classes = ['pl-chip', `is-${o.kind}`, ids.length ? 'is-used' : 'is-free'];
-      if (ids.some(id => isSel('sensors', id))) classes.push('is-selected');
-      const label = `${o.kind === 'door' ? 'Door' : 'Window'} ${o.code}${ids.length
-        ? `, ${ids.length} ${ids.length === 1 ? 'sensor' : 'sensors'}` : ', no sensor'}`;
-      out.push(`<g class="${classes.join(' ')}" data-opening="${esc(o.code)}" tabindex="0" role="button"`
-        + ` aria-label="${esc(label)}" transform="translate(${n(at[0])} ${n(-at[1])})">`
-        + `<rect x="${n(-w / 2)}" y="${n(-chipH / 2)}" width="${n(w)}" height="${n(chipH)}" rx="${n(chipH * 0.3)}"/>`
-        + `<text font-size="${n(chipH * 0.58)}" dy="0.35em">${esc(o.code)}</text></g>`);
-    }
+  for (const { opening: o, at, w } of chips) {
+    const ids = onOpening.get(o.code) || [];
+    const classes = ['pl-chip', `is-${o.kind}`, ids.length ? 'is-used' : 'is-free'];
+    if (ids.some(id => isSel('sensors', id))) classes.push('is-selected');
+    const label = `${o.kind === 'door' ? 'Door' : 'Window'} ${o.code}${ids.length
+      ? `, ${ids.length} ${ids.length === 1 ? 'sensor' : 'sensors'}` : ', no sensor'}`;
+    out.push(`<g class="${classes.join(' ')}" data-opening="${esc(o.code)}" tabindex="0" role="button"`
+      + ` aria-label="${esc(label)}" transform="translate(${n(at[0])} ${n(-at[1])})">`
+      + `<rect x="${n(-w / 2)}" y="${n(-chipH / 2)}" width="${n(w)}" height="${n(chipH)}" rx="${n(chipH * 0.3)}"/>`
+      + `<text font-size="${n(chipH * 0.58)}" dy="0.35em">${esc(o.code)}</text></g>`);
   }
 
   out.push('</svg>');
   return out.join('');
+}
+
+/**
+ * Move door and window codes apart where they would cover each other, so
+ * every one can still be hit with a finger. Each chip ({at, dir, w}) only
+ * moves along ``dir``: away from the building for an outside wall, across
+ * the wall for an inner one, so it stays beside its own opening. A few small
+ * steps rather than one big one, so two neighbours share the distance.
+ */
+export function separateChips(chips, chipH, gap = chipH * 0.12) {
+  const overlap = (a, b) => Math.abs(a.at[0] - b.at[0]) < (a.w + b.w) / 2 + gap
+    && Math.abs(a.at[1] - b.at[1]) < chipH + gap;
+  for (let pass = 0; pass < 40; pass++) {
+    let moved = false;
+    for (let i = 0; i < chips.length; i++) {
+      for (let j = i + 1; j < chips.length; j++) {
+        if (!overlap(chips[i], chips[j])) continue;
+        // Facing the same way, only the later one steps out, into a second
+        // row; otherwise they would walk outwards side by side for ever.
+        const same = chips[i].dir[0] * chips[j].dir[0] + chips[i].dir[1] * chips[j].dir[1] > 0.9;
+        for (const c of same ? [chips[j]] : [chips[i], chips[j]]) {
+          c.at = [c.at[0] + c.dir[0] * chipH * 0.15, c.at[1] + c.dir[1] * chipH * 0.15];
+        }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return chips;
 }
 
 /**

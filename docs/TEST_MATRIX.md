@@ -290,6 +290,7 @@ Do these when you have time to undo them, not five minutes before leaving.
 | 7.19 | Placing changes nothing else | 👤 | Place a contact on a window in another room | The sheet warns it is not in its own room. Afterwards it still warns and heats for its own room only |
 | 7.20 | Placing is for administrators | 👤 | Sign in as an ordinary user | No Place devices button. `PUT /api/house/placements/...` answers 403 |
 | 7.21 | Placing on a phone | 👤 | The whole of 7.17 on a real phone, both floors | Every code is easy to hit with a finger; the page scrolls normally around the plan |
+| 7.22 | Loading the real plan | 👤 | `python3 scripts/make_house.py --template <your template>` on the Pi, then load `house.json` under Settings → House View | "Wrote house.json" with every heater and sensor placed, no "left out". The house view shows every room by its own name, and the Blueprint every heater and contact where it is |
 
 ---
 

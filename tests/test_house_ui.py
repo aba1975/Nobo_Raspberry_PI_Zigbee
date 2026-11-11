@@ -468,3 +468,27 @@ def test_names_on_the_plan_are_escaped(tmp_path):
     """)
     assert "<img" not in result
     assert "&lt;img" in result
+
+
+@needs_node
+def test_door_and_window_codes_never_cover_each_other(tmp_path):
+    result = run_plan(tmp_path, """
+      const h = 0.5;
+      // Two outside codes at a corner, and three on one wall, all on top of each other.
+      const chips = P.separateChips([
+        { at: [0, 0], dir: [-1, 0], w: 0.8 }, { at: [0.2, 0.1], dir: [0, 1], w: 0.8 },
+        { at: [5, 0], dir: [0, 1], w: 0.8 }, { at: [5.3, 0], dir: [0, 1], w: 0.8 },
+        { at: [5.6, 0], dir: [0, 1], w: 0.8 },
+      ], h);
+      const clash = [];
+      for (let i = 0; i < chips.length; i++) for (let j = i + 1; j < chips.length; j++) {
+        const a = chips[i], b = chips[j];
+        if (Math.abs(a.at[0] - b.at[0]) < (a.w + b.w) / 2 && Math.abs(a.at[1] - b.at[1]) < h) clash.push([i, j]);
+      }
+      return { clash, moved: chips.map(c => c.at.map(v => Math.round(v * 100) / 100)) };
+    """)
+    assert result["clash"] == []
+    first, second, *row = result["moved"]
+    assert first[1] == 0 and first[0] < 0, "moved only away from the building"
+    assert second[0] == 0.2 and second[1] > 0.1
+    assert min(c[1] for c in row) == 0, "one of a row stays at its window"
