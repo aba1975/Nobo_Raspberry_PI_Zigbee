@@ -136,6 +136,7 @@ Everything below is reached from the web interface at `http://<pi-ip>:8000`.
 | **Changed outside this app** | A Nobø thermostat with a dial rewrites the hub's set point when somebody turns it, and the hub keeps no record of the old value. The app remembers what it set, flags a zone whose temperature no longer matches, and offers to restore it or accept the new value. A global mode change restores the intended set points first. See [When somebody turns a dial](#when-somebody-turns-a-dial). |
 | **Follow Home and Away** | Per zone, and stored on the hub itself, so the Nobø app shows the same setting. On, the whole-house buttons apply to the zone. Off, the zone is independent and keeps whatever it is on. A zone that will not follow the house is marked on the front page, because a room quietly holding Eco while the house says Home is how pipes freeze. See [Zones that follow the whole house, and zones that do not](#zones-that-follow-the-whole-house-and-zones-that-do-not). |
 | **Zones** | Add, rename, re-icon and delete zones. |
+| **House view** | Optional, per user, and off until you choose it. A 3D cutaway of the building on the front page, one floor at a time, showing where every heater and sensor is. Rooms are coloured by their mode, and an open door or window is drawn open. An administrator loads the floor plan, which stays on the Pi, and places each device by tapping it on a plan drawn from above. A real building is written once as a template, by name, and `scripts/make_house.py` fits it to the Pi. See [docs/HOUSE.md](docs/HOUSE.md). |
 | **Devices** | Add, rename, move, replace and remove devices — all verified on a real hub, including removing a heater and adding it back by its 12-digit serial. The hub can also search for a device in pairing mode, but that path has never been tested against hardware and not every model supports it. |
 | **Command log** | A running list of what was sent to the hub and what came back, which is the first place to look when something behaves unexpectedly. |
 | **Alerts on your phone and by email** | Optional, and off by default. Sent to the lock screen of any phone that has Cabin on its Home Screen (Web Push, no app or account needed, works away from home without the VPN — see [docs/PUSH.md](docs/PUSH.md)), by email, or both. Can tell you when the hub goes offline and when settings are changed from another app, and — with contact sensors — when a window is left open, when one is still open a day later, and when a sensor goes quiet or runs low on battery. It cannot see a cold room or a heater without power — see [Alerts](#alerts) for what the hardware does and does not report. |
@@ -2155,6 +2156,9 @@ sudo bash /opt/nobo-control/scripts/backup.sh /path/to/backup/dir
   (`sensor_heating_links.json`), what the automation is currently holding
   (`sensor_automation_state.json`), room climate and pressure history, and the
   demo's simulated sensors
+- The house view: the floor plan and where each heater and sensor is drawn
+  (`house.json`, and `house_demo.json` for demo mode), and each user's own
+  choice of front page (`user_prefs.json`). See [docs/HOUSE.md](docs/HOUSE.md)
 - `zigbee2mqtt-data` volume — the Zigbee network key and the database of paired
   devices. Only present when the Zigbee stack is switched on. It is what saves
   re-pairing every sensor, at every window, after moving to another Pi
@@ -2404,6 +2408,8 @@ route for those, and needs nothing done at the heater.
 | `GET/POST /auth/admin/users`, `PATCH/DELETE /auth/admin/users/{username}` | Manage users (admins only) |
 | `POST /api/hub/config` | Switch between demo mode and a real hub (admins only; ends your session on success) |
 | `PUT /api/site` | Rename the installation, or set its date format (admins only). Body `{"name": "Lakeside", "show_on_login": true, "locale": "nb-NO"}` — any field may be omitted to leave it unchanged. |
+| `GET /api/house`, `PUT/DELETE /api/house`, `PUT/DELETE /api/house/placements/{heaters\|sensors}/{id}` | The house view's floor plan and where each device is drawn. Reading needs a session; changing needs an admin. See [docs/HOUSE.md](docs/HOUSE.md) |
+| `GET/PUT /api/me/preferences` | Your own display choices, such as `{"rooms_view": "house"}`. Never anyone else's |
 
 ### If a request fails
 
@@ -2415,8 +2421,9 @@ kind of problem it is:
 | `400` | The request itself was wrong — for example an eco temperature above the comfort temperature |
 | `401` | Not logged in, or the session expired |
 | `403` | Logged in, but this needs an admin |
-| `404` | No such zone or device |
+| `404` | No such zone or device, or no floor plan loaded |
 | `409` | The request conflicts with the current state — for example deleting a zone that still contains devices |
+| `413` | The upload is too large (a floor plan is capped at 256 KB) |
 | `501` | The feature is not available in the current mode. In practice this is only device discovery in demo mode. |
 | `502` | The hub answered, but not in a way the request could be completed with |
 | `503` | The hub is not reachable right now |

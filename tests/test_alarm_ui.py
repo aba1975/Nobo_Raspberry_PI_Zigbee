@@ -83,12 +83,13 @@ def test_the_password_field_is_a_password_field():
 
 def test_every_field_in_a_sheet_is_styled_alike():
     """The Verisure email field was the odd one out: the shared field rule
-    listed text and password but not email, so it drew as a bare browser box."""
+    listed text and password but not email, so it drew as a bare browser box.
+    A file input is left out: the only one is hidden and opened by a button."""
     css = (ROOT / "ui" / "cabin" / "cabin.css").read_text(encoding="utf-8")
     rule = css[css.index('.field input[type="text"]'):]
     rule = rule[:rule.index("{")]
     for kind in set(__import__("re").findall(r'<input[^>]*type="(\w+)"', CABIN)) - {
-            "checkbox", "radio", "hidden", "range"}:
+            "checkbox", "radio", "hidden", "range", "file"}:
         assert f'.field input[type="{kind}"]' in rule, kind
 
 

@@ -14,6 +14,7 @@ GROUPS = [
     ("Heating", [
         "settingsSection('hub'",
         "${renderZoneGroupsCard(isAdmin)}",
+        "${renderHouseSettingsCard(isAdmin)}",
         "settingsSection('schedules'",
         "settingsSection('frost'",
     ]),

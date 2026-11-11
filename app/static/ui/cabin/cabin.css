@@ -2231,3 +2231,191 @@ main { max-width: 940px; margin: 0 auto; padding: 1.1rem 1.1rem 3.5rem; }
   .fc-hours li { grid-template-columns: 3rem 1.6rem 1fr 3.1rem 4.2rem; gap: .3rem; font-size: .86rem; }
   .fc-dayhead .big { font-size: 2.1rem; }
 }
+
+/* ------------------------------------------------------------ house view
+   The optional 3D cutaway of the building (docs/HOUSE.md), in place of the
+   room cards for someone who chose it. Its colours are read from the
+   variables above, so dark mode needs nothing of its own here. */
+.section-head > .rooms-view { align-self: center; }
+.house-card {
+  position: relative; height: min(68vh, 30rem); margin-top: .6rem;
+  background: var(--card); border: 1px solid var(--rule);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+.house-card.is-full {
+  position: fixed; left: 0; right: 0; bottom: 0; height: auto; margin: 0;
+  border-radius: 0; border: 0; z-index: 15;
+}
+body.house-full-open { overflow: hidden; }
+.house-stage { position: absolute; inset: 0; }
+/* Only the drawing takes the finger: the page around it still scrolls. */
+.house-canvas { display: block; touch-action: none; }
+.house-labels { position: absolute; inset: 0; pointer-events: none; }
+.house-tools {
+  position: absolute; z-index: 2; top: .6rem; left: .6rem; right: .6rem;
+  display: flex; justify-content: space-between; align-items: center; pointer-events: none;
+}
+.house-tools > * { pointer-events: auto; }
+.house-tools .choice[hidden] { display: none; }
+.house-btn {
+  margin-left: auto; width: 38px; height: 38px; display: grid; place-items: center;
+  border: 1px solid var(--rule); border-radius: 999px; background: var(--card);
+  color: var(--ink); cursor: pointer;
+}
+.house-btn.is-on { background: var(--pine); color: #fff; border-color: var(--pine); }
+.house-legend {
+  position: absolute; left: .8rem; bottom: .55rem; z-index: 2; display: flex; gap: .7rem;
+  font-size: .72rem; color: var(--ink-soft); pointer-events: none;
+}
+.house-legend i {
+  display: inline-block; width: .5rem; height: .5rem; border-radius: 50%;
+  margin-right: .3rem; vertical-align: .05rem;
+}
+.house-legend .lg-comfort { background: var(--m-comfort); }
+.house-legend .lg-eco     { background: var(--m-eco); }
+.house-legend .lg-away    { background: var(--m-away); }
+.house-legend .lg-open    { background: var(--danger); }
+.house-label {
+  pointer-events: auto; cursor: pointer; font: inherit; text-align: center; white-space: nowrap;
+  font-size: .74rem; line-height: 1.25; color: var(--ink);
+  padding: .2rem .5rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  border: 1px solid var(--rule); box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+.house-label strong { font-weight: 600; display: block; }
+.house-label small { display: block; font-size: .68rem; color: var(--ink-soft); }
+.house-dot {
+  display: inline-block; width: .45rem; height: .45rem; border-radius: 50%;
+  margin-right: .25rem; vertical-align: .05rem;
+}
+/* A label that would cover another is first shortened to the room's name,
+   then hidden. Either way the room is still one tap away. */
+.house-label.is-compact { padding: .1rem .4rem; font-size: .68rem; }
+.house-label.is-compact small { display: none; }
+.house-label.is-crowded { visibility: hidden; }
+.house-pin {
+  pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: .3rem;
+  font: inherit; font-size: .72rem; font-weight: 650; white-space: nowrap;
+  padding: .15rem .5rem .15rem .35rem; border-radius: 999px; border: 0;
+  background: var(--danger); color: #fff;
+}
+.house-pin svg { width: .85rem; height: .85rem; }
+.house-pin[hidden] { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .house-pin.is-open { animation: house-pulse 1.6s ease-out infinite; }
+}
+@keyframes house-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); }
+  100% { box-shadow: 0 0 0 .6rem transparent; }
+}
+.house-fail { color: var(--ink-soft); }
+
+/* The sheet a room opens from the house. */
+.hr-temps { display: flex; gap: 1.5rem; margin: .5rem 0 .6rem; }
+.hr-temps:empty { display: none; }
+.hr-list { list-style: none; margin: 0 0 .5rem; padding: 0; }
+.hr-list li {
+  display: flex; align-items: center; gap: .65rem; padding: .55rem 0;
+  border-top: 1px solid var(--rule); font-size: .92rem;
+}
+.hr-list li:first-child { border-top: 0; }
+.hr-ic {
+  flex: none; width: 1.8rem; height: 1.8rem; border-radius: 8px; display: grid; place-items: center;
+  background: var(--pine-wash); color: var(--pine);
+}
+.hr-main { flex: 1; min-width: 0; }
+.hr-main small { display: block; color: var(--ink-soft); font-size: .78rem; }
+.hr-val { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.hr-list li.is-open .hr-ic { background: var(--danger); color: #fff; }
+.hr-list li.is-open .hr-val { color: var(--danger); font-weight: 650; }
+
+/* Placing devices (admin): the Blueprint. A plan from above in the
+   colours of a drawing, the same in light and dark, so the codes read the
+   way they do on the architect's sheet. */
+.place-tools { display: flex; align-items: center; gap: .5rem; margin: .25rem 0 .6rem; }
+.place-tools .choice[hidden] { display: none; }
+.place-plan {
+  --bp-bg: #16395A; --bp-room: #1B4469; --bp-line: #DCE8F5; --bp-faint: rgba(220,232,245,.45);
+  --bp-chip: #DCE8F5; --bp-chip-ink: #16395A;
+  border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  background: var(--bp-bg); touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+@media (prefers-color-scheme: dark) { .place-plan { --bp-bg: #0F2238; --bp-room: #13304F; } }
+.plan-svg { display: block; width: 100%; height: auto; max-height: 62vh; }
+.plan-svg text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.pl-bg { fill: var(--bp-bg); }
+.pl-room { fill: var(--bp-room); stroke: none; }
+.pl-fixture { fill: none; stroke: var(--bp-faint); stroke-width: .03; }
+.pl-wall { stroke: var(--bp-line); stroke-linecap: square; }
+.pl-gap { stroke: var(--bp-room); }
+.pl-window { stroke: #8EC5F0; }
+.pl-door { fill: none; stroke: var(--bp-faint); }
+.pl-hatch { stroke: var(--amber); opacity: .55; }
+.pl-floorheat { stroke: none; pointer-events: none; }
+.pl-heater { stroke: var(--amber); stroke-linecap: round; }
+.pl-sensor { fill: #8EC5F0; stroke: var(--bp-bg); stroke-width: .03; }
+.pl-label {
+  fill: var(--bp-line); text-anchor: middle; dominant-baseline: middle;
+  text-transform: uppercase; letter-spacing: .04em; opacity: .85; pointer-events: none;
+}
+.pl-chip { cursor: pointer; }
+.pl-chip rect { fill: var(--bp-bg); stroke: var(--bp-faint); stroke-width: .03; }
+.pl-chip text { fill: var(--bp-line); text-anchor: middle; font-weight: 600; }
+.pl-chip.is-used rect { fill: var(--bp-chip); stroke: var(--bp-chip); }
+.pl-chip.is-used text { fill: var(--bp-chip-ink); }
+.pl-chip:focus { outline: none; }
+.pl-chip:focus-visible rect { stroke: var(--amber); stroke-width: .08; }
+/* While a contact is being placed, free doors and windows ask to be tapped. */
+.is-target-opening .pl-chip.is-free rect { stroke: var(--amber); stroke-width: .07; }
+.is-target-opening .pl-chip.is-free text { fill: var(--amber); }
+.is-target-point .pl-room, .is-target-heater .pl-room { cursor: crosshair; }
+/* Codes are not targets for a thermometer or a heater: a tap goes through to the plan. */
+.is-target-point .pl-chip, .is-target-heater .pl-chip { opacity: .5; cursor: crosshair; }
+.is-target-heater .pl-wall { stroke: var(--amber); }
+.is-placing .pl-heater:not(.is-selected), .is-placing .pl-sensor:not(.is-selected) { opacity: .45; }
+.pl-heater.is-selected { stroke: #fff; }
+.pl-sensor.is-selected { fill: #fff; }
+.pl-floorheat.is-selected { opacity: 1; }
+.pl-chip.is-selected rect { stroke: #fff; stroke-width: .08; }
+@media (prefers-reduced-motion: no-preference) {
+  .pl-heater.is-selected, .pl-sensor.is-selected, .pl-chip.is-selected rect {
+    animation: pl-blink 1.2s ease-in-out infinite;
+  }
+}
+@keyframes pl-blink { 50% { opacity: .35; } }
+
+.place-hint { margin: .7rem 0 .2rem; }
+.place-hint .zd-sub { margin: 0; }
+.place-now {
+  display: flex; align-items: center; gap: .65rem; padding: .7rem .8rem;
+  border: 1.5px solid var(--pine); border-radius: var(--radius); background: var(--pine-wash);
+}
+.place-now .pl-txt small { color: var(--ink-soft); }
+.place-hint .sheet-actions { margin-top: .5rem; }
+.place-head {
+  display: flex; align-items: center; gap: .5rem; margin: 1.3rem 0 .4rem;
+  font-size: 1.02rem; font-weight: 650;
+}
+.place-count {
+  font-size: .78rem; font-weight: 650; min-width: 1.5rem; padding: .05rem .45rem; text-align: center;
+  border-radius: 999px; background: var(--amber-wash); color: var(--amber);
+}
+.place-list { list-style: none; margin: 0; padding: 0; }
+.place-item { display: flex; align-items: center; gap: .4rem; border-top: 1px solid var(--rule); }
+.place-item:first-child { border-top: 0; }
+.place-pick {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: .65rem; text-align: left;
+  padding: .6rem .3rem; min-height: 52px; font: inherit; color: inherit;
+  background: none; border: 0; border-radius: 10px; cursor: pointer;
+}
+.place-pick.is-static { cursor: default; }
+.place-pick:focus-visible { outline: 2px solid var(--pine); outline-offset: -2px; }
+.place-item.is-selected .place-pick { background: var(--pine-wash); }
+.pl-ic {
+  flex: none; width: 2rem; height: 2rem; border-radius: 9px; display: grid; place-items: center;
+  background: var(--pine-wash); color: var(--pine);
+}
+.pl-txt { flex: 1; min-width: 0; }
+.pl-txt strong { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-txt small { display: block; font-size: .8rem; color: var(--ink-soft); }
+.place-lists .note, #placeLists .note { margin-top: .9rem; }

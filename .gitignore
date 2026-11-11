@@ -60,6 +60,14 @@ nobo-root.crt
 # User data (runtime state, created by the app)
 data/
 
+# A real building's floor plan (docs/HOUSE.md). The repository is public, and
+# a plan says where every door, window and alarm sensor is. Templates go in a
+# private place (a secret gist, say); scripts/make_house.py writes house.json
+# wherever it is run. Only the made-up example is committed.
+*.template.json
+!docs/house.template.example.json
+house.json
+
 # Docker
 docker-compose.override.yml
 

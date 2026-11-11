@@ -1,0 +1,6 @@
+three.js 0.160.0 (r160), unmodified, from https://cdn.jsdelivr.net/npm/three@0.160.0/
+
+a4f0f79184c043f6b9d2654d8ba051e49a7d631d34e8f437c1804798a68c379f  CSS2DRenderer.js  <- examples/jsm/renderers/CSS2DRenderer.js
+852e0e8699169bf9f6fdc6bda3e682d078dcbc738b5d33e74df594721bff271d  LICENSE  <- LICENSE
+5a44a9e86a2a0fb11933eed69bc2cd33c76a496854c1aed6ed776efa87d7b064  OrbitControls.js  <- examples/jsm/controls/OrbitControls.js
+3e690ac7d180b0aadf0891bea39eec643e29e2d3e75c99b18689518665f69ba6  three.module.min.js  <- build/three.module.min.js
