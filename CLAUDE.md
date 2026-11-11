@@ -205,6 +205,12 @@ hub reached the hardware; everything else proves a message reached the hub.
   (not `ui/vendor`, which `test_concept_wiring` would take for an interface)
   and pinned by the hashes in its `VERSION`. The addons import the bare
   `'three'`, so the import map in `index.html` is required
+- `app/static/ui/cabin/house_plan.js` — placing devices (admin, Settings →
+  House View → Place devices), the `place` view in `cabin.js`. SVG from
+  above, never WebGL, so it works where the house view cannot. `planSvg` is
+  pure and tested in node; the geometry it and the placing sheets use lives
+  in `house_logic.js`. A placement is confirmed in a sheet before it is saved,
+  and one outside the device's own room is drawn, flagged, and never acted on
 - `app/static/ui/cabin/` — the interface. The classic one was removed entirely in October 2026 (tag `classic-ui-final`); there is no `/classic` and no `NOBO_UI`. Users are managed under Settings → Account, and Settings → About reads `GET /api/about` plus `app/build_info.json`, which `update.sh`/`install.sh` stamp before each build (the image has no `.git`)
 - `app/static/ui/shared/core.js` — the API client and all date/temperature formatting, shared by both
 - `tls/` — Caddy for optional HTTPS. Two Caddyfiles: the internal CA (default) and Let's Encrypt over DNS-01

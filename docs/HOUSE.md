@@ -9,8 +9,8 @@ This document is the design. It is being delivered in stages:
 | Stage | What | State |
 | --- | --- | --- |
 | 1 | The floor-plan model, its API, each user's display choice, a demo building | Done |
-| 2 | The Dollhouse view in Cabin: vendored three.js, live updates, room sheet | **This change** |
-| 3 | Placing heaters and sensors from a top-down plan (admin) | Planned |
+| 2 | The Dollhouse view in Cabin: vendored three.js, live updates, room sheet | Done |
+| 3 | Placing heaters and sensors from a top-down plan (admin) | **This change** |
 | 4 | Loading the real building's plan on the Pi | Planned. The plan is never committed |
 
 ## The view
@@ -58,6 +58,37 @@ Doors and windows swing open unless the phone asks for reduced motion.
 **When it cannot draw** (no WebGL, or the files fail to load), the room list
 is shown, with one line beside **Rooms** saying why. Nothing else is
 affected.
+
+## Placing devices
+
+Settings → House View → **Place devices…**, for an administrator once a plan
+is loaded. The building is drawn from above, one floor at a time, in the
+colours of an architect's drawing, with every door and window carrying its
+code. Below it are three lists: **Not placed yet**, **Placed** (with where,
+in words) and **No longer here** (placed once, but the hub or the sensor list
+no longer has them).
+
+Choose a device, then tap where it is. What a tap means depends on the device:
+
+| Device | Tap | Then choose |
+| --- | --- | --- |
+| Door or window contact | the door or window's code (or near it) | the sash, left or right as seen from inside, or the whole window. A name with "Left" or "Right" in it, or a sensor already on the other sash, suggests one |
+| Thermometer | where it is in the room | how high: on a wall (1.5 m), above a door (2.1 m) or the ceiling. A Verisure device starts on the ceiling, as smoke detectors are |
+| Heater | the wall it hangs on, or its room | from a wall, with a rough length, or the whole floor. An NTB-2R starts on the floor |
+
+Nothing is saved until **Place it** in the sheet that follows. If the place is
+not in the device's own room, the sheet says so, and that it will still warn
+and heat for its own room. **⋯** on a placed device moves it, marks it **Not in
+this building** (a woodshed: not drawn, and no longer asked for), or removes it
+from the plan.
+
+`house_plan.js` draws the plan as SVG, not WebGL, so it works on a browser
+that cannot show the house. It is loaded with `import()` the first time the
+screen opens. Its drawing is a pure function, `planSvg`, tested in node, and
+every geometry rule it and the sheets use (the room at a point, the nearest
+wall or opening, the rooms either side of a wall, a heater kept on its wall,
+a place in words) is in `house_logic.js`, tested the same way. It saves through
+the placement API above, one device at a time.
 
 ## What it must never do
 

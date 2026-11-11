@@ -24,6 +24,7 @@ CABIN = STATIC / "cabin"
 VENDOR = STATIC / "shared" / "vendor" / "three"
 HOUSE_JS = CABIN / "house.js"
 LOGIC_JS = CABIN / "house_logic.js"
+PLAN_JS = CABIN / "house_plan.js"
 INDEX = CABIN / "index.html"
 CABIN_JS = CABIN / "cabin.js"
 
@@ -59,7 +60,7 @@ def test_three_is_vendored_under_shared_not_as_an_interface():
 
 
 def test_nothing_is_fetched_from_the_internet():
-    for path in (HOUSE_JS, LOGIC_JS):
+    for path in (HOUSE_JS, LOGIC_JS, PLAN_JS):
         assert "http://" not in path.read_text(encoding="utf-8"), path.name
         assert "https://" not in path.read_text(encoding="utf-8"), path.name
     html = INDEX.read_text(encoding="utf-8")
@@ -76,12 +77,19 @@ def test_import_map_points_at_the_vendored_copy():
     assert (ROOT / "app" / target.lstrip("/")).is_file()
 
 
-def test_house_imports_only_vendored_or_own_modules():
-    src = HOUSE_JS.read_text(encoding="utf-8")
+@pytest.mark.parametrize("path", [HOUSE_JS, PLAN_JS], ids=lambda p: p.name)
+def test_house_imports_only_vendored_or_own_modules(path):
+    src = path.read_text(encoding="utf-8")
     for spec in re.findall(r"^import .* from '([^']+)';", src, re.M):
         assert spec == "three" or spec.startswith("/static/ui/"), spec
         if spec != "three":
             assert (ROOT / "app" / spec.lstrip("/")).is_file(), spec
+
+
+def test_the_blueprint_needs_no_webgl():
+    """Placing must work on a browser that cannot draw the house."""
+    specs = re.findall(r"^import .* from '([^']+)';", PLAN_JS.read_text(encoding="utf-8"), re.M)
+    assert specs == ["/static/ui/cabin/house_logic.js"]
 
 
 def test_house_is_only_loaded_on_demand():
@@ -91,7 +99,18 @@ def test_house_is_only_loaded_on_demand():
     assert "three.module" not in re.sub(r'<script type="importmap">.*?</script>', "", html, flags=re.S)
     src = CABIN_JS.read_text(encoding="utf-8")
     assert "import('/static/ui/cabin/house.js')" in src
+    assert "house_plan.js" not in html
+    assert "import('/static/ui/cabin/house_plan.js')" in src
     assert not re.search(r"^import ", src, re.M)
+
+
+def test_placing_is_an_admin_screen_reached_from_settings():
+    html = INDEX.read_text(encoding="utf-8")
+    assert '<section class="view" id="viewPlace" hidden></section>' in html
+    src = CABIN_JS.read_text(encoding="utf-8")
+    card = src.split("function renderHouseSettingsCard", 1)[1].split("function houseStatusHtml", 1)[0]
+    # The button is inside the part of the card only an administrator gets.
+    assert card.index("${isAdmin ? `") < card.index('data-act="place-devices"') < card.index("Only an administrator")
 
 
 # --- What is shown (node) ---------------------------------------------------
@@ -251,3 +270,201 @@ def test_levels_in_use_skips_empty_levels(tmp_path):
       return L.levelsInUse(model).map(l => l.id);
     """)
     assert result == ["ground", "loft"]
+
+
+# --- Placing (stage 3, node) -------------------------------------------------
+
+DEMO_HOUSE = ROOT / "app" / "demo_house.json"
+
+
+def run_plan(tmp_path, script: str):
+    """Run ``script`` with house_logic.js as ``L``, house_plan.js as ``P`` and
+    the committed demo building as ``model``; return its JSON."""
+    (tmp_path / "house_logic.mjs").write_text(LOGIC_JS.read_text(encoding="utf-8"), encoding="utf-8")
+    plan = PLAN_JS.read_text(encoding="utf-8").replace("'/static/ui/cabin/house_logic.js'", "'./house_logic.mjs'")
+    (tmp_path / "house_plan.mjs").write_text(plan, encoding="utf-8")
+    runner = tmp_path / "run_plan.mjs"
+    runner.write_text(
+        "import * as L from './house_logic.mjs';\n"
+        "import * as P from './house_plan.mjs';\n"
+        f"const model = {DEMO_HOUSE.read_text(encoding='utf-8')};\n"
+        f"const result = (() => {{ {script} }})();\n"
+        "console.log(JSON.stringify(result));\n",
+        encoding="utf-8",
+    )
+    out = subprocess.run(["node", str(runner)], capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+DEMO_ZONES = """
+const zones = L.zonesById([
+  { zone_id: '5', name: 'Kitchen' }, { zone_id: '12', name: 'Living Room' },
+  { zone_id: '3', name: 'Hallway' }, { zone_id: '7', name: 'Master Bedroom' },
+]);
+"""
+
+
+@needs_node
+def test_a_tap_finds_the_room_it_is_in(tmp_path):
+    result = run_plan(tmp_path, """
+      return [L.roomAt(model, 'ground', [7.5, 6]), L.roomAt(model, 'ground', [2, 6]),
+              L.roomAt(model, 'ground', [20, 20]), L.roomAt(model, 'loft', [7.5, 6])]
+        .map(r => r && r.id);
+    """)
+    assert result == ["kitchen", "living", None, "bunk-bath"]
+
+
+@needs_node
+def test_a_tap_finds_the_nearest_wall_and_where_along_it(tmp_path):
+    result = run_plan(tmp_path, """
+      const near = L.nearestWall(model, 'ground', [7.4, 7.7]);
+      return [near.wall.id, Math.round(near.t * 100) / 100, Math.round(near.dist * 100) / 100];
+    """)
+    # The north wall runs east to west from x = 12, so x = 7.4 is 4.6 m along it.
+    assert result == ["n", 4.6, 0.3]
+
+
+@needs_node
+def test_a_tap_finds_a_door_or_window_but_never_an_open_doorway(tmp_path):
+    result = run_plan(tmp_path, """
+      const near = (pt, max) => { const f = L.nearestOpening(model, 'ground', pt, max); return f && f.opening.code; };
+      return [near([7.4, 7.9]), near([7.4, 6.5], 1.2), near([6.0, 6.0], 5)];
+    """)
+    # [6, 6] sits in the open doorway between kitchen and living room: the
+    # nearest thing a sensor can go on is a real opening further away.
+    assert result[0] == "W6"
+    assert result[1] is None
+    assert result[2] is not None and result[2] != ""
+
+
+@needs_node
+def test_a_wall_knows_the_rooms_either_side_and_says_so(tmp_path):
+    result = run_plan(tmp_path, DEMO_ZONES + """
+      const wall = (id) => model.walls.find(w => w.id === id);
+      const sides = L.roomsBeside(model, wall('n'), 4.6).map(r => r && r.id);
+      const living = model.rooms.find(r => r.id === 'living');
+      return [sides,
+              L.wallWords(model, wall('n'), 4.6, zones),
+              L.wallWords(model, wall('i1'), 4.3, zones, living),
+              L.compass([1, 0.2]), L.compass([0, -1])];
+    """)
+    sides, outside, inside, east, south = result
+    assert sides == ["kitchen", None]
+    assert outside == "north wall"
+    assert inside == "wall to Hallway"
+    assert (east, south) == ("east", "south")
+
+
+@needs_node
+def test_a_heater_stays_on_its_wall(tmp_path):
+    result = run_plan(tmp_path, """
+      const wall = { a: [0, 0], b: [3, 0] };
+      return [L.heaterSpan(wall, 1.5, 1.0), L.heaterSpan(wall, 0.1, 1.0),
+              L.heaterSpan(wall, 2.95, 1.0), L.heaterSpan(wall, 1.5, 9)];
+    """)
+    assert result == [
+        {"at": 1.0, "length": 1.0},
+        {"at": 0.0, "length": 1.0},
+        {"at": 2.0, "length": 1.0},
+        {"at": 0.0, "length": 3.0},
+    ]
+
+
+@needs_node
+def test_what_each_device_is_placed_on(tmp_path):
+    result = run_plan(tmp_path, """
+      return [L.targetFor('heaters', { device_type: 'R80 RDC 700' }),
+              L.targetFor('sensors', { kind: 'window' }), L.targetFor('sensors', { kind: 'door' }),
+              L.targetFor('sensors', { kind: 'climate' }),
+              L.isFloorHeater({ device_type: 'NTB-2R' }), L.isFloorHeater({ device_type: 'R80 RDC 700' }),
+              L.pointHeights(2.5).map(h => [h.id, h.z])];
+    """)
+    assert result[:4] == ["heater", "opening", "opening", "point"]
+    assert result[4:6] == [True, False]
+    assert result[6] == [["wall", 1.5], ["door", 2.1], ["ceiling", 2.45]]
+
+
+@needs_node
+def test_a_place_reads_as_people_say_it_without_repeating_the_room(tmp_path):
+    result = run_plan(tmp_path, DEMO_ZONES + """
+      const w = (p, own) => L.placementWords(model, p, zones, own);
+      return [
+        w(null), w({ outside: true }),
+        w({ floor: 'hallway' }, 'Hallway'), w({ floor: 'hallway' }, 'Kitchen'),
+        w({ opening: 'W7', sash: 'left' }), w({ opening: 'D2', sash: 'whole' }), w({ opening: 'W6', sash: 'whole' }),
+        w({ wall: 'n', at: 4.1, length: 1.0 }, 'Kitchen'),
+        w({ wall: 'i1', at: 1.0, length: 1.0 }, 'Living Room'),
+        w({ point: [7.5, 6, 1.5], level: 'ground' }, 'Kitchen'),
+        w({ point: [7.5, 6, 2.1], level: 'ground' }, 'Living Room'),
+      ];
+    """)
+    assert result == [
+        "Not placed yet", "Not in this building",
+        "Floor heating", "Floor heating, Hallway",
+        "Window W7, left sash", "Door D2", "Window W6",
+        "Under W6",
+        "South wall",
+        "1.5 m up", "Kitchen, 2.1 m up",
+    ]
+
+
+@needs_node
+def test_a_long_room_name_is_fitted_into_its_room(tmp_path):
+    result = run_plan(tmp_path, """
+      return [P.fitLabel('Kitchen', 3, 3, 0.4), P.fitLabel('Bunk Room by Entrance', 2.5, 3.8, 0.4),
+              P.fitLabel('Small Bathroom', 1.0, 3.8, 0.4), P.fitLabel('', 3, 3, 0.4)];
+    """)
+    kitchen, bunk, bath, empty = result
+    assert kitchen == {"lines": ["Kitchen"], "size": 0.4, "rotate": False}
+    assert len(bunk["lines"]) > 1, "wrapped rather than shrunk to nothing"
+    assert bath["rotate"] is True, "a narrow tall room reads on its side"
+    assert empty is None
+    for fit in (bunk, bath):
+        assert 0.2 <= fit["size"] <= 0.4
+
+
+@needs_node
+def test_the_plan_offers_every_door_and_window_on_its_floor_and_nothing_else(tmp_path):
+    result = run_plan(tmp_path, DEMO_ZONES + """
+      const svg = P.planSvg(model, 'ground', { zones });
+      const codes = [...svg.matchAll(/data-opening="([^"]+)"/g)].map(m => m[1]).sort();
+      const expected = model.walls.filter(w => w.level === 'ground')
+        .flatMap(w => w.openings || []).filter(o => o.code && o.kind !== 'gap').map(o => o.code).sort();
+      return { codes, expected, used: [...svg.matchAll(/class="pl-chip [^"]*is-used/g)].length,
+               loft: P.planSvg(model, 'loft', { zones }).includes('data-opening="W1"') };
+    """)
+    assert result["codes"] == result["expected"]
+    assert result["loft"] is False
+
+
+@needs_node
+def test_the_plan_draws_what_is_placed(tmp_path):
+    result = run_plan(tmp_path, DEMO_ZONES + """
+      const svg = P.planSvg(model, 'ground', { zones, selected: { kind: 'heaters', id: '160004028114' },
+                                               target: 'heater' });
+      return {
+        floors: (svg.match(/class="pl-floorheat/g) || []).length,
+        bars: (svg.match(/class="pl-heater/g) || []).length,
+        selected: svg.includes('class="pl-heater is-selected" data-heater="160004028114"'),
+        points: (svg.match(/class="pl-sensor/g) || []).length,
+        target: svg.includes('is-placing is-target-heater'),
+      };
+    """)
+    # The demo has four floor-heated rooms and six wall heaters on the ground floor.
+    assert result["floors"] == 4
+    assert result["bars"] == 6
+    assert result["selected"] is True
+    assert result["target"] is True
+
+
+@needs_node
+def test_names_on_the_plan_are_escaped(tmp_path):
+    result = run_plan(tmp_path, """
+      const zones = L.zonesById([{ zone_id: '5', name: '<img src=x onerror=alert(1)>' }]);
+      const evil = JSON.parse(JSON.stringify(model));
+      evil.walls[0].openings[0].code = 'W1';
+      return P.planSvg(evil, 'ground', { zones });
+    """)
+    assert "<img" not in result
+    assert "&lt;img" in result

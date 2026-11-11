@@ -98,6 +98,11 @@ const Nobo = (() => {
     house:       ()     => req('/api/house'),
     setHouse:    (text) => req('/api/house', { method: 'PUT', body: text }),
     removeHouse: ()     => req('/api/house', { method: 'DELETE' }),
+    /* kind is 'heaters' or 'sensors'. */
+    placeDevice:   (kind, id, body) => req(`/api/house/placements/${kind}/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify(body) }),
+    unplaceDevice: (kind, id) => req(`/api/house/placements/${kind}/${encodeURIComponent(id)}`, {
+      method: 'DELETE' }),
     myPrefs:     ()     => req('/api/me/preferences'),
     setMyPrefs:  (body) => req('/api/me/preferences', { method: 'PUT', body: JSON.stringify(body) }),
 
